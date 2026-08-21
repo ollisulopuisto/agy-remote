@@ -27,6 +27,9 @@ KEY_SEQUENCES: dict[str, bytes] = {
     "page_down": b"\x1b[6~",
     "backspace": b"\x7f",
     "interrupt": b"\x03",  # Ctrl+C
+    "ctrl_c": b"\x03",  # Ctrl+C
+    "ctrl_z": b"\x1a",  # Ctrl+Z
+    "suspend": b"\x1a",  # Ctrl+Z
     "yes": b"y",
     "no": b"n",
 }
@@ -45,6 +48,9 @@ TMUX_KEY_NAMES: dict[str, str] = {
     "page_down": "PageDown",
     "backspace": "BSpace",
     "interrupt": "C-c",
+    "ctrl_c": "C-c",
+    "ctrl_z": "C-z",
+    "suspend": "C-z",
     "yes": "y",
     "no": "n",
 }

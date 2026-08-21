@@ -93,16 +93,28 @@ class PtySupervisor:
         """Run in the child: take the pty as its controlling terminal.
 
         setsid() alone leaves the child in a session with no controlling
-        terminal, and the interrupt and suspend characters are not bytes the
-        program reads -- the line discipline turns them into SIGINT and SIGTSTP
-        for the terminal's foreground process group. With no such group, Ctrl+C
-        and Ctrl+Z were swallowed and the session could not be interrupted.
+        terminal, and the interrupt character is not a byte the program reads --
+        the line discipline turns it into SIGINT for the terminal's foreground
+        process group. With no such group, Ctrl+C was swallowed and the
+        session could not be interrupted.
+
+        VSUSP (Ctrl+Z) is explicitly disabled: without a job-control shell
+        managing the session, SIGTSTP suspends agy into an unrecoverable hang
+        where no `fg` command is available to resume it.
         """
         os.setsid()
         try:
             fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
         except OSError as e:
             logger.debug("Could not claim controlling terminal: %s", e)
+
+        try:
+            attrs = termios.tcgetattr(slave_fd)
+            vdisable = getattr(termios, "_POSIX_VDISABLE", b"\x00")
+            attrs[6][termios.VSUSP] = vdisable
+            termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Could not disable VSUSP on slave pty: %s", e)
 
     def start_sync(self) -> int:
         """Run the supervisor synchronously, capturing stdin/stdout of the active terminal."""

@@ -417,8 +417,11 @@ def run(
         supervisor = TmuxSupervisor(session_name=session_name, cmd=agy_args, env=agy_child_env(cfg))
         set_tmux_supervisor(supervisor)
         console.print(f"[dim]Starting persistent tmux session '{session_name}'...[/dim]\n")
-        exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
-        sys.exit(exit_code)
+        try:
+            exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
+            sys.exit(exit_code)
+        except KeyboardInterrupt:
+            sys.exit(0)
     else:
         supervisor = PtySupervisor(cmd=agy_args, env=agy_child_env(cfg))
         set_pty_supervisor(supervisor)

@@ -115,3 +115,26 @@ def test_cli_run_help_has_qr_timeout():
     res = runner.invoke(cli, ["run", "--help"])
     assert "--qr-timeout" in res.output
     assert "--pairing-timeout" in res.output
+
+
+def test_start_or_attach_creates_session_with_vsusp_disabled(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class Res:
+            returncode = 1 if "has-session" in cmd else 0
+
+        return Res()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr(TmuxSupervisor, "_attach_session", lambda self: 0)
+
+    sup = TmuxSupervisor(session_name="test-vsusp", cmd=["agy", "--fast"])
+    ret = sup.start_or_attach()
+
+    assert ret == 0
+    # Verify new-session contains stty susp undef
+    new_session_cmd = next(c for c in calls if "new-session" in c)
+    assert "stty susp undef 2>/dev/null; exec agy --fast" in new_session_cmd

@@ -30,6 +30,13 @@ def test_arrow_keys_and_escape_drive_agy_panels():
     assert _press("escape") == b"\x1b"
 
 
+def test_interrupt_and_ctrl_keys():
+    assert _press("interrupt") == b"\x03"
+    assert _press("ctrl_c") == b"\x03"
+    assert _press("ctrl_z") == b"\x1a"
+    assert _press("suspend") == b"\x1a"
+
+
 def test_unknown_keys_are_refused_and_send_nothing():
     """The pty runs a live agent; only names from the allowlist reach it."""
     assert _press("rm -rf /") == b""

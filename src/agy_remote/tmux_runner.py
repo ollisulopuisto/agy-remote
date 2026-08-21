@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import shutil
+import signal
 import subprocess
 
 from .keys import TMUX_KEY_NAMES
@@ -59,6 +62,33 @@ class TmuxSupervisor:
         )
         return res.returncode == 0
 
+    def _attach_session(self) -> int:
+        """Attach to tmux session in foreground, forwarding job-control signals cleanly."""
+        old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            proc = subprocess.Popen(["tmux", "attach-session", "-t", self.session_name])
+            while True:
+                try:
+                    wpid, status = os.waitpid(proc.pid, os.WUNTRACED)
+                except InterruptedError:
+                    continue
+                except ChildProcessError:
+                    break
+                if wpid == proc.pid:
+                    if os.WIFSTOPPED(status):
+                        sig = os.WSTOPSIG(status)
+                        signal.signal(sig, signal.SIG_DFL)
+                        os.kill(os.getpid(), sig)
+                        with contextlib.suppress(ProcessLookupError):
+                            os.kill(proc.pid, signal.SIGCONT)
+                    elif os.WIFEXITED(status):
+                        return os.WEXITSTATUS(status)
+                    elif os.WIFSIGNALED(status):
+                        return -os.WTERMSIG(status)
+        finally:
+            signal.signal(signal.SIGINT, old_sigint)
+        return 0
+
     def start_or_attach(self) -> int:
         """Start a new tmux session or attach to existing one in foreground."""
         if not is_tmux_available():
@@ -71,17 +101,16 @@ class TmuxSupervisor:
             argv = ["env", *(f"{k}={v}" for k, v in self.env.items()), *argv]
         cmd_str = shlex.join(argv)
         if not self.has_session():
-            # Create detached session first
+            # Disable VSUSP in the pane so Ctrl-Z does not suspend agy into an
+            # unrecoverable hang without a shell to fg it.
+            safe_cmd = f"stty susp undef 2>/dev/null; exec {cmd_str}"
             subprocess.run(
-                ["tmux", "new-session", "-d", "-s", self.session_name, cmd_str],
+                ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
                 check=True,
             )
 
-        # Attach to the session in the current terminal
-        return subprocess.run(
-            ["tmux", "attach-session", "-t", self.session_name],
-            check=False,
-        ).returncode
+        # Attach to the session in the current terminal with signal handling
+        return self._attach_session()
 
     def inject_input(self, text: str) -> bool:
         """Send keystrokes or prompts into the running tmux session literals safely."""

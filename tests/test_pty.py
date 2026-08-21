@@ -121,3 +121,48 @@ def test_the_child_gets_a_controlling_terminal():
         os.close(master_fd)
 
     assert result == b"ok", result.decode()
+
+
+def test_ctrl_z_does_not_suspend_child_session():
+    """Ctrl-Z should deliver byte input rather than generating SIGTSTP.
+
+    Without job control, SIGTSTP freezes agy with no shell to run `fg`.
+    """
+    import pty as pty_mod
+    import time
+
+    master_fd, slave_fd = pty_mod.openpty()
+    read_fd, write_fd = os.pipe()
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.close(master_fd)
+            os.close(read_fd)
+            PtySupervisor()._become_session_leader(slave_fd)
+            os.dup2(slave_fd, 0)
+            os.dup2(slave_fd, 1)
+            os.dup2(slave_fd, 2)
+            os.close(slave_fd)
+            # Read bytes from stdin (canonical mode waits for newline)
+            data = os.read(0, 10)
+            os.write(write_fd, b"received:" + data)
+        except Exception as e:  # noqa: BLE001
+            os.write(write_fd, f"failed: {e}".encode())
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    os.close(slave_fd)
+    try:
+        time.sleep(0.1)
+        # Send Ctrl-Z (\x1a) followed by \n so readline completes in canonical mode
+        os.write(master_fd, b"\x1a\n")
+        result = os.read(read_fd, 256)
+        wpid, _ = os.waitpid(pid, 0)
+        assert wpid == pid
+    finally:
+        os.close(read_fd)
+        os.close(master_fd)
+
+    assert result == b"received:\x1a\n", result.decode()
