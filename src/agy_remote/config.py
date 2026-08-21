@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -57,17 +59,100 @@ def get_tailscale_ip() -> str | None:
     return None
 
 
+#: Interfaces that never carry an address a phone on your Wi-Fi can reach:
+#: VPN tunnels, internet-sharing bridges, container and VM networks, AirDrop.
+VIRTUAL_IFACE_PREFIXES = (
+    "lo",
+    "utun",
+    "tun",
+    "tap",
+    "ppp",
+    "ipsec",
+    "awdl",
+    "llw",
+    "anpi",
+    "ap",
+    "bridge",
+    "vmnet",
+    "docker",
+    "veth",
+    "gif",
+    "stf",
+    "vboxnet",
+    "zt",
+)
+#: Physical LAN interfaces, in the order we prefer them.
+PHYSICAL_IFACE_PREFIXES = ("en", "eth", "wl", "wlan")
+
+
+def parse_interface_addresses(output: str) -> list[tuple[str, str]]:
+    """Extract (interface, IPv4) pairs from `ifconfig` or `ip -4 addr` output."""
+    pairs: list[tuple[str, str]] = []
+    current = ""
+    for line in output.splitlines():
+        if not line:
+            continue
+        # `ifconfig` starts an interface block in column 0; `ip addr` prefixes
+        # each line with "N: name".
+        if not line[0].isspace():
+            head = line.split(":", 1)
+            if len(head) == 2 and head[0].strip().isdigit():
+                current = head[1].strip().split()[0] if head[1].strip() else ""
+            else:
+                current = head[0].strip()
+        match = re.search(r"\binet (\d+\.\d+\.\d+\.\d+)", line)
+        if match and current:
+            pairs.append((current, match.group(1)))
+    return pairs
+
+
+def pick_lan_address(pairs: list[tuple[str, str]]) -> str | None:
+    """Choose the address a phone on the same network can actually reach.
+
+    Returns None if no physical interface has a usable private address.
+    """
+    for iface, ip in pairs:
+        name = iface.lower()
+        if name.startswith(VIRTUAL_IFACE_PREFIXES):
+            continue
+        if not name.startswith(PHYSICAL_IFACE_PREFIXES):
+            continue
+        try:
+            addr = ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if addr.is_loopback or addr.is_link_local:
+            continue
+        return ip
+    return None
+
+
 def get_lan_ip() -> str:
-    """Get the primary local area network IPv4 address."""
+    """Get the LAN IPv4 address to advertise to mobile clients.
+
+    Enumerating interfaces is preferred over the usual UDP-connect probe: that
+    probe reports whichever interface holds the default route, which is the
+    tunnel whenever a VPN is up - an address no phone on your Wi-Fi can reach.
+    """
+    for cmd in (["ifconfig", "-a"], ["ip", "-4", "addr"]):
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if res.returncode == 0:
+            found = pick_lan_address(parse_interface_addresses(res.stdout))
+            if found:
+                return found
+
+    # Fall back to asking the routing table which source address it would use.
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.5)
-        # Connect to an arbitrary public IP to find outgoing interface
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except OSError:
         return "127.0.0.1"
 
 
