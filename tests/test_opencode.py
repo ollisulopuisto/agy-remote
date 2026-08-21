@@ -655,3 +655,63 @@ async def test_active_session_permission_is_still_broadcast(tmp_path: Path):
     asked = [b for b in broadcasts if b["event"] == "approval_request"]
     assert len(asked) == 1
     assert asked[0]["data"]["conversation_id"] == "ses_1"
+
+
+def _seed(backend: OpencodeBackend, sid: str, title: str, updated: int) -> None:
+    backend._upsert_session({"id": sid, "title": title, "time": {"created": updated, "updated": updated}})
+
+
+@pytest.mark.asyncio
+async def test_the_phone_follows_the_desktop_into_an_existing_session(tmp_path: Path):
+    """Changing sessions in the TUI announces nothing -- only messages arrive.
+
+    `opencode attach` opens a fresh empty session at launch, so a phone that
+    follows latest lands there. The user then returns to the session they were
+    actually working in and types. That session already existed, so no
+    `session.created` was emitted, and the phone sat on "No active steps in
+    this session" while the desktop worked in another one.
+    """
+    cfg = RemoteConfig(agent="opencode", opencode_port=4096, brain_dir=tmp_path)
+    backend = OpencodeBackend(cfg)
+    mgr = SessionManager(cfg, backend=backend)
+    mgr.broadcast = AsyncMock()
+
+    _seed(backend, "ses_work", "Desktop repo identification", 1740000000000)
+    _seed(backend, "ses_empty", "New session - 2026-08-21T20:30:00.000Z", 1740000001000)
+    await mgr.switch_conversation("ses_empty")
+    mgr.follow_latest = True
+
+    await backend._handle_event(
+        mgr,
+        {
+            "type": "message.created",
+            "properties": {"info": {"id": "msg_1", "sessionID": "ses_work", "role": "user"}},
+        },
+    )
+
+    assert mgr.active_conversation_id == "ses_work"
+
+
+@pytest.mark.asyncio
+async def test_a_session_the_user_pinned_is_not_dragged_away(tmp_path: Path):
+    """Following the work must not override a session picked on the phone."""
+    cfg = RemoteConfig(agent="opencode", opencode_port=4096, brain_dir=tmp_path)
+    backend = OpencodeBackend(cfg)
+    mgr = SessionManager(cfg, backend=backend)
+    mgr.broadcast = AsyncMock()
+
+    _seed(backend, "ses_old", "The one being read on the phone", 1740000000000)
+    _seed(backend, "ses_busy", "Something chattering in the background", 1740000001000)
+    # Pinning an older session is what turns following off.
+    await mgr.switch_conversation("ses_old", pin=True)
+    assert mgr.follow_latest is False
+
+    await backend._handle_event(
+        mgr,
+        {
+            "type": "message.created",
+            "properties": {"info": {"id": "msg_2", "sessionID": "ses_busy", "role": "assistant"}},
+        },
+    )
+
+    assert mgr.active_conversation_id == "ses_old"

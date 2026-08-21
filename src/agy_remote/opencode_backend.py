@@ -213,7 +213,16 @@ class OpencodeBackend:
         if etype in ("message.created", "message.updated"):
             info = props.get("info") or props
             sid = info.get("sessionID")
-            if not sid or sid != mgr.active_conversation_id:
+            if not sid:
+                return
+            if sid != mgr.active_conversation_id:
+                # Changing sessions in the TUI announces nothing -- a message is
+                # the only sign the desktop moved. `session.created` covers only
+                # a brand-new session, so a phone that followed the empty one
+                # `opencode attach` opens at launch sat on "no active steps"
+                # while the work went on in a session that already existed.
+                if etype == "message.created" and mgr.follow_latest:
+                    await mgr.switch_conversation(sid)
                 return
             mid = info.get("id")
             if not mid:

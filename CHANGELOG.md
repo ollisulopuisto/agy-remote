@@ -1,6 +1,14 @@
 # Changelog
  
-## v26.08.21.42 — The PWA says which agent it is fronting
+## v26.08.21.42 — The phone follows the session you are working in
+
+- **The phone sat on an empty session while the desktop worked in another.**
+  `opencode attach` opens a fresh session at launch, so a phone following the
+  latest one landed there; going back to the session you were actually working
+  in emits no `session.created`, only messages — and messages for an inactive
+  session were dropped. The transcript read "No active steps in this session"
+  while the TUI filled up next to it. A new message in another session now
+  moves the phone with it, unless you pinned a session from the drawer.
 
 - **The PWA called every session an agy session.** The header shipped a literal
   `agy`, the tab and installed-app name said "Antigravity Remote", and the push
