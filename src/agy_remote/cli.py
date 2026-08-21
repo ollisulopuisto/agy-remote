@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
+import math
+import select
 import sys
 import threading
+import time
 from pathlib import Path
 
 import click
@@ -256,6 +260,15 @@ def serve(
     help="Custom path to Tailscale CLI executable",
 )
 @click.option(
+    "--qr-timeout",
+    "--pairing-timeout",
+    "qr_timeout",
+    default=30,
+    type=float,
+    help="Seconds to show QR before auto-attaching (0 to attach immediately, default: 30)",
+    show_default=True,
+)
+@click.option(
     "--rotate-token",
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
@@ -271,6 +284,7 @@ def run(
     no_e2ee: bool,
     tls: bool | None,
     tailscale_bin: str | None,
+    qr_timeout: float,
     rotate_token: bool,
 ) -> None:
     """Launch agy CLI inside supervisor with simultaneous desktop & mobile control."""
@@ -312,7 +326,7 @@ def run(
         supervisor = TmuxSupervisor(session_name="agy-remote", cmd=agy_args)
         set_tmux_supervisor(supervisor)
         console.print("[dim]Starting persistent tmux session 'agy-remote'...[/dim]\n")
-        exit_code = attach_tmux_after_pairing(supervisor)
+        exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
         sys.exit(exit_code)
     else:
         supervisor = PtySupervisor(cmd=agy_args)
@@ -325,8 +339,67 @@ def run(
             sys.exit(0)
 
 
-def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None) -> int:
-    """Hold the QR on screen until acknowledged, then attach.
+def wait_for_keypress_or_timeout(
+    timeout_seconds: float = 30,
+    message: str = "Scan QR code above, or press any key to attach (auto-attaching in {remaining}s)...",
+) -> bool:
+    """Wait for a keypress or until timeout expires.
+
+    Returns True if a key was pressed, False if timed out.
+    """
+    if timeout_seconds <= 0:
+        return False
+
+    if not sys.stdin.isatty():
+        time.sleep(min(timeout_seconds, 0.1))
+        return False
+
+    fd = sys.stdin.fileno()
+    try:
+        import termios
+        import tty
+    except ImportError:
+        time.sleep(timeout_seconds)
+        return False
+
+    try:
+        old_settings = termios.tcgetattr(fd)
+    except Exception:
+        time.sleep(timeout_seconds)
+        return False
+
+    try:
+        tty.setcbreak(fd)
+        start_time = time.time()
+        while True:
+            elapsed = time.time() - start_time
+            remaining = max(0, int(math.ceil(timeout_seconds - elapsed)))
+            if remaining <= 0:
+                sys.stderr.write("\r\033[K")
+                sys.stderr.flush()
+                return False
+
+            prompt = message.format(remaining=remaining) if "{remaining}" in message else message
+            sys.stderr.write(f"\r\033[K{prompt}")
+            sys.stderr.flush()
+
+            timeout_slice = min(1.0, max(0.01, timeout_seconds - elapsed))
+            rlist, _, _ = select.select([sys.stdin], [], [], timeout_slice)
+            if rlist:
+                with contextlib.suppress(Exception):
+                    sys.stdin.read(1)
+                sys.stderr.write("\r\033[K")
+                sys.stderr.flush()
+                return True
+    except Exception:
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None, timeout: float = 30) -> int:
+    """Hold the QR on screen until acknowledged or timeout expires, then attach.
 
     `tmux attach-session` replaces the entire terminal with tmux's own screen,
     so the banner and QR printed a moment earlier vanish behind agy before a
@@ -334,12 +407,11 @@ def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None) -> int:
     the QR rather than replacing it. `agy-remote qr` re-displays the code at
     any time.
     """
-    if pause is None:
+    if pause is not None:
+        pause()
+    elif timeout > 0:
+        wait_for_keypress_or_timeout(timeout_seconds=timeout)
 
-        def pause() -> None:
-            click.pause("Scan the QR code above, then press any key to attach (detach later with Ctrl+B D)...")
-
-    pause()
     return supervisor.start_or_attach()
 
 
