@@ -23,7 +23,7 @@ class TranscriptStep(BaseModel):
     """A single step from a transcript.
 
     `id` is the agent's own identity for the step (agy: none, so clients fall
-    back to `step_index`; opencode: the message id). It is what lets a client
+    back to `step_index`). It is what lets a client
     replace a step in place when `step_updated` arrives.
     """
 
@@ -93,8 +93,8 @@ class KeyPressRequest(BaseModel):
 class ApprovalResponseRequest(BaseModel):
     """Request payload to resolve a tool approval.
 
-    `always` is opencode's "approve future matching requests"; agy has no such
-    outcome, and the server maps it to a plain allow for agy sessions.
+    `always` means "approve future matching requests". agy has no such
+    outcome, so the server maps it to a plain allow.
     """
 
     decision: Literal["allow", "deny", "force_ask", "always"]

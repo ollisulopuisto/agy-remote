@@ -1,7 +1,7 @@
 # 🚀 agy-remote
 
-> **Self-Hosted, Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`) and Opencode (`opencode`)**  
-> Access, monitor, and direct your locally running `agy` and `opencode` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, a live mirrored terminal view, self-hosted Web Push alerts, one-tap tool approvals, and voice dictation.
+> **Self-Hosted, Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`)**  
+> Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, a live mirrored terminal view, self-hosted Web Push alerts, one-tap tool approvals, and voice dictation.
 
 [![PyPI](https://img.shields.io/pypi/v/agy-remote)](https://pypi.org/project/agy-remote/) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue) ![CalVer](https://img.shields.io/badge/versioning-CalVer-lightgrey) ![Self-hosted](https://img.shields.io/badge/cloud-none-orange)
 
@@ -18,11 +18,7 @@
   - [2. tmux Persistence Mode](#2-tmux-persistence-mode)
   - [3. Standalone Watcher Server Mode](#3-standalone-watcher-server-mode)
   - [4. Two agy sessions at once](#4-two-agy-sessions-at-once)
-- [Quickstart: Opencode (`opencode`)](#-quickstart-opencode-opencode)
-  - [1. Dedicated Opencode Supervisor (Recommended)](#1-dedicated-opencode-supervisor-recommended)
-  - [2. Opencode with tmux Persistence](#2-opencode-with-tmux-persistence)
-  - [3. Connecting to an Existing Opencode Server](#3-connecting-to-an-existing-opencode-server)
-  - [4. Running agy and opencode Side-by-Side](#4-running-agy-and-opencode-side-by-side)
+- [Using opencode instead](#-using-opencode-instead)
 - [Mobile PWA Setup](#-mobile-pwa-setup)
 - [Remote Tool Approvals](#-remote-tool-approvals)
 - [Terminal Key Controls](#-terminal-key-controls)
@@ -37,12 +33,12 @@
 
 ## 🌟 Overview
 
-When running autonomous coding agents like Google Antigravity CLI (`agy`) or [Opencode](https://github.com/sst/opencode) (`opencode`), tasks frequently involve multi-step file edits, automated test runs, and tool permission gates that take minutes to complete. Staying tethered to your desk or using awkward mobile SSH clients (where monospace terminals break text wrapping on narrow phone screens and soft keyboards make tool approvals painful) is suboptimal.
+When running an autonomous coding agent like Google Antigravity CLI (`agy`), tasks frequently involve multi-step file edits, automated test runs, and tool permission gates that take minutes to complete. Staying tethered to your desk or using awkward mobile SSH clients (where monospace terminals break text wrapping on narrow phone screens and soft keyboards make tool approvals painful) is suboptimal.
 
-The workflow is inspired by [Claude Code](https://claude.com/claude-code) and its remote-control and mobile-approval experience — `agy-remote` brings that same "step away from the desk while the agent works" loop to **Google Antigravity CLI** and **Opencode**, self-hosted and without a cloud relay. If you're coming from Claude Code, Gemini CLI, or another terminal coding agent, the concepts (transcript streaming, tool-permission gates, execution modes) map directly.
+The workflow is inspired by [Claude Code](https://claude.com/claude-code) and its remote-control and mobile-approval experience — `agy-remote` brings that same "step away from the desk while the agent works" loop to **Google Antigravity CLI**, self-hosted and without a cloud relay. If you're coming from Claude Code, Gemini CLI, or another terminal coding agent, the concepts (transcript streaming, tool-permission gates, execution modes) map directly.
 
 **`agy-remote`** bridges your local desktop agent session to a rich, responsive **Progressive Web App (PWA)** on your phone:
-- **Multi-Agent Backend Support**: First-class support for both Google Antigravity (`agy`) and Opencode (`opencode`).
+- **Built for a terminal agent**: `agy` has no server and no web UI of its own; this is what puts it on a phone.
 - **Zero Cloud Dependence**: 100% self-hosted, and the PWA loads no third-party scripts — it works on an air-gapped tailnet.
 - **Encrypted Payloads**: AES-256-GCM on every WebSocket frame with replay protection, keyed by a secret shared via the URL hash (`#key=...`). See [Security](#-security--cryptography) for what this does and does not protect.
 - **First-Class Mobile UX**: Native mobile text wrapping, collapsible thinking accordions, colored diffs, voice dictation, and one-tap tool approval banners.
@@ -56,9 +52,8 @@ The workflow is inspired by [Claude Code](https://claude.com/claude-code) and it
 ```mermaid
 flowchart TD
     subgraph Host Machine [Local Computer / Host]
-        subgraph Agent Backends [Supported Agent Engines]
+        subgraph Agent Backends [Agent Engine]
             AGY["Google Antigravity (agy)<br/>• Log Tailing (transcript.jsonl)<br/>• PreToolUse Lifecycle Hook Gateway"]
-            OPENCODE["Opencode (opencode)<br/>• SSE Event Stream (GET /event)<br/>• REST API (Prompt / Permissions)"]
         end
 
         SUPERVISOR[PTY / tmux Process Supervisor]
@@ -66,7 +61,6 @@ flowchart TD
         VAPID[Self-Hosted VAPID Push Manager]
 
         AGY <-->|PTY / Hooks| SERVER
-        OPENCODE <-->|PTY / SSE / REST| SERVER
         SUPERVISOR <--> SERVER
         SERVER <--> VAPID
     end
@@ -88,24 +82,28 @@ flowchart TD
     VAPID --->|W3C Push Notification| SW
 ```
 
-### Backend Mechanics Comparison
+### Backend Mechanics
 
-| Capability | Google Antigravity (`agy`) | Opencode (`opencode`) |
-| :--- | :--- | :--- |
-| **Transcript Source** | Local disk log tailing (`transcript.jsonl`) | Real-time SSE event stream (`GET /event`) |
-| **Tool Approvals** | Lifecycle hook gateway (`PreToolUse` via `hooks.json`) | Native SSE `permission.updated` & REST reply (`POST /session/:id/permissions/:id`) |
-| **Hook Setup Needed** | Yes (`agy-remote setup-hooks`) | **Zero configuration** (handled natively over loopback REST) |
-| **Prompt Injection** | PTY / tmux keystroke injection | Direct REST API (`POST /session/:id/prompt_async`) with PTY fallback |
-| **Supervisor Launch** | `agy-remote run` | `agy-remote opencode` or `agy-remote run --agent opencode` |
+| Capability | Google Antigravity (`agy`) |
+| :--- | :--- |
+| **Transcript Source** | Local disk log tailing (`transcript.jsonl`) |
+| **Tool Approvals** | Lifecycle hook gateway (`PreToolUse` via `hooks.json`) |
+| **Hook Setup Needed** | Yes (`agy-remote setup-hooks`) |
+| **Prompt Injection** | PTY / tmux keystroke injection |
+| **Supervisor Launch** | `agy-remote run` |
+
+The backend seam (`backends.py`) stays in place with one implementation: a manager
+that knows about transcript files is the alternative, and adopting a session the
+supervisor did not start plugs in here rather than threading conditionals through
+the manager.
 
 ---
 
 ## ✨ Key Features
 
-- 🤖 **Multi-Agent Engine Support**: Seamlessly front Google Antigravity (`agy`) or Opencode (`opencode`) with identical mobile UI and push notification workflows.
 - 🔐 **Payload Encryption**: Every WebSocket frame in both directions is sealed with 256-bit AES-GCM, with replay protection. The key travels in the `#key=...` URL hash, which browsers never send to the server, and is scrubbed from the address bar on load. See [Security](#-security--cryptography) for the precise threat model.
-- 🔔 **Self-Hosted Web Push Notifications**: Native iOS & Android lock-screen push alerts via local VAPID keys whenever `agy` or `opencode` needs tool approval or completes a task.
-- 🔄 **tmux Session Persistence**: Keep sessions running in the background across laptop sleep, screen locks, or closed terminals (`agy-remote run --tmux` or `agy-remote opencode --tmux`).
+- 🔔 **Self-Hosted Web Push Notifications**: Native iOS & Android lock-screen push alerts via local VAPID keys whenever `agy` needs tool approval or completes a task.
+- 🔄 **tmux Session Persistence**: Keep sessions running in the background across laptop sleep, screen locks, or closed terminals (`agy-remote run --tmux`).
 - 📱 **Responsive PWA**: Installable directly to your iOS or Android Home Screen with safe-area padding and a sleek dark theme.
 - 🛡️ **One-Tap Tool Permissions**: Forwards tool permission prompts (shell commands, file modifications, git pushes) to your phone with haptic feedback to `[Allow]` or `[Deny]`.
 - 📎 **Photo & Screenshot Upload**: Capture screenshots or camera photos directly from mobile into your workspace.
@@ -225,72 +223,32 @@ pairing secret to manage.
 
 ---
 
-## ⚡ Quickstart: Opencode (`opencode`)
+## 🔀 Using opencode instead
 
-[Opencode](https://github.com/sst/opencode) is an AI agent CLI for your terminal. `agy-remote` provides a dedicated command with zero-configuration tool permission bridging.
+`agy-remote` used to front [opencode](https://github.com/sst/opencode) as a second
+backend. It no longer does, because opencode does not need it: `opencode serve`
+already hosts a mobile-tuned web app at `/`, and `opencode web` is the same thing
+with a browser opened for you.
 
-> [!NOTE]
-> Make sure `opencode` is installed (`npm install -g opencode-ai` or `brew install opencode`).
-
-### 1. Dedicated Opencode Supervisor (Recommended)
-
-Launches an auto-allocated loopback `opencode serve` backend, attaches the interactive terminal supervisor (`opencode attach`), and presents a pairing QR with a 30-second scan countdown:
+What that leaves you to solve is transport, and Tailscale does it in one command:
 
 ```bash
-# Launch interactive opencode with mobile remote control:
-agy-remote opencode
-
-# Pass custom options / model flags directly to opencode:
-agy-remote opencode -- --model anthropic/claude-3-7-sonnet
-
-# Resume previous session or run in non-interactive mode:
-agy-remote opencode -- --continue
+opencode serve --port 4096                 # stays on 127.0.0.1, its default
+tailscale serve --bg --https 8443 4096     # tailnet HTTPS, real certificate
 ```
 
-*The terminal will display the ASCII QR code and countdown before attaching to the TUI so you can scan it with your phone camera comfortably.*
+Then open `https://<your-machine>.<tailnet>.ts.net:8443/` on your phone. There is a
+ready-made shell helper in [`contrib/opencode-tailscale.zsh`](contrib/opencode-tailscale.zsh)
+that starts both, waits for the server, and prints the URL with a scannable QR code.
 
----
+> [!WARNING]
+> Do not give opencode `--hostname 0.0.0.0`. It prints *"OPENCODE_SERVER_PASSWORD is
+> not set; server is unsecured"* for a reason — anything that reaches the port can
+> drive an agent with shell access. Keep it on loopback, let `tailscale serve` be the
+> only door, and set `OPENCODE_SERVER_PASSWORD` as well. Never `tailscale funnel` it.
 
-### 2. Opencode with tmux Persistence
-
-Run opencode inside a managed tmux session that remains active across SSH disconnects and laptop sleep:
-
-```bash
-agy-remote opencode --tmux
-```
-
----
-
-### 3. Connecting to an Existing Opencode Server
-
-If you already run `opencode serve` in the background or on a specific port:
-
-```bash
-# Terminal 1: Start opencode HTTP server
-opencode serve --port 4096
-
-# Terminal 2: Attach agy-remote watcher server
-agy-remote serve --agent opencode --opencode-port 4096
-
-# Or attach supervisor mode to existing server:
-agy-remote run --agent opencode --opencode-port 4096
-```
-
----
-
-### 4. Running agy and opencode Side-by-Side
-
-You can run an `agy` session and an `opencode` session at the same time on different ports:
-
-```bash
-# Session 1 (Google Antigravity) on port 8765:
-agy-remote run
-
-# Session 2 (Opencode) on port 8766:
-agy-remote opencode -p 8766
-```
-
-Add both Web apps to your phone's Home Screen to switch between agents on the go!
+What you give up versus this PWA: lock-screen push when a tool needs approval, and a
+single paired app for both agents.
 
 ---
 
@@ -320,8 +278,6 @@ agy-remote setup-hooks
 agy-remote setup-hooks --project
 ```
 
-### For Opencode (`opencode`):
-**Zero setup required!** `agy-remote` hooks directly into opencode's SSE `permission.updated` events and delivers approvals via REST (`POST /session/:id/permissions/:id`) automatically.
 
 ---
 
@@ -445,9 +401,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | :--- | :--- |
 | `agy-remote run [args...]` | Launch `agy` under a PTY with dual desktop & mobile control (recommended). |
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
-| `agy-remote opencode [args...]` | Launch `opencode` supervisor with auto-allocated port, QR countdown, and mobile control. |
-| `agy-remote opencode --tmux` | Launch `opencode` inside a persistent `tmux` session. |
-| `agy-remote serve` | Start standalone log watcher server (supports `--agent agy` or `--agent opencode`). |
+| `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
 | `agy-remote qr --port N` | Pairing QR for the instance on port `N` (a second instance does not own the shared runtime state). |
 | `agy-remote run --rotate-token` | Issue a new token and encryption key, revoking every paired phone. |
@@ -458,14 +412,12 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 
 | Flag | Commands | Description |
 | :--- | :--- | :--- |
-| `--agent <agy\|opencode>` | `run`, `serve` | Choose agent engine to front (default: `agy`). |
-| `--opencode-port <port>` | `run`, `serve`, `opencode` | Port of running or target `opencode` HTTP server. Auto-allocated if omitted for `run`/`opencode`. |
-| `--qr-timeout <seconds>` | `run`, `opencode` | Time in seconds to display QR code countdown before attaching TUI (default: `30`s; `0` to attach immediately). |
-| `--tmux` | `run`, `opencode` | Run agent inside a persistent `tmux` session. |
+| `--qr-timeout <seconds>` | `run` | Time in seconds to display QR code countdown before attaching TUI (default: `30`s; `0` to attach immediately). |
+| `--tmux` | `run` | Run agent inside a persistent `tmux` session. |
 | `--port`, `-p <port>` | All server commands | Web server port (default: `8765`). |
 | `--host`, `-h <host>` | All server commands | Web server host bind address (default: `0.0.0.0`). |
 | `--token`, `-t <token>` | All server commands | Custom authentication token. |
-| `--rotate-token` | `run`, `serve`, `opencode` | Mint fresh auth token and encryption key, invalidating existing mobile pairings. |
+| `--rotate-token` | `run`, `serve` | Mint fresh auth token and encryption key, invalidating existing mobile pairings. |
 | `--no-auth` | All server commands | Disable token authentication (**refused on non-loopback binds**). |
 | `--no-e2ee` | All server commands | Disable payload encryption. |
 | `--tls / --no-tls` | All server commands | Force enable or disable Tailscale HTTPS certificate. |
@@ -474,8 +426,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `AGY_REMOTE_AGENT` | `agy` | Agent backend engine (`agy` or `opencode`). |
-| `AGY_REMOTE_OPENCODE_PORT` | *Auto* | Port for local `opencode` HTTP server. |
+| `AGY_REMOTE_AGENT` | `agy` | Name of the agent this server fronts, as shown in the PWA header. |
 | `AGY_REMOTE_PORT` | `8765` | Server port. |
 | `AGY_REMOTE_URL` | *Set by `run`* | Which server a supervised `agy`'s PreToolUse hook posts to. Exported into the child; set it by hand only to point a hand-started `agy` at a specific instance. |
 | `AGY_REMOTE_HOST` | `0.0.0.0` | Server bind host. |
@@ -508,25 +459,17 @@ node --test "tests/js/*.test.mjs"
 
 ## ❓ Troubleshooting & FAQ
 
-**Q: How do I install `opencode`?**  
-A: Install `opencode` globally using npm or Homebrew:
-```bash
-npm install -g opencode-ai
-# or
-brew install opencode
-```
+**Q: What happened to opencode support?**  
+A: It was removed — opencode ships its own mobile-tuned web UI (`opencode serve` hosts it at `/`), so fronting it here duplicated work someone else maintains. See [Using opencode instead](#-using-opencode-instead) for the two-command Tailscale setup and the helper script.
 
-**Q: Do I need to run `agy-remote setup-hooks` for `opencode`?**  
-A: No. `setup-hooks` is only required for Google Antigravity (`agy`). `opencode` provides built-in HTTP SSE events and REST endpoints for permissions, which `agy-remote` integrates with automatically out-of-the-box.
-
-**Q: Can I pass arguments to `opencode` when launching `agy-remote opencode`?**  
-A: Yes! Anything after `--` is forwarded directly to `opencode attach`:
+**Q: Can I pass arguments to `agy` when launching `agy-remote run`?**  
+A: Yes. Anything after `--` is forwarded directly to `agy`:
 ```bash
-agy-remote opencode -- --model anthropic/claude-3-7-sonnet
+agy-remote run -- --resume <session-id>
 ```
 
 **Q: Why does the QR code show a countdown before attaching?**  
-A: Fullscreen TUIs like `opencode` and `agy` immediately redraw the terminal when attaching, which would clear the pairing QR code before you could scan it. The countdown (`--qr-timeout`, default 30s) gives you time to scan or press any key to attach instantly.
+A: A fullscreen TUI like `agy` immediately redraws the terminal when attaching, which would clear the pairing QR code before you could scan it. The countdown (`--qr-timeout`, default 30s) gives you time to scan or press any key to attach instantly.
 
 **Q: Why does the QR code show my LAN IP instead of Tailscale?**  
 A: The Tailscale *daemon* must be running on this machine, not just installed — check `tailscale status`. `agy-remote` prioritizes a Tailscale IPv4 when one exists, and falls back to the LAN address otherwise.
@@ -541,7 +484,7 @@ A: No. If the phone and Mac share a Wi-Fi network, use the LAN URL. Keep auth an
 A: On iOS, Web Push requires saving the page as a PWA via **Share ➔ Add to Home Screen** in Safari (iOS 16.4+). Launch the app from your home screen and tap the bell icon to grant permissions.
 
 **Q: Can I use `agy-remote` without `tmux`?**  
-A: Yes! Standard `agy-remote run` and `agy-remote opencode` use the built-in PTY supervisor.
+A: Yes. Plain `agy-remote run` uses the built-in PTY supervisor; `--tmux` is opt-in.
 
 ---
 

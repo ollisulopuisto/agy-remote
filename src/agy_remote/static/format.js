@@ -102,9 +102,9 @@
   }
 
   // Which agent is behind this server. The name was hardcoded in the header,
-  // so an opencode session was labelled agy -- and since both backends are
-  // normalized to the same step vocabulary, nothing else on screen corrected
-  // it. An unreported agent is "agent", never a guess at one of them.
+  // so a session was labelled by whatever the markup happened to say -- and
+  // since every backend normalizes to the same step vocabulary, nothing else
+  // on screen corrected it. An unreported agent is "agent", never a guess.
   function agentIdentity(agent) {
     var name = String(agent == null ? '' : agent).trim() || 'agent';
     return { label: name, title: name + ' remote' };
@@ -127,10 +127,10 @@
     return now - lastPongAt > timeoutMs;
   }
 
-  // Where a revised step goes. opencode creates an assistant message empty and
-  // fills it in, so the text, the tool calls and the thinking all arrive as
-  // revisions of a step already on screen -- an update that is not applied is
-  // the whole answer missing until something reloads the transcript.
+  // Where a revised step goes. A backend may create a message empty and fill
+  // it in, so the text, the tool calls and the thinking arrive as revisions of
+  // a step already on screen -- an update that is not applied is the whole
+  // answer missing until something reloads the transcript.
   function applyStepUpdate(steps, step) {
     var next = steps.slice();
     var index = -1;

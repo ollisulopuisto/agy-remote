@@ -1,5 +1,20 @@
 # Changelog
  
+## v26.08.22.24 — agy only
+
+- **Removed the opencode backend.** opencode ships its own mobile-tuned web app —
+  `opencode serve` hosts it at `/`, and `opencode web` is the same thing with a
+  browser opened for you — so fronting it here duplicated work someone else
+  maintains, and did it through a normalization layer that could only ever lag
+  the real API. Gone: `opencode_backend.py`, the `agy-remote opencode` command,
+  `--agent` and `--opencode-port`, and `AGY_REMOTE_OPENCODE_PORT`.
+  [`contrib/opencode-tailscale.zsh`](contrib/opencode-tailscale.zsh) replaces it
+  with the two commands that actually matter (`opencode serve` on loopback plus
+  `tailscale serve` in front), printing the URL and a QR code.
+- **The backend seam stays.** One implementation, kept because the alternative is
+  a session manager that knows about transcript files — and adopting a session
+  the supervisor did not start belongs behind that seam, not in the manager.
+
 ## v26.08.22.23 — The phone follows the session you are working in
 
 - **The terminal was never mirrored under `agy-remote run`, so the phone

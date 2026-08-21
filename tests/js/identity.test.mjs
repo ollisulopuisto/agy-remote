@@ -1,9 +1,9 @@
 // The PWA's agent identity. Run with: node --test tests/js
 //
 // The header, the tab title and the manifest all said "agy" whatever was
-// behind them, so an opencode session on the phone read as an agy one -- the
-// tool cards even carry agy's step vocabulary. The name shown must come from
-// the server, and must never fall back to the name of one particular agent.
+// behind them, so a session on the phone read as whatever the markup happened
+// to say. The name shown must come from the server, and must never fall back
+// to the name of one particular agent.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -17,10 +17,12 @@ vm.runInContext(source, sandbox);
 const { agentIdentity } = sandbox.window.AgyFormat;
 
 test('the shown name is the agent the server reports', () => {
-  assert.equal(agentIdentity('opencode').label, 'opencode');
-  assert.equal(agentIdentity('opencode').title, 'opencode remote');
   assert.equal(agentIdentity('agy').label, 'agy');
   assert.equal(agentIdentity('agy').title, 'agy remote');
+  // Whatever the server reports is shown verbatim -- the mapping never
+  // second-guesses a name it does not recognise.
+  assert.equal(agentIdentity('something-else').label, 'something-else');
+  assert.equal(agentIdentity('something-else').title, 'something-else remote');
 });
 
 test('an unknown agent is never guessed to be agy', () => {
@@ -68,10 +70,10 @@ test('a socket that stopped answering is treated as dead', () => {
 
 test('a revised step replaces the one already on screen', () => {
   const { applyStepUpdate } = sandbox.window.AgyFormat;
-  // opencode creates an assistant message empty and fills it in: the text, the
-  // tool calls and the thinking all arrive as revisions of the same step. The
-  // PWA only ever handled `step_added`, so everything after the empty first
-  // frame was dropped and the answer appeared only on a session switch.
+  // A backend may create a message empty and fill it in: the text, the tool
+  // calls and the thinking then arrive as revisions of the same step. The PWA
+  // only ever handled `step_added`, so everything after the empty first frame
+  // was dropped and the answer appeared only on a session switch.
   const steps = [{ id: 'msg_1', content: 'hi' }, { id: 'msg_2', content: '' }];
 
   const revised = applyStepUpdate(steps, { id: 'msg_2', content: 'the answer' });
@@ -109,7 +111,6 @@ test('a prompt nothing received is not a prompt sent', () => {
   // "broadcast" is the agy backend saying no supervisor was there to type it.
   assert.equal(promptWasDelivered('broadcast'), false);
   assert.equal(promptWasDelivered(undefined), true);  // older server, says nothing
-  assert.equal(promptWasDelivered('opencode'), true);
   assert.equal(promptWasDelivered('tmux'), true);
   assert.equal(promptWasDelivered('pty'), true);
 });

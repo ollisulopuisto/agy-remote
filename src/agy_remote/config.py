@@ -410,11 +410,10 @@ class RemoteConfig(BaseModel):
     e2ee_enabled: bool = True
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
-    #: Which agent CLI this server fronts: "agy" or "opencode".
+    #: The agent CLI this server fronts. One value today, kept as a field
+    #: because the PWA renders it: the header used to say "agy" whatever was
+    #: behind it, which made a session look like something it was not.
     agent: str = "agy"
-    #: Loopback port of the opencode server (TUI-embedded or `opencode serve`).
-    #: Only meaningful when agent == "opencode".
-    opencode_port: int | None = None
     tailscale_bin: str | None = Field(default_factory=find_tailscale_binary)
     tailscale_ip: str | None = None
     tailscale_dns_name: str | None = None
@@ -518,24 +517,12 @@ def get_config(tailscale_bin: str | Path | None = None) -> RemoteConfig:
             "true",
             "yes",
         )
-        agent = os.environ.get("AGY_REMOTE_AGENT", "agy").strip().lower()
-        if agent not in ("agy", "opencode"):
-            logger.warning("Unknown AGY_REMOTE_AGENT %r; falling back to agy", agent)
-            agent = "agy"
-        opencode_port_env = os.environ.get("AGY_REMOTE_OPENCODE_PORT")
-        try:
-            opencode_port = int(opencode_port_env) if opencode_port_env else None
-        except ValueError:
-            opencode_port = None
-
         kwargs = {
             "host": host,
             "port": port,
             "brain_dir": brain_dir,
             "enable_auth": not no_auth,
             "e2ee_enabled": not no_e2ee,
-            "agent": agent,
-            "opencode_port": opencode_port,
         }
         if tailscale_bin:
             kwargs["tailscale_bin"] = str(tailscale_bin)
@@ -776,7 +763,6 @@ def write_runtime_state(cfg: RemoteConfig) -> Path | None:
             "enable_auth": cfg.enable_auth,
             "port": cfg.port,
             "agent": cfg.agent,
-            "opencode_port": cfg.opencode_port,
             "pid": os.getpid(),
         },
         indent=2,
@@ -840,6 +826,4 @@ def adopt_runtime_state(cfg: RemoteConfig) -> RemoteConfig:
         cfg.enable_auth = bool(state["enable_auth"])
     if state.get("agent"):
         cfg.agent = state["agent"]
-    if state.get("opencode_port"):
-        cfg.opencode_port = state["opencode_port"]
     return cfg

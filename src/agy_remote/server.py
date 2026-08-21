@@ -232,9 +232,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             "authenticated": True,
             "version": f"v{VERSION}",
             "e2ee_enabled": cfg.e2ee_enabled,
-            # Which engine is behind this server. The PWA renders both backends
-            # through one normalized step shape, so without this it labels
-            # everything agy -- an opencode session included.
+            # Which engine is behind this server. The PWA renders whatever a
+            # backend normalizes into one step shape, so without this it can
+            # only guess at a name -- and a wrong name makes a session look
+            # like something it is not.
             "agent": cfg.agent,
             "active_conversation_id": mgr.active_conversation_id,
             "supervisor_running": (pty is not None and pty.running) or (tmux is not None and tmux.has_session()),
@@ -429,9 +430,9 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
         mgr = get_mgr(request)
         if mgr.backend.name != "agy":
-            # opencode has no hook protocol; its permissions arrive as events.
-            # A stale agy hook firing here must not mint phantom approvals.
-            raise HTTPException(status_code=400, detail="This server is fronting an opencode session")
+            # Only agy speaks this hook protocol. A stale hook firing at a
+            # server fronting something else must not mint phantom approvals.
+            raise HTTPException(status_code=400, detail="This server is not fronting an agy session")
 
         payload = await request.json()
         tool_call = payload.get("toolCall", {})

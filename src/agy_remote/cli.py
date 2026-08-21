@@ -6,7 +6,6 @@ import contextlib
 import io
 import math
 import select
-import subprocess
 import sys
 import threading
 import time
@@ -67,8 +66,6 @@ def print_banner(cfg: RemoteConfig, mode: str = "Standalone") -> None:
     table.add_row("Mode:", f"[bold magenta]{mode}[/]")
     if cfg.agent != "agy":
         table.add_row("Agent:", f"[bold cyan]{cfg.agent}[/]")
-        if cfg.opencode_port:
-            table.add_row("Opencode Port:", f"[cyan]{cfg.opencode_port}[/]")
     if cfg.enable_auth:
         table.add_row("Auth Token:", f"[yellow]{cfg.auth_token}[/]")
     if cfg.e2ee_enabled:
@@ -300,35 +297,6 @@ def _serve_in_background_or_exit(cfg: RemoteConfig, app: object) -> uvicorn.Serv
     return server
 
 
-def _start_opencode_server_if_needed(opencode_port: int) -> subprocess.Popen | None:
-    """Start `opencode serve --port <port>` if nothing is already listening."""
-    if not port_is_free("127.0.0.1", opencode_port):
-        return None
-
-    try:
-        proc = subprocess.Popen(
-            ["opencode", "serve", "--port", str(opencode_port)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
-        console.print(
-            "[bold red]Could not find `opencode` executable on PATH.[/bold red]\n"
-            "  Please ensure opencode is installed (`npm install -g opencode-ai` or `brew install opencode`).\n"
-        )
-        sys.exit(2)
-
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        if not port_is_free("127.0.0.1", opencode_port):
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.05)
-
-    return proc
-
-
 @click.group()
 @click.version_option(version=__version__, message="agy-remote %(version)s")
 def cli() -> None:
@@ -366,18 +334,6 @@ def cli() -> None:
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
 )
-@click.option(
-    "--agent",
-    type=click.Choice(["agy", "opencode"], case_sensitive=False),
-    default=None,
-    help="Which agent CLI this server fronts (agy or opencode, default: agy)",
-)
-@click.option(
-    "--opencode-port",
-    type=int,
-    default=None,
-    help="Port of the running opencode server (when agent is opencode)",
-)
 def serve(
     port: int,
     host: str,
@@ -388,8 +344,6 @@ def serve(
     tailscale_bin: str | None,
     brain_dir: Path | None,
     rotate_token: bool,
-    agent: str | None = None,
-    opencode_port: int | None = None,
 ) -> None:
     """Start the agy-remote server and watch active sessions."""
     if rotate_token:
@@ -405,45 +359,22 @@ def serve(
         cfg.e2ee_enabled = False
     if brain_dir:
         cfg.brain_dir = brain_dir
-    if agent:
-        cfg.agent = agent.lower()
-    if opencode_port:
-        cfg.opencode_port = opencode_port
-
-    if cfg.agent == "opencode" and not cfg.opencode_port:
-        console.print(
-            "[bold red]Refusing to start:[/bold red] --opencode-port is required when --agent opencode is used.\n"
-            "  Start opencode with `opencode --port <PORT>` and pass that port here.\n"
-        )
-        sys.exit(2)
 
     _guard_or_exit(cfg)
     _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
     print_banner(cfg, mode="Watcher Server")
-    if cfg.agent == "agy":
-        _warn_if_hooks_unwired()
-        _warn_if_second_instance(cfg)
+    _warn_if_hooks_unwired()
+    _warn_if_second_instance(cfg)
 
-    opencode_proc = None
-    if cfg.agent == "opencode" and cfg.opencode_port:
-        opencode_proc = _start_opencode_server_if_needed(cfg.opencode_port)
-
-    app = create_app(cfg)
-    try:
-        uvicorn.run(
-            app,
-            host=cfg.host,
-            port=cfg.port,
-            log_level="warning",
-            ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
-            ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
-        )
-    finally:
-        if opencode_proc and opencode_proc.poll() is None:
-            opencode_proc.terminate()
-            with contextlib.suppress(Exception):
-                opencode_proc.wait(timeout=2.0)
+    uvicorn.run(
+        create_app(cfg),
+        host=cfg.host,
+        port=cfg.port,
+        log_level="warning",
+        ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
+        ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
+    )
 
 
 @cli.command("run", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -480,18 +411,6 @@ def serve(
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
 )
-@click.option(
-    "--agent",
-    type=click.Choice(["agy", "opencode"], case_sensitive=False),
-    default=None,
-    help="Which agent CLI this server fronts (agy or opencode, default: agy)",
-)
-@click.option(
-    "--opencode-port",
-    type=int,
-    default=None,
-    help="Port for opencode server (auto-allocated if omitted when agent is opencode)",
-)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -505,10 +424,8 @@ def run(
     tailscale_bin: str | None,
     qr_timeout: float,
     rotate_token: bool,
-    agent: str | None = None,
-    opencode_port: int | None = None,
 ) -> None:
-    """Launch agent CLI inside supervisor with simultaneous desktop & mobile control."""
+    """Launch agy inside a supervisor with simultaneous desktop & mobile control."""
     if rotate_token:
         rotate_credentials()
     cfg = get_config(tailscale_bin=tailscale_bin)
@@ -520,136 +437,47 @@ def run(
         cfg.enable_auth = False
     if no_e2ee:
         cfg.e2ee_enabled = False
-    if agent:
-        cfg.agent = agent.lower()
-    if opencode_port:
-        cfg.opencode_port = opencode_port
 
     _guard_or_exit(cfg)
     _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
 
-    opencode_proc = None
-    if cfg.agent == "opencode":
-        if not cfg.opencode_port:
-            cfg.opencode_port = find_free_port()
-        opencode_proc = _start_opencode_server_if_needed(cfg.opencode_port)
-        child_cmd = ["opencode", "attach", f"http://127.0.0.1:{cfg.opencode_port}"] + ctx.args
-        mode_title = "opencode"
-    else:
-        child_cmd = ["agy"] + ctx.args
-        mode_title = "agy"
+    child_cmd = ["agy"] + ctx.args
 
-    mode_label = f"{mode_title} (tmux)" if tmux else f"{mode_title} (PTY)"
-    print_banner(cfg, mode=mode_label)
-    if cfg.agent == "agy":
-        _warn_if_hooks_unwired()
-        _warn_if_second_instance(cfg)
+    print_banner(cfg, mode="agy (tmux)" if tmux else "agy (PTY)")
+    _warn_if_hooks_unwired()
+    _warn_if_second_instance(cfg)
 
     # Start FastAPI server in a background thread
     app = create_app(cfg)
     _serve_in_background_or_exit(cfg, app)
 
-    try:
-        child_env = agy_child_env(cfg)
-        if tmux:
-            session_name = session_name_for_port(cfg.port)
-            supervisor = TmuxSupervisor(session_name=session_name, cmd=child_cmd, env=child_env)
-            set_tmux_supervisor(supervisor)
-            console.print(f"[dim]Starting persistent tmux session '{session_name}'...[/dim]\n")
-            try:
-                exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
-                sys.exit(exit_code)
-            except KeyboardInterrupt:
-                sys.exit(0)
-        else:
-            supervisor = PtySupervisor(cmd=child_cmd, env=child_env)
-            set_pty_supervisor(supervisor)
-            _mirror_supervised_screen(app, supervisor)
-            if qr_timeout > 0:
-                wait_for_keypress_or_timeout(
-                    timeout_seconds=qr_timeout,
-                    message="Scan QR code above, or press any key to attach (auto-attaching in {remaining}s)...",
-                )
-            console.print(f"[dim]Starting interactive session: {' '.join(child_cmd)}...[/dim]\n")
-            try:
-                exit_code = supervisor.start_sync()
-                sys.exit(exit_code)
-            except KeyboardInterrupt:
-                sys.exit(0)
-    finally:
-        if opencode_proc and opencode_proc.poll() is None:
-            opencode_proc.terminate()
-            with contextlib.suppress(Exception):
-                opencode_proc.wait(timeout=2.0)
-
-
-@cli.command("opencode", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
-@click.option("--port", "-p", default=8765, help="Port for web server", show_default=True)
-@click.option("--host", "-h", default="0.0.0.0", help="Host to bind on", show_default=True)
-@click.option("--opencode-port", type=int, default=None, help="Port for opencode server (auto-allocated if omitted)")
-@click.option("--token", "-t", default=None, help="Custom auth token")
-@click.option("--tmux", is_flag=True, help="Run inside a persistent tmux session")
-@click.option("--no-auth", is_flag=True, help="Disable authentication")
-@click.option("--no-e2ee", is_flag=True, help="Disable End-to-End Encryption")
-@click.option(
-    "--tls/--no-tls",
-    "tls",
-    default=None,
-    help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
-)
-@click.option(
-    "--tailscale-path",
-    "--tailscale-bin",
-    "tailscale_bin",
-    default=None,
-    help="Custom path to Tailscale CLI executable",
-)
-@click.option(
-    "--qr-timeout",
-    "--pairing-timeout",
-    "qr_timeout",
-    default=30,
-    type=float,
-    help="Seconds to show QR before auto-attaching (0 to attach immediately, default: 30)",
-    show_default=True,
-)
-@click.option(
-    "--rotate-token",
-    is_flag=True,
-    help="Issue a new token and encryption key, revoking every paired phone",
-)
-@click.pass_context
-def opencode_cmd(
-    ctx: click.Context,
-    port: int,
-    host: str,
-    opencode_port: int | None,
-    token: str | None,
-    tmux: bool,
-    no_auth: bool,
-    no_e2ee: bool,
-    tls: bool | None,
-    tailscale_bin: str | None,
-    qr_timeout: float,
-    rotate_token: bool,
-) -> None:
-    """Launch opencode CLI inside supervisor with simultaneous desktop & mobile control."""
-    ctx.invoke(
-        run,
-        port=port,
-        host=host,
-        token=token,
-        tmux=tmux,
-        no_auth=no_auth,
-        no_e2ee=no_e2ee,
-        tls=tls,
-        tailscale_bin=tailscale_bin,
-        qr_timeout=qr_timeout,
-        rotate_token=rotate_token,
-        agent="opencode",
-        opencode_port=opencode_port,
-    )
+    child_env = agy_child_env(cfg)
+    if tmux:
+        session_name = session_name_for_port(cfg.port)
+        supervisor = TmuxSupervisor(session_name=session_name, cmd=child_cmd, env=child_env)
+        set_tmux_supervisor(supervisor)
+        console.print(f"[dim]Starting persistent tmux session '{session_name}'...[/dim]\n")
+        try:
+            exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
+            sys.exit(exit_code)
+        except KeyboardInterrupt:
+            sys.exit(0)
+    else:
+        supervisor = PtySupervisor(cmd=child_cmd, env=child_env)
+        set_pty_supervisor(supervisor)
+        _mirror_supervised_screen(app, supervisor)
+        if qr_timeout > 0:
+            wait_for_keypress_or_timeout(
+                timeout_seconds=qr_timeout,
+                message="Scan QR code above, or press any key to attach (auto-attaching in {remaining}s)...",
+            )
+        console.print(f"[dim]Starting interactive session: {' '.join(child_cmd)}...[/dim]\n")
+        try:
+            exit_code = supervisor.start_sync()
+            sys.exit(exit_code)
+        except KeyboardInterrupt:
+            sys.exit(0)
 
 
 def wait_for_keypress_or_timeout(

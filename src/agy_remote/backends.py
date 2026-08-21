@@ -7,9 +7,11 @@ and how a decision travels back:
 
 - **agy** writes `transcript.jsonl` files in its brain directory, which we
   tail, and blocks a `PreToolUse` hook process until the phone answers.
-- **opencode** runs a first-class HTTP server: an SSE event stream carries
-  messages, parts and permission requests, and a permission answer is a REST
-  call. No hooks, no file formats.
+
+One backend ships today. The seam is kept because the alternative is a manager
+that knows about transcript files: a backend fronting an agent that speaks
+HTTP, or one adopting a session it did not start, plugs in here instead of
+threading conditionals through the manager.
 
 A backend is constructed from the config and handed the manager on every call
 (rather than holding a back-reference) so a manager can be built with any
@@ -87,16 +89,16 @@ class AgentBackend(Protocol):
         """
 
     async def deliver_resolution(self, mgr: SessionManager, approval: dict[str, Any], payload: dict[str, Any]) -> None:
-        """Carry the phone's decision to the agent (agy: nothing, the blocked
-        hook call carries it; opencode: a REST reply)."""
+        """Carry the phone's decision to the agent.
+
+        agy needs nothing here: the blocked hook call carries the answer back
+        by returning. A backend whose agent learns of the decision some other
+        way does its talking here.
+        """
 
 
 def make_backend(config: RemoteConfig) -> AgentBackend:
     """The backend for the agent named in the config."""
-    if config.agent == "opencode":
-        from .opencode_backend import OpencodeBackend
-
-        return OpencodeBackend(config)
     return AgyBackend(config)
 
 

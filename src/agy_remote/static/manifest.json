@@ -1,7 +1,7 @@
 {
   "name": "Agent Remote",
   "short_name": "agy-remote",
-  "description": "Mobile Remote Controller for Antigravity CLI and Opencode",
+  "description": "Mobile Remote Controller for Antigravity CLI",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b0f19",

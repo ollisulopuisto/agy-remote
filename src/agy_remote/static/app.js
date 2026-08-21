@@ -478,17 +478,17 @@ function handleServerEvent(event) {
       reportUndelivered('Nothing received it — no agent session is attached.');
     }
   } else if (type === 'session_renamed') {
-    // opencode names a session after its first exchange. Without this the
-    // header keeps the `New session - <timestamp>` placeholder for good.
+    // An agent that names a session after its first exchange leaves the
+    // header on a placeholder for good without this.
     if (data.conversation_id === currentConversationId) {
       currentConversation = data.conversation || currentConversation;
       updateHeader();
     }
   } else if (type === 'step_added' || type === 'step_updated') {
     currentConversationId = window.AgyFormat.adoptConversationId(currentConversationId, data.conversation_id);
-    // `step_updated` used to fall through to nothing. opencode revises a step
-    // as its text, tools and thinking arrive, so dropping the revisions left
-    // an empty card until a session switch reloaded the transcript.
+    // `step_updated` used to fall through to nothing. A backend that revises
+    // a step as its text, tools and thinking arrive would leave an empty card
+    // on screen until a session switch reloaded the transcript.
     if (data.conversation_id === currentConversationId) {
       const applied = window.AgyFormat.applyStepUpdate(currentSteps, data.step);
       const isNew = applied.index === currentSteps.length;
@@ -553,8 +553,8 @@ function stepNodes(step) {
   return frag;
 }
 
-// Redraw a step already on screen. opencode fills an assistant message in
-// after creating it empty, so this carries the actual answer.
+// Redraw a step already on screen: for a backend that fills a message in after
+// creating it empty, this is what carries the actual answer.
 function replaceStep(step) {
   if (!step.id) return;
   const existing = Array.from(chatContainer.children).filter(n => n.dataset.stepId === step.id);
@@ -754,13 +754,8 @@ function renderApprovalBanner(app) {
     app.args?.pattern ||
     (typeof app.args === 'string' ? app.args : JSON.stringify(app.args || {}));
 
-  const alwaysBtn =
-    currentAgent === 'opencode'
-      ? `<button class="btn-always" data-approval-id="${escapeHtml(app.id)}" data-decision="always">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
-          Always
-        </button>`
-      : '';
+  // agy has no "approve future matching requests", so there is no Always.
+  const alwaysBtn = '';
 
   banner.innerHTML = `
     <div class="approval-title">
