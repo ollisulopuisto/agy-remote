@@ -53,3 +53,15 @@ test('a prompt is never dropped just because the socket is not open', () => {
     assert.equal(promptRoute(state), 'rest');
   }
 });
+
+test('a socket that stopped answering is treated as dead', () => {
+  const { socketIsStale } = sandbox.window.AgyFormat;
+  // iOS suspends a backgrounded PWA: on resume the socket still reads OPEN
+  // while the connection underneath is gone, and `onclose` may never fire.
+  // Only a pong that stopped coming back reveals it.
+  assert.equal(socketIsStale(1000, 1000 + 5000, 20000), false);
+  assert.equal(socketIsStale(1000, 1000 + 19999, 20000), false);
+  assert.equal(socketIsStale(1000, 1000 + 20001, 20000), true);
+  // Never seen a pong at all: nothing to judge it stale by yet.
+  assert.equal(socketIsStale(null, 999999, 20000), false);
+});

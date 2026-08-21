@@ -362,6 +362,7 @@ function connectWebSocket() {
   ws.onopen = () => {
     statusBadge.className = 'status-badge';
     statusText.textContent = cryptoKey ? 'E2EE Live' : 'Live';
+    startHeartbeat(ws);
   };
 
   ws.onmessage = async (event) => {
@@ -380,15 +381,73 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    stopHeartbeat();
     statusBadge.className = 'status-badge disconnected';
     statusText.textContent = 'Disconnected';
     setTimeout(connectWebSocket, 2000);
   };
 }
 
+// -- heartbeat ---------------------------------------------------------------
+//
+// The badge used to say "E2EE Live" over a socket with nothing underneath: iOS
+// suspends a backgrounded PWA, and the socket it hands back reads OPEN while
+// every write goes nowhere and `onclose` never fires. Prompts vanished into it.
+// The server answers `ping` with `pong`, so a pong that stops coming back is
+// what reveals it -- then close the socket and let the reconnect run.
+
+const HEARTBEAT_MS = 15000;
+const PONG_TIMEOUT_MS = 20000;
+let heartbeatTimer = null;
+let lastPongAt = null;
+
+function startHeartbeat(socket) {
+  stopHeartbeat();
+  lastPongAt = Date.now();
+  heartbeatTimer = setInterval(async () => {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    if (window.AgyFormat.socketIsStale(lastPongAt, Date.now(), PONG_TIMEOUT_MS)) {
+      statusBadge.className = 'status-badge disconnected';
+      statusText.textContent = 'Connection lost — reconnecting';
+      socket.close();
+      return;
+    }
+    try {
+      const payload = { action: 'ping' };
+      const msg = cryptoKey ? await encryptData(payload) : payload;
+      socket.send(JSON.stringify(msg));
+    } catch (e) {
+      socket.close();
+    }
+  }, HEARTBEAT_MS);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer !== null) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+// Coming back to the app is when a suspended socket is most likely to be dead,
+// and waiting a whole heartbeat to find out is a prompt lost in between.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    connectWebSocket();
+    return;
+  }
+  lastPongAt = Date.now() - PONG_TIMEOUT_MS + 3000;  // answer within 3s or it is gone
+});
+
 // Handle Server Push Events
 function handleServerEvent(event) {
   const { event: type, data } = event;
+
+  if (type === 'pong') {
+    lastPongAt = Date.now();
+    return;
+  }
 
   if (type === 'init') {
     applyTerminal(data.terminal);

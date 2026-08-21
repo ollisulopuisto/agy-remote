@@ -117,7 +117,18 @@
     return readyState === 1 ? 'socket' : 'rest';
   }
 
+  // Whether a socket has stopped answering. iOS suspends a backgrounded PWA
+  // and the socket comes back reading OPEN with nothing underneath -- writes
+  // succeed into nowhere and `onclose` may never fire. A pong that stopped
+  // coming back is the only sign, so nothing is judged stale until one has
+  // been seen at all.
+  function socketIsStale(lastPongAt, now, timeoutMs) {
+    if (!lastPongAt) return false;
+    return now - lastPongAt > timeoutMs;
+  }
+
   global.AgyFormat = {
+    socketIsStale: socketIsStale,
     promptRoute: promptRoute,
     agentIdentity: agentIdentity,
     sessionLabel: sessionLabel,

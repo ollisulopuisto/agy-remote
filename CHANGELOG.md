@@ -1,6 +1,14 @@
 # Changelog
  
-## v26.08.21.42 — The phone follows the session you are working in
+## v26.08.22.23 — The phone follows the session you are working in
+
+- **A dead socket still said "E2EE Live".** iOS suspends a backgrounded PWA and
+  hands back a socket that reads `OPEN` with nothing underneath: writes go
+  nowhere and `onclose` never fires, so the badge stayed green over a
+  connection the server had already forgotten (`connected_clients: 0`). The
+  phone now pings every 15s — the server has always answered `pong` — closes
+  the socket when a pong is 20s overdue, and re-checks the moment the app comes
+  back to the foreground.
 
 - **A prompt from the phone could vanish without a word.** Every path that
   dropped a client frame — an unsealed frame, a bad tag, a replayed nonce, a
