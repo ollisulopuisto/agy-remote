@@ -1,7 +1,6 @@
 """Antigravity CLI (agy) Mobile Remote Controller."""
 
 from .cli import cli, main
+from .version import VERSION, __version__
 
-__version__ = "v26.08.22.21"
-
-__all__ = ["main", "cli", "__version__"]
+__all__ = ["main", "cli", "VERSION", "__version__"]

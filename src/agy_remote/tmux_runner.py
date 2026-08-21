@@ -10,6 +10,24 @@ from .keys import TMUX_KEY_NAMES
 logger = __import__("logging").getLogger("agy_remote.tmux")
 
 
+#: The session a default-port launch uses, kept unqualified so the habitual
+#: `tmux attach -t agy-remote` keeps working.
+DEFAULT_SESSION_NAME = "agy-remote"
+DEFAULT_PORT = 8765
+
+
+def session_name_for_port(port: int) -> str:
+    """The tmux session belonging to the server on `port`.
+
+    The name used to be hardcoded, so a second launch found `has_session()`
+    true and attached to the *first* instance's agy instead of starting its
+    own -- two terminals typing into one session.
+    """
+    if port == DEFAULT_PORT:
+        return DEFAULT_SESSION_NAME
+    return f"{DEFAULT_SESSION_NAME}-{port}"
+
+
 def is_tmux_available() -> bool:
     """Check if tmux binary is installed in PATH."""
     return shutil.which("tmux") is not None
@@ -18,9 +36,19 @@ def is_tmux_available() -> bool:
 class TmuxSupervisor:
     """Manages persistent agy CLI sessions inside tmux."""
 
-    def __init__(self, session_name: str = "agy-remote", cmd: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        session_name: str = DEFAULT_SESSION_NAME,
+        cmd: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.session_name = session_name
         self.cmd = cmd or ["agy"]
+        #: Extra environment for the session, telling its PreToolUse hook which
+        #: server owns it. The tmux server is long-lived and does not inherit
+        #: ours, so it travels in the command itself -- which `ps` exposes to
+        #: every local user, so nothing secret may be put here.
+        self.env = env or {}
 
     def has_session(self) -> bool:
         """Check if target tmux session is currently active."""
@@ -38,7 +66,10 @@ class TmuxSupervisor:
 
         import shlex
 
-        cmd_str = shlex.join(self.cmd)
+        argv = self.cmd
+        if self.env:
+            argv = ["env", *(f"{k}={v}" for k, v in self.env.items()), *argv]
+        cmd_str = shlex.join(argv)
         if not self.has_session():
             # Create detached session first
             subprocess.run(

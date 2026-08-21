@@ -27,14 +27,17 @@ from .config import (
     get_config,
     get_tailscale_dns_name,
     is_loopback_host,
+    port_is_free,
     read_runtime_state,
     rotate_credentials,
+    runtime_state_owner,
 )
 from .hooks import hook_health, install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
 from .server import create_app
-from .tmux_runner import TmuxSupervisor, set_tmux_supervisor
+from .tmux_runner import TmuxSupervisor, session_name_for_port, set_tmux_supervisor
+from .version import __version__
 
 console = Console()
 
@@ -161,8 +164,101 @@ def _guard_or_exit(cfg: RemoteConfig) -> None:
         sys.exit(2)
 
 
+def agy_child_env(cfg: RemoteConfig) -> dict[str, str]:
+    """What the supervised agy needs to know about the server supervising it.
+
+    Its PreToolUse hook otherwise resolves the endpoint from a host-wide state
+    file, so with two servers running both sessions' approvals would go to
+    whichever one published that file. Carries no token: under tmux this ends
+    up in argv, which `ps` shows to every local user, and the token is a
+    host-wide credential both servers already share.
+    """
+    return {
+        "AGY_REMOTE_URL": cfg.local_base_url,
+        "AGY_REMOTE_PORT": str(cfg.port),
+    }
+
+
+def _preflight_port_or_exit(cfg: RemoteConfig) -> None:
+    """Refuse to launch on a port that is already serving.
+
+    `run` puts uvicorn on a daemon thread, and uvicorn answers a failed bind
+    with `sys.exit(1)`: `threading` swallows the SystemExit, so the launch used
+    to sail past a dead server, print a QR for a port it does not own, and then
+    attach to the *first* instance's tmux session.
+    """
+    if port_is_free(cfg.host, cfg.port):
+        return
+
+    owner = runtime_state_owner()
+    detail = f" (pid {owner['pid']})" if owner and owner.get("pid") else ""
+    console.print(
+        f"[bold red]Refusing to start:[/bold red] port {cfg.port} is already in use{detail}.\n"
+        "  An agy-remote is most likely already running on this host.\n"
+        f"  Reach its session:  [bold]tmux attach -t {session_name_for_port(cfg.port)}[/bold]\n"
+        "  Re-show its QR:     [bold]agy-remote qr[/bold]\n"
+        f"  Or run a second, independent instance:  [bold]-p {cfg.port + 1}[/bold]\n"
+    )
+    sys.exit(2)
+
+
+def _warn_if_second_instance(cfg: RemoteConfig) -> None:
+    """Say which server a hand-started agy will send its approvals to.
+
+    The agy this server launches carries `AGY_REMOTE_URL` and so reaches us,
+    but an agy started in another terminal has no such parent: it falls back to
+    the host-wide state file, which the first server owns.
+    """
+    owner = runtime_state_owner()
+    if owner is None or owner.get("port") == cfg.port:
+        return
+    console.print(
+        f"[bold yellow]Second instance:[/bold yellow] another agy-remote (pid {owner.get('pid')}) is "
+        f"serving on port {owner.get('port')} and owns the shared hook endpoint.\n"
+        "  The agy this server launches sends its approvals here. An agy you start by hand "
+        "sends its approvals there.\n"
+    )
+
+
+def _serve_in_background_or_exit(cfg: RemoteConfig, app: object) -> uvicorn.Server:
+    """Start the web server on a daemon thread and prove it came up.
+
+    The port check above races anyone binding in the same millisecond, and it
+    says nothing about other bind failures (a privileged port, a bad TLS key).
+    A launch whose server thread is already dead must not continue.
+    """
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=cfg.host,
+            port=cfg.port,
+            log_level="error",
+            ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
+            ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
+        )
+    )
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if getattr(server, "started", False):
+            return server
+        if not t.is_alive():
+            console.print(
+                f"[bold red]Refusing to start:[/bold red] the web server died while binding "
+                f"{cfg.host}:{cfg.port} (see the error above).\n"
+                "  Without it nothing reaches your phone, so agy is not being started.\n"
+            )
+            sys.exit(2)
+        time.sleep(0.05)
+
+    console.print(f"[yellow]Web server slow to start on {cfg.host}:{cfg.port}; continuing.[/yellow]")
+    return server
+
+
 @click.group()
-@click.version_option(version="v26.08.22.3", message="agy-remote %(version)s")
+@click.version_option(version=__version__, message="agy-remote %(version)s")
 def cli() -> None:
     """Antigravity CLI (agy) Mobile Remote Controller with E2EE & Web Push."""
     pass
@@ -225,9 +321,11 @@ def serve(
         cfg.brain_dir = brain_dir
 
     _guard_or_exit(cfg)
+    _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
     print_banner(cfg, mode="Watcher Server")
     _warn_if_hooks_unwired()
+    _warn_if_second_instance(cfg)
 
     app = create_app(cfg)
     uvicorn.run(
@@ -302,36 +400,27 @@ def run(
         cfg.e2ee_enabled = False
 
     _guard_or_exit(cfg)
+    _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
 
     agy_args = ["agy"] + ctx.args
     mode_label = "tmux Persistence" if tmux else "PTY Supervisor"
     print_banner(cfg, mode=mode_label)
     _warn_if_hooks_unwired()
+    _warn_if_second_instance(cfg)
 
     # Start FastAPI server in a background thread
-    app = create_app(cfg)
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host=cfg.host,
-            port=cfg.port,
-            log_level="error",
-            ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
-            ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
-        )
-    )
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
+    _serve_in_background_or_exit(cfg, create_app(cfg))
 
     if tmux:
-        supervisor = TmuxSupervisor(session_name="agy-remote", cmd=agy_args)
+        session_name = session_name_for_port(cfg.port)
+        supervisor = TmuxSupervisor(session_name=session_name, cmd=agy_args, env=agy_child_env(cfg))
         set_tmux_supervisor(supervisor)
-        console.print("[dim]Starting persistent tmux session 'agy-remote'...[/dim]\n")
+        console.print(f"[dim]Starting persistent tmux session '{session_name}'...[/dim]\n")
         exit_code = attach_tmux_after_pairing(supervisor, timeout=qr_timeout)
         sys.exit(exit_code)
     else:
-        supervisor = PtySupervisor(cmd=agy_args)
+        supervisor = PtySupervisor(cmd=agy_args, env=agy_child_env(cfg))
         set_pty_supervisor(supervisor)
         console.print(f"[dim]Starting interactive session: {' '.join(agy_args)}...[/dim]\n")
         try:
@@ -439,8 +528,24 @@ def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None, timeout: f
 
 
 @cli.command("qr")
-def show_qr() -> None:
+@click.option(
+    "--port",
+    "-p",
+    default=None,
+    type=int,
+    help="Pair the instance on this port instead of the one that published the runtime state",
+)
+def show_qr(port: int | None) -> None:
     """Display connection QR code and active URLs."""
+    if port is not None:
+        # A second instance does not publish runtime state -- the first one
+        # owns that file -- so adopting it would pair the wrong server.
+        cfg = get_config()
+        cfg.port = port
+        _setup_tls(cfg, None)
+        print_banner(cfg)
+        return
+
     cfg = adopt_runtime_state(get_config())
     if read_runtime_state() is None:
         console.print(

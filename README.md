@@ -185,6 +185,31 @@ uv run agy-remote serve
 
 ---
 
+### 4. Two agy sessions at once
+
+Run a second, fully independent instance on another port. Each server supervises
+its own `agy`, gets its own tmux session name, and hands its phone its own URL:
+
+```bash
+uv run agy-remote run                 # session A -> :8765, tmux "agy-remote"
+uv run agy-remote run -p 8766         # session B -> :8766, tmux "agy-remote-8766"
+uv run agy-remote qr --port 8766      # pairing QR for session B
+```
+
+Each session's tool approvals go to its own phone: the server exports
+`AGY_REMOTE_URL` into the `agy` it launches, and that `agy`'s PreToolUse hook
+posts there. Pair the phone with both URLs and switch between them like any two
+web apps — both share the host's token and encryption key, so there is no second
+pairing secret to manage.
+
+Two caveats. An `agy` you start *by hand* has no such parent, so its approvals go
+to whichever server published the shared runtime state (the first one started).
+And both servers watch the same brain directory, so each lists *both* sessions'
+transcripts — reading is shared, but prompts and keys always go to the `agy` that
+server supervises.
+
+---
+
 ## 📱 Mobile PWA Setup
 
 1. **Connect via Tailscale**: Ensure both your Mac and phone are on your private [Tailscale](https://tailscale.com/) network.
@@ -334,6 +359,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
 | `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
+| `agy-remote qr --port N` | Pairing QR for the instance on port `N` (a second instance does not own the shared runtime state). |
 | `agy-remote run --rotate-token` | Issue a new token and encryption key, revoking every paired phone. |
 | `agy-remote setup-hooks` | Install Antigravity lifecycle hooks for remote tool approvals. |
 | `agy-remote push-test [msg]` | Send a test Web Push notification to registered mobile devices. |
@@ -343,6 +369,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `AGY_REMOTE_PORT` | `8765` | Server port. |
+| `AGY_REMOTE_URL` | *Set by `run`* | Which server a supervised `agy`'s PreToolUse hook posts to. Exported into the child; set it by hand only to point a hand-started `agy` at a specific instance. |
 | `AGY_REMOTE_HOST` | `0.0.0.0` | Server bind host. |
 | `AGY_REMOTE_TOKEN` | *Stored* | Override the stored authentication token. |
 | `AGY_REMOTE_NO_AUTH` | `0` | Set `1` to disable token authentication. **Refused unless bound to loopback.** |

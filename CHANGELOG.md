@@ -1,5 +1,44 @@
 # Changelog
 
+## v26.08.22.22 — Two agy sessions, two servers, two URLs
+
+- **A second `agy-remote` on a busy port started anyway, without a server.**
+  `run` puts uvicorn on a daemon thread, and uvicorn answers a failed bind with
+  `sys.exit(1)` — which `threading` swallows. Nothing checked the thread, so the
+  launch printed a banner and QR for a port it did not own, then carried on: in
+  `--tmux` mode the session name was hardcoded, so it attached to the *first*
+  instance's agy and left two terminals typing into one session; in PTY mode it
+  spawned a second agy that no phone could reach. Both `run` and `serve` now
+  check the port before printing anything and exit 2 with the tmux session to
+  attach to, and the launch aborts if the server thread dies anyway (TOCTOU
+  race, privileged port, unreadable TLS key).
+- **A deliberate second instance no longer collides with the first.** The tmux
+  session name is derived from the port (`agy-remote` on 8765, `agy-remote-8766`
+  otherwise), and `write_runtime_state` refuses to overwrite the credentials of
+  a server whose pid is still alive — previously the newer instance silently
+  captured the PreToolUse hook and every approval landed on its phone instead.
+  A second instance now says so at startup if its approvals cannot reach it.
+- **Each agy's approvals now reach its own server.** `resolve_server_endpoint`
+  read one host-wide state file, so with two servers running, every PreToolUse
+  hook on the machine posted to whichever server published it: one phone showed
+  approvals for a session it was not displaying, the other showed none. A
+  server now exports `AGY_REMOTE_URL` into the agy it launches, and the hook
+  prefers that over the shared file — it is the only per-process signal there
+  is. An agy started by hand has no such parent and falls back to the file, as
+  before. The token is deliberately *not* exported: under tmux the child's
+  environment travels in the command, which `ps` shows to every local user, and
+  the token is a host-wide credential both servers already load from the same
+  place. Where no server has published state, the hook reads the stored token
+  rather than minting one (which would 401 on every approval) — but only for an
+  endpoint something told it about, never for the guessed default port.
+- **`agy-remote qr --port` pairs the second instance.** `qr` adopts the runtime
+  state, which the second server does not own, so it could only ever show the
+  first one's QR.
+- **One version string.** `--version` reported `v26.08.22.3` while the package
+  was at `.21` and the server announced a third value, so no bug report could be
+  tied to what was actually running. All of them now read `agy_remote.version`,
+  and a test holds `pyproject.toml` to it.
+
 ## v26.08.22.21 — Hooks survive `uv cache clean`
 
 - **`setup-hooks` under `uvx` pinned approvals to uv's ephemeral cache.** The

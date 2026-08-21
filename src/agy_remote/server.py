@@ -48,13 +48,13 @@ from .pty_runner import get_pty_supervisor
 from .push import get_push_manager
 from .session_manager import SessionManager
 from .tmux_runner import get_tmux_supervisor
+from .version import VERSION
 
 logger = logging.getLogger("agy_remote.server")
 STATIC_DIR = Path(__file__).parent / "static"
 
 api_key_header = APIKeyHeader(name="X-Auth-Token", auto_error=False)
 
-VERSION = "26.08.22.3"
 
 #: Extensions accepted by /api/upload, mapped to their magic-byte signatures.
 #: SVG is deliberately absent: it is an active-content format that can carry

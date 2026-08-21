@@ -567,6 +567,23 @@ def credential_ttl_days() -> int:
         return DEFAULT_CREDENTIAL_TTL_DAYS
 
 
+def read_stored_token() -> str | None:
+    """This host's stored auth token, or None -- never minting a new one.
+
+    The PreToolUse hook of a second server has no runtime state file to read
+    (the first server owns it), and `load_or_create_credentials` would mint a
+    token the server has never heard of, 401ing on every approval.
+    """
+    try:
+        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.debug("Could not read stored credentials: %s", e)
+        return None
+    token = data.get("auth_token") if isinstance(data, dict) else None
+    return str(token) if token else None
+
+
 def load_or_create_credentials() -> dict[str, str]:
     """Return this host's token and E2EE key, minting them once and expiring by age.
 
@@ -671,11 +688,77 @@ def rotate_credentials() -> None:
         logger.debug("Could not rotate credentials: %s", e)
 
 
-def write_runtime_state(cfg: RemoteConfig) -> Path:
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this pid still exists."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Someone else's process, but a live one.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def runtime_state_owner() -> dict | None:
+    """The state of another *live* server, or None if nobody else owns it.
+
+    A crashed server leaves its file behind, so the pid is the only honest
+    signal that the credentials in it still lead anywhere.
+    """
+    state = read_runtime_state()
+    if not state:
+        return None
+    pid = state.get("pid")
+    if isinstance(pid, int) and pid != os.getpid() and _pid_alive(pid):
+        return state
+    return None
+
+
+def port_is_free(host: str, port: int) -> bool:
+    """Whether a server could bind here, checked the way uvicorn will bind.
+
+    Same SO_REUSEADDR as uvicorn, so a port held in TIME_WAIT reads as free
+    exactly when uvicorn would accept it. A wildcard bind is additionally
+    probed on loopback: BSD lets 0.0.0.0 coexist with a 127.0.0.1 listener at
+    bind time, which would let the real failure through this check.
+    """
+    candidates = [host]
+    if host in ("0.0.0.0", "::", ""):
+        candidates.append("127.0.0.1")
+
+    for candidate in candidates:
+        try:
+            family = socket.AF_INET6 if ":" in candidate else socket.AF_INET
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind((candidate, port))
+        except OSError:
+            return False
+    return True
+
+
+def write_runtime_state(cfg: RemoteConfig) -> Path | None:
     """Publish the live token and port for helper processes to pick up.
 
     Written owner-only: the token is equivalent to shell access on this machine.
+
+    Returns None without writing when another live server already owns the
+    file. The PreToolUse hook reads exactly one endpoint, so clobbering it
+    would silently redirect the first server's approvals to this one's phone.
     """
+    owner = runtime_state_owner()
+    if owner is not None:
+        logger.warning(
+            "Runtime state belongs to a live server (pid %s, port %s); "
+            "not publishing ours, tool approvals stay with it",
+            owner.get("pid"),
+            owner.get("port"),
+        )
+        return None
+
     RUNTIME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(
         {

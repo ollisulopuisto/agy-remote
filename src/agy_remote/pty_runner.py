@@ -20,8 +20,11 @@ logger = __import__("logging").getLogger("agy_remote.pty")
 class PtySupervisor:
     """Spawns an interactive agy CLI process in a pseudoterminal and multiplexes I/O."""
 
-    def __init__(self, cmd: list[str] | None = None) -> None:
+    def __init__(self, cmd: list[str] | None = None, env: dict[str, str] | None = None) -> None:
         self.cmd = cmd or ["agy"]
+        #: Extra environment for the child, telling its PreToolUse hook which
+        #: server owns this session. Applied in the child after the fork.
+        self.env = env or {}
         self.master_fd: int | None = None
         self.pid: int | None = None
         self.running: bool = False
@@ -126,6 +129,7 @@ class PtySupervisor:
             if slave_fd > 2:
                 os.close(slave_fd)
             try:
+                os.environ.update(self.env)
                 os.execvp(self.cmd[0], self.cmd)
             except Exception as e:
                 print(f"Failed to execute {' '.join(self.cmd)}: {e}")

@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import read_runtime_state
+from .config import read_runtime_state, read_stored_token
 
 DEFAULT_PORT = 8765
 
@@ -26,18 +26,51 @@ def resolve_server_endpoint() -> tuple[str, str]:
     This runs on every single tool call, so the no-server path must not fall
     back to get_config(): that shells out to `tailscale ip` and `ifconfig`,
     adding ~2s of latency per tool call to detect addresses a hook never uses.
+
+    `AGY_REMOTE_URL` comes first because it is the only *per-process* signal
+    available. The runtime state file is shared by the whole host, so with two
+    servers running it would send both agy sessions' approvals to whichever one
+    published it. A server exports the variable into the agy it launches, so
+    each hook posts to the server that owns its session; an agy started by hand
+    has no such parent and falls back to the file.
     """
+    env_url = os.environ.get("AGY_REMOTE_URL")
+    if env_url:
+        return env_url, _hook_token()
+
     state = read_runtime_state()
     if state:
         port = int(state.get("port", DEFAULT_PORT))
         base_url = state.get("base_url") or f"http://127.0.0.1:{port}"
         return base_url, state.get("auth_token", "")
 
+    # Nothing told us where the server is, so this endpoint is a guess. Never
+    # hand the host token to a port we have not confirmed is ours; an
+    # unauthenticated call fails closed to "ask", which is the right outcome.
     try:
         port = int(os.environ.get("AGY_REMOTE_PORT", DEFAULT_PORT))
     except ValueError:
         port = DEFAULT_PORT
     return f"http://127.0.0.1:{port}", os.environ.get("AGY_REMOTE_TOKEN", "")
+
+
+def _hook_token() -> str:
+    """The token to authenticate with, without minting one.
+
+    The token is a property of the host, not of a process: every server on this
+    machine loads the same stored credentials, so the second server accepts it
+    too. An explicit `--token` is the exception -- pass it to the hook through
+    `AGY_REMOTE_TOKEN` rather than argv, which `ps` exposes to every local user.
+    """
+    env_token = os.environ.get("AGY_REMOTE_TOKEN")
+    if env_token:
+        return env_token
+    state = read_runtime_state()
+    if state and state.get("auth_token"):
+        return str(state["auth_token"])
+    # A second server publishes no state, so the stored host credential is all
+    # its hook has. One file read, no network detection.
+    return read_stored_token() or ""
 
 
 def _uv_cache_dir() -> Path:
