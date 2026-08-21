@@ -1,7 +1,9 @@
 # 🚀 agy-remote
 
 > **Self-Hosted, Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`)**  
-> Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, self-hosted Web Push alerts, persistent `tmux` execution, collapsible reasoning, one-tap tool approvals, and voice dictation.
+> Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, a live mirrored terminal view, self-hosted Web Push alerts, one-tap tool approvals, and voice dictation.
+
+![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue) ![CalVer](https://img.shields.io/badge/versioning-CalVer-lightgrey) ![Self-hosted](https://img.shields.io/badge/cloud-none-orange)
 
 ---
 
@@ -12,11 +14,12 @@
 - [Key Features](#-key-features)
 - [Installation](#-installation)
 - [Quickstart](#-quickstart)
-  - [1. Persistent tmux Supervisor Mode (Recommended)](#1-persistent-tmux-supervisor-mode-recommended)
-  - [2. Interactive PTY Mode](#2-interactive-pty-mode)
+  - [1. PTY Supervisor Mode (Recommended)](#1-pty-supervisor-mode-recommended)
+  - [2. tmux Persistence Mode](#2-tmux-persistence-mode)
   - [3. Standalone Watcher Server Mode](#3-standalone-watcher-server-mode)
 - [Mobile PWA Setup](#-mobile-pwa-setup)
 - [Remote Tool Approvals (`hooks.json`)](#-remote-tool-approvals-hooksjson)
+- [Terminal Key Controls](#-terminal-key-controls)
 - [Web Push Notifications](#-web-push-notifications)
 - [Security & Cryptography](#-security--cryptography)
 - [CLI Reference](#-cli-reference)
@@ -87,7 +90,11 @@ flowchart TD
 - 📎 **Photo & Screenshot Upload**: Capture screenshots or camera photos directly from mobile into your workspace.
 - 📝 **Visual Diff Viewer**: Interactive colored diffs for file edits, rendered locally.
 - 🎙️ **Voice Dictation**: Dictate instructions into active prompts using mobile Web Speech recognition.
-- 🔗 **Tailscale & LAN Auto-Discovery**: Auto-detects Tailscale IPv4 and renders an interactive **ASCII QR Code** in your terminal on launch.
+- 🖥️ **Live Terminal Mirror**: The supervised terminal is emulated *server-side* and streamed as plain text — see agy's pickers, confirmations, and status bar from the phone, with no third-party scripts shipped to the browser.
+- ⌨️ **Remote Key Control**: Cycle agy's execution mode (`Shift+Tab`), close panels (`Esc`), and drive selection lists — an allowlisted named-key channel, never raw bytes.
+- 🧹 **Readable Transcripts**: Tool calls collapse to one line (`run_command(git status)`), bulk output to a line count, and agy's internal scaffolding is labelled instead of masquerading as conversation.
+- ⏳ **Expiring Pairings**: The pairing URL is a durable secret, so it expires after 30 days by default; `--rotate-token` revokes every paired device immediately.
+- 🔗 **Tailscale & LAN Auto-Discovery**: Auto-detects Tailscale IPv4, obtains a real HTTPS certificate from Tailscale, and renders an interactive **ASCII QR Code** in your terminal on launch.
 
 ---
 
@@ -97,7 +104,7 @@ flowchart TD
 
 ```bash
 # Clone the repository
-git clone https://github.com/user/agy-remote.git
+git clone https://github.com/ollisulopuisto/agy-remote.git
 cd agy-remote
 
 # Install dependencies and sync virtual environment
@@ -112,31 +119,31 @@ uv sync
 
 ## 🚀 Quickstart
 
-### 1. Persistent tmux Supervisor Mode (Recommended)
+### 1. PTY Supervisor Mode (Recommended)
 
-Spawns `agy` inside a background `tmux` session. You get standard terminal interaction on your Mac, while simultaneously monitoring and sending instructions from your phone:
-
-```bash
-uv run agy-remote run --tmux
-```
-
-*Scan the generated QR code on your terminal with your mobile phone camera to connect immediately.*
-
----
-
-### 2. Interactive PTY Mode
-
-If you prefer standard pseudoterminal multiplexing without `tmux`:
+Runs `agy` under a pseudoterminal: you get the normal `agy` TUI in your terminal, while the phone can read the transcript, send prompts and keystrokes, approve tools, and view the mirrored terminal screen:
 
 ```bash
 uv run agy-remote run
+```
+
+*Scan the QR code with your phone camera to connect. The pairing survives restarts — the token and encryption key are minted once and reused.*
+
+---
+
+### 2. tmux Persistence Mode
+
+Keeps the session alive across laptop sleep, closed terminals, and SSH drops by running `agy` inside a `tmux` session named `agy-remote`. Prompt injection and key control work; the live terminal mirror is PTY-mode only:
+
+```bash
+uv run agy-remote run --tmux
 ```
 
 ---
 
 ### 3. Standalone Watcher Server Mode
 
-If you already have `agy` running in a separate terminal window:
+If you already have `agy` running in a separate terminal. **Read-only plus approvals**: the phone sees the transcript and can approve tools, but there is no supervised session to type into:
 
 ```bash
 uv run agy-remote serve
@@ -289,7 +296,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 
 | Command | Description |
 | :--- | :--- |
-| `agy-remote run [args...]` | Launch `agy` inside supervisor with dual desktop & mobile sync. |
+| `agy-remote run [args...]` | Launch `agy` under a PTY with dual desktop & mobile control (recommended). |
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
 | `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
@@ -350,4 +357,4 @@ A: Yes! Standard `uv run agy-remote run` uses the built-in PTY supervisor.
 
 ## 📄 License
 
-MIT License. Built for seamless agentic pair-programming workflows.
+[MIT](LICENSE). Built for seamless agentic pair-programming workflows — use it, fork it, ship it.

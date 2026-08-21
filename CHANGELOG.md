@@ -1,5 +1,15 @@
 # Changelog
 
+## v26.08.22.14 — Docs for the public
+
+- README brought up to date for publication: PTY mode is now the recommended
+  quickstart (it is the mode the terminal mirror and key controls support),
+  tmux mode documented as persistence with its mirror limitation stated, watcher
+  mode labelled read-only-plus-approvals. Feature list covers the terminal
+  mirror, key control, transcript cleanup, and expiring pairings. Real clone
+  URL, license badges, and the Terminal Key Controls section added to the table
+  of contents.
+
 ## v26.08.22.13 — Pairings expire, and a license
 
 - **A pairing URL never expired.** The credential store (v26.08.22.5) made the
