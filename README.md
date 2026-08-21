@@ -1,18 +1,21 @@
 # 🚀 agy-remote
 
-> **Mobile Web Remote Controller & PWA for Antigravity CLI (`agy`)**  
-> Access, monitor, and control your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with rich markdown, syntax-highlighted code, collapsible reasoning, one-tap tool approvals, and voice dictation.
+> **Self-Hosted, End-to-End Encrypted Mobile Web Remote & PWA for Antigravity CLI (`agy`)**  
+> Access, monitor, and control your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, client-side AES-256-GCM encryption, self-hosted Web Push alerts, persistent `tmux` execution, collapsible reasoning, one-tap tool approvals, and voice dictation.
 
 ---
 
 ## ✨ Features
 
-- 📱 **Mobile PWA Interface**: Native mobile web app (installable to iOS / Android Home Screen) that wraps text and diffs cleanly without terminal ANSI artifacts.
-- ⚡ **Real-time Streaming**: Mirrors reasoning/thinking traces, model output tokens, and tool call executions as they happen via WebSockets.
-- 🛡️ **One-Tap Tool Permissions**: Forwards `PreToolUse` security prompts to your phone so you can `[Allow]` or `[Deny]` commands on the go.
-- 🎙️ **Voice Dictation**: Tap the mic button to dictate prompts using mobile Web Speech recognition.
-- 🔗 **Tailscale & LAN Ready**: Auto-detects your Tailscale IP and displays a pairing **ASCII QR Code** in your terminal on launch.
-- 🔄 **Dual Control (Supervisor Mode)**: Keep using your local desktop terminal while your phone acts as an active second screen.
+- 🔐 **End-to-End Encrypted (E2EE)**: 256-bit AES-GCM encryption with cryptographic keys shared via the URL hash fragment (`#key=...`). The key is strictly client-side and never sent to servers or proxies in HTTP headers.
+- 🔔 **Self-Hosted Web Push Notifications**: Native iOS & Android lock-screen push alerts via local VAPID keys whenever `agy` needs tool approval or finishes a task.
+- 🔄 **tmux Persistence**: Keep sessions running in the background across laptop sleep, screen locks, or closed terminals (`agy-remote run --tmux`).
+- 📱 **Mobile PWA Interface**: Installable to your mobile Home Screen with responsive dark mode, collapsible thinking traces, and touch-friendly controls.
+- 🛡️ **One-Tap Tool Permissions**: Forwards `PreToolUse` security prompts to your phone with haptic feedback to `[Allow]` or `[Deny]` commands.
+- 📎 **Photo & Screenshot Upload**: Capture screenshots or camera photos directly from mobile into your workspace.
+- 📝 **Visual Diff Viewer**: Interactive colored diffs for file edits.
+- 🎙️ **Voice Dictation**: Dictate instructions into active prompts using mobile Web Speech recognition.
+- 🔗 **Tailscale & LAN Ready**: Auto-detects Tailscale IP and prints an interactive **ASCII QR Code** in your terminal on launch.
 
 ---
 
@@ -20,6 +23,7 @@
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) for package management
+- Optional: `tmux` for persistent background session management
 
 ```bash
 cd agy-remote
@@ -30,15 +34,22 @@ uv sync
 
 ## 🚀 Quickstart
 
-### 1. Launch with Active Antigravity CLI (Supervisor Mode)
-Run your regular `agy` commands through the `agy-remote` supervisor. You get your standard desktop terminal session plus a live mobile bridge:
+### 1. Launch with Persistent tmux Supervisor
+Runs `agy` inside a background `tmux` session with simultaneous desktop and mobile control:
+
+```bash
+uv run agy-remote run --tmux
+```
+
+### 2. Launch with PTY Supervisor
+Standard interactive dual-terminal/mobile mode:
 
 ```bash
 uv run agy-remote run
 ```
 
-### 2. Standalone Server Mode (Log Watcher)
-If you already have `agy` running in another terminal window:
+### 3. Standalone Watcher Server
+If `agy` is already running elsewhere:
 
 ```bash
 uv run agy-remote serve
@@ -46,7 +57,7 @@ uv run agy-remote serve
 
 Scan the printed QR code with your phone's camera to immediately pair over Tailscale or your local Wi-Fi.
 
-### 3. Setup Remote Tool Approvals
+### 4. Setup Remote Tool Approvals
 To enable remote one-tap permission prompts (`[Allow]` / `[Deny]`) when `agy` executes tools:
 
 ```bash
@@ -55,11 +66,11 @@ uv run agy-remote setup-hooks
 
 ---
 
-## 🔒 Security & Networking
+## 🔒 Security Architecture
 
-- **Local Execution**: All agent processes, files, git branches, and MCP servers run 100% on your machine.
-- **Tailscale Mesh**: Recommended for remote access outside the house without opening public ports.
-- **Token Auth**: Every session generates a secure token (`?token=...`) preventing unauthorized LAN access.
+1. **100% Self-Hosted**: No third-party relay servers, cloud accounts, or external API dependencies.
+2. **URL Hash E2EE**: The AES-GCM key lives in the browser's `#key=...` fragment and decrypts WebSocket events in the browser with Web Crypto API (`SubtleCrypto`).
+3. **Tailscale Mesh**: Secure peer-to-peer WireGuard networking directly between your phone and your Mac.
 
 ---
 

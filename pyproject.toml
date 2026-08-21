@@ -1,6 +1,6 @@
 [project]
 name = "agy-remote"
-version = "26.8.21.2"
+version = "26.8.21.3"
 description = "Mobile Remote Web Controller & PWA for Antigravity CLI (agy)"
 readme = "README.md"
 authors = [
@@ -9,10 +9,12 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.1.7",
+    "cryptography>=50.0.0",
     "fastapi>=0.115.0",
     "jinja2>=3.1.4",
     "pydantic>=2.8.0",
     "python-multipart>=0.0.9",
+    "pywebpush>=2.4.0",
     "qrcode[pil]>=7.4.2",
     "rich>=13.7.0",
     "uvicorn[standard]>=0.30.0",

@@ -1,4 +1,4 @@
-// agy-remote Mobile PWA Client Application
+// agy-remote Mobile PWA Client Application with E2EE, Push & Media Attachments
 
 let ws = null;
 let currentConversationId = null;
@@ -7,12 +7,25 @@ let pendingApprovals = [];
 let isRecording = false;
 let recognition = null;
 let autoScroll = true;
+let attachedFiles = [];
+let cryptoKey = null;
 
-// Parse token from URL or localStorage
+// Parse token and E2EE key from URL and Hash
 const urlParams = new URLSearchParams(window.location.search);
 let authToken = urlParams.get('token') || localStorage.getItem('agy_remote_token') || '';
 if (urlParams.get('token')) {
   localStorage.setItem('agy_remote_token', authToken);
+}
+
+// Parse E2EE key from URL hash (e.g. #key=...)
+function getHashKey() {
+  const match = window.location.hash.match(/key=([^&]+)/);
+  return match ? match[1] : (localStorage.getItem('agy_e2ee_key') || null);
+}
+
+let e2eeKeyBase64 = getHashKey();
+if (e2eeKeyBase64) {
+  localStorage.setItem('agy_e2ee_key', e2eeKeyBase64);
 }
 
 // DOM Elements
@@ -20,6 +33,10 @@ const chatContainer = document.getElementById('chatContainer');
 const promptInput = document.getElementById('promptInput');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
+const attachBtn = document.getElementById('attachBtn');
+const fileInput = document.getElementById('fileInput');
+const attachmentsPreview = document.getElementById('attachmentsPreview');
+const pushBtn = document.getElementById('pushBtn');
 const statusBadge = document.getElementById('statusBadge');
 const statusText = document.getElementById('statusText');
 const sessionTitle = document.getElementById('sessionTitle');
@@ -30,7 +47,117 @@ const drawerList = document.getElementById('drawerList');
 const menuBtn = document.getElementById('menuBtn');
 const closeDrawerBtn = document.getElementById('closeDrawerBtn');
 
-// Initialize Web Speech API for voice dictation
+// ----------------------------------------------------------------------------
+// Web Crypto API (Client-side AES-256-GCM E2EE)
+// ----------------------------------------------------------------------------
+async function initCrypto() {
+  if (!e2eeKeyBase64 || !window.crypto?.subtle) return;
+  try {
+    // Decode base64url to raw bytes
+    let b64 = e2eeKeyBase64.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const rawKey = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+    cryptoKey = await window.crypto.subtle.importKey(
+      'raw',
+      rawKey,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+  } catch (e) {
+    console.debug('E2EE key init error:', e);
+  }
+}
+
+async function encryptData(obj) {
+  if (!cryptoKey) return obj;
+  const plaintext = new TextEncoder().encode(JSON.stringify(obj));
+  const nonce = window.crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce },
+    cryptoKey,
+    plaintext
+  );
+
+  return {
+    encrypted: true,
+    nonce: btoa(String.fromCharCode(...nonce)),
+    data: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
+  };
+}
+
+async function decryptData(envelope) {
+  if (!envelope || !envelope.encrypted || !cryptoKey) return envelope;
+  try {
+    const nonce = Uint8Array.from(atob(envelope.nonce), c => c.charCodeAt(0));
+    const data = Uint8Array.from(atob(envelope.data), c => c.charCodeAt(0));
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: nonce },
+      cryptoKey,
+      data
+    );
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch (e) {
+    console.warn('Decryption failed:', e);
+    return envelope;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Web Push Notifications
+// ----------------------------------------------------------------------------
+async function setupPushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (pushBtn) pushBtn.style.display = 'none';
+    return;
+  }
+
+  pushBtn?.addEventListener('click', async () => {
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        alert('Notification permission denied');
+        return;
+      }
+
+      const res = await fetch('/api/push/vapid-public-key');
+      const { public_key } = await res.json();
+
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(public_key)
+      });
+
+      await fetch(`/api/push/subscribe?token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub)
+      });
+
+      pushBtn.style.color = 'var(--success)';
+      alert('✓ Lock-screen Push Notifications enabled!');
+    } catch (e) {
+      console.warn('Failed subscribing to push:', e);
+    }
+  });
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+// ----------------------------------------------------------------------------
+// Voice Dictation (Web Speech API)
+// ----------------------------------------------------------------------------
 function setupSpeechRecognition() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
@@ -78,7 +205,56 @@ function setupSpeechRecognition() {
   });
 }
 
-// Connect to WebSocket
+// ----------------------------------------------------------------------------
+// Image / Screenshot Attachments
+// ----------------------------------------------------------------------------
+function setupAttachments() {
+  attachBtn?.addEventListener('click', () => fileInput.click());
+
+  fileInput?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`/api/upload?token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (data.relative_path) {
+        attachedFiles.push(data.relative_path);
+        renderAttachmentChips();
+      }
+    } catch (err) {
+      console.warn('Upload error:', err);
+    }
+  });
+}
+
+function renderAttachmentChips() {
+  attachmentsPreview.innerHTML = '';
+  attachedFiles.forEach((f, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'attachment-chip';
+    chip.innerHTML = `
+      <span>📎 ${f.split('/').pop()}</span>
+      <span onclick="removeAttachment(${idx})" style="cursor: pointer; font-weight: bold;">✕</span>
+    `;
+    attachmentsPreview.appendChild(chip);
+  });
+}
+
+window.removeAttachment = function(idx) {
+  attachedFiles.splice(idx, 1);
+  renderAttachmentChips();
+};
+
+// ----------------------------------------------------------------------------
+// WebSocket Connection
+// ----------------------------------------------------------------------------
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
@@ -91,12 +267,15 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     statusBadge.className = 'status-badge';
-    statusText.textContent = 'Live';
+    statusText.textContent = cryptoKey ? 'E2EE Live' : 'Live';
   };
 
-  ws.onmessage = (event) => {
+  ws.onmessage = async (event) => {
     try {
-      const payload = JSON.parse(event.data);
+      let payload = JSON.parse(event.data);
+      if (payload.encrypted) {
+        payload = await decryptData(payload);
+      }
       handleServerEvent(payload);
     } catch (e) {
       console.error('Error handling WS event:', e);
@@ -107,10 +286,6 @@ function connectWebSocket() {
     statusBadge.className = 'status-badge disconnected';
     statusText.textContent = 'Disconnected';
     setTimeout(connectWebSocket, 2000);
-  };
-
-  ws.onerror = (err) => {
-    console.warn('WebSocket error:', err);
   };
 }
 
@@ -139,7 +314,7 @@ function handleServerEvent(event) {
     }
   } else if (type === 'approval_request') {
     pendingApprovals.push(data);
-    triggerVibrate();
+    triggerVibrate([80, 40, 100]);
     renderApprovalBanner(data);
     scrollToBottom();
   } else if (type === 'approval_resolved') {
@@ -185,7 +360,7 @@ function appendStep(step) {
     const modelDiv = document.createElement('div');
     modelDiv.className = 'message-model';
 
-    // Thinking Box (if reasoning exists)
+    // Thinking Box (Collapsible)
     if (step.thinking && step.thinking.trim()) {
       const thinkingBox = document.createElement('div');
       thinkingBox.className = 'thinking-box';
@@ -210,13 +385,21 @@ function appendStep(step) {
       modelDiv.appendChild(textDiv);
     }
 
-    // Tool Calls
+    // Tool Calls with Diff Rendering
     if (step.tool_calls && step.tool_calls.length > 0) {
       step.tool_calls.forEach(tc => {
         const toolCard = document.createElement('div');
         toolCard.className = 'tool-card';
         const toolName = tc.name || tc.function?.name || 'tool_call';
-        const toolArgs = JSON.stringify(tc.args || tc.function?.arguments || {}, null, 2);
+        const toolArgs = tc.args || tc.function?.arguments || {};
+
+        let bodyContent = '';
+        if (toolArgs.TargetContent && toolArgs.ReplacementContent) {
+          // Render visual diff for replace_file_content
+          bodyContent = renderDiff(toolArgs.TargetContent, toolArgs.ReplacementContent, toolArgs.TargetFile);
+        } else {
+          bodyContent = `<div class="tool-body">${escapeHtml(JSON.stringify(toolArgs, null, 2))}</div>`;
+        }
 
         toolCard.innerHTML = `
           <div class="tool-header">
@@ -225,7 +408,7 @@ function appendStep(step) {
               ${escapeHtml(toolName)}
             </span>
           </div>
-          <div class="tool-body">${escapeHtml(toolArgs)}</div>
+          ${bodyContent}
         `;
         modelDiv.appendChild(toolCard);
       });
@@ -233,6 +416,23 @@ function appendStep(step) {
 
     chatContainer.appendChild(modelDiv);
   }
+}
+
+// Render Visual Diff
+function renderDiff(target, replacement, filepath) {
+  const targetLines = target.split('\n');
+  const replLines = replacement.split('\n');
+  let html = `<div class="diff-container"><div class="diff-file-title">📝 ${escapeHtml(filepath || 'File Edit')}</div>`;
+
+  targetLines.forEach(l => {
+    html += `<div class="diff-line diff-del">- ${escapeHtml(l)}</div>`;
+  });
+  replLines.forEach(l => {
+    html += `<div class="diff-line diff-add">+ ${escapeHtml(l)}</div>`;
+  });
+
+  html += '</div>';
+  return html;
 }
 
 // Render Interactive Tool Approval Banner
@@ -268,13 +468,15 @@ function renderApprovalBanner(app) {
 }
 
 // Send Approval Response
-window.respondApproval = function(approvalId, decision) {
+window.respondApproval = async function(approvalId, decision) {
   triggerVibrate(40);
+  const payload = {
+    action: 'approve_tool',
+    data: { approval_id: approvalId, decision: decision }
+  };
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      action: 'approve_tool',
-      data: { approval_id: approvalId, decision: decision }
-    }));
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
   }
 };
 
@@ -292,17 +494,26 @@ window.toggleThinking = function(header) {
 };
 
 // Send Prompt
-function sendPrompt(text) {
-  const prompt = (text || promptInput.value).trim();
-  if (!prompt) return;
+async function sendPrompt(text) {
+  let prompt = (text || promptInput.value).trim();
+  if (!prompt && attachedFiles.length === 0) return;
+
+  if (attachedFiles.length > 0) {
+    prompt += `\n\n[Attached files: ${attachedFiles.join(', ')}]`;
+    attachedFiles = [];
+    renderAttachmentChips();
+  }
 
   triggerVibrate(25);
 
+  const payload = {
+    action: 'send_prompt',
+    data: { prompt: prompt }
+  };
+
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      action: 'send_prompt',
-      data: { prompt: prompt }
-    }));
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
   }
 
   promptInput.value = '';
@@ -316,20 +527,15 @@ function autoResizeInput() {
   promptInput.style.height = Math.min(promptInput.scrollHeight, 120) + 'px';
 }
 
-// Scroll to bottom
 function scrollToBottom() {
   chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
-// Helper: Markdown parser
 function renderMarkdown(text) {
-  if (window.marked) {
-    return window.marked.parse(text);
-  }
+  if (window.marked) return window.marked.parse(text);
   return escapeHtml(text).replace(/\n/g, '<br/>');
 }
 
-// Helper: Escape HTML
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -340,16 +546,12 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// Haptic feedback
 function triggerVibrate(pattern = [60, 40, 80]) {
   if (navigator.vibrate) {
-    try {
-      navigator.vibrate(pattern);
-    } catch (e) {}
+    try { navigator.vibrate(pattern); } catch (e) {}
   }
 }
 
-// Update Top Bar
 function updateHeader() {
   if (currentConversationId) {
     sessionSubtitle.textContent = `Session: ${currentConversationId.slice(0, 8)}...`;
@@ -358,18 +560,19 @@ function updateHeader() {
   }
 }
 
-// Render Conversations in Drawer
 function renderConversations(convs) {
   drawerList.innerHTML = '';
   convs.forEach(c => {
     const item = document.createElement('div');
     item.className = `session-item ${c.id === currentConversationId ? 'active' : ''}`;
-    item.onclick = () => {
+    item.onclick = async () => {
+      const payload = {
+        action: 'switch_conversation',
+        data: { conversation_id: c.id }
+      };
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          action: 'switch_conversation',
-          data: { conversation_id: c.id }
-        }));
+        const msg = cryptoKey ? await encryptData(payload) : payload;
+        ws.send(JSON.stringify(msg));
       }
       closeDrawer();
     };
@@ -383,7 +586,6 @@ function renderConversations(convs) {
   });
 }
 
-// Drawer Controls
 function openDrawer() {
   drawer.classList.add('open');
   drawerBackdrop.classList.add('open');
@@ -405,7 +607,6 @@ promptInput.addEventListener('keydown', (e) => {
 });
 
 promptInput.addEventListener('input', autoResizeInput);
-
 menuBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
 drawerBackdrop.addEventListener('click', closeDrawer);
@@ -428,6 +629,11 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Initialize
-setupSpeechRecognition();
-connectWebSocket();
+// Initialize all modules
+(async () => {
+  await initCrypto();
+  setupSpeechRecognition();
+  setupPushNotifications();
+  setupAttachments();
+  connectWebSocket();
+})();

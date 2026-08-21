@@ -1,4 +1,4 @@
-"""FastAPI server providing REST APIs, WebSockets, and PWA static assets."""
+"""FastAPI server providing REST APIs, WebSockets, E2EE, Web Push, and PWA static assets."""
 
 from __future__ import annotations
 
@@ -11,10 +11,12 @@ from typing import Any
 
 from fastapi import (
     FastAPI,
+    File,
     HTTPException,
     Query,
     Request,
     Security,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -25,13 +27,16 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from .config import RemoteConfig, get_config
+from .crypto import decode_key, decrypt_payload, encrypt_payload
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
     UserPromptRequest,
 )
 from .pty_runner import get_pty_supervisor
+from .push import get_push_manager
 from .session_manager import SessionManager
+from .tmux_runner import get_tmux_supervisor
 
 logger = logging.getLogger("agy_remote.server")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -43,6 +48,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     """Factory creating configured FastAPI app."""
     cfg = config or get_config()
     session_mgr = SessionManager(cfg)
+    push_mgr = get_push_manager()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -53,8 +59,8 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Antigravity Remote",
-        description="Mobile Remote Web PWA for Antigravity CLI",
-        version="26.08.21.2",
+        description="Mobile Remote Web PWA with E2EE & Web Push for Antigravity CLI",
+        version="26.08.21.3",
         lifespan=lifespan,
     )
     app.state.session_manager = session_mgr
@@ -92,22 +98,25 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
     @app.get("/api/status")
     async def get_status(request: Request, token: str | None = Query(None)) -> dict[str, Any]:
-        """Return server status and connection info."""
+        """Return server status, encryption info, and connection links."""
         if cfg.enable_auth and token != cfg.auth_token:
             return {
                 "auth_required": True,
                 "authenticated": False,
-                "version": "v26.08.21.2",
+                "version": "v26.08.21.3",
+                "e2ee_enabled": cfg.e2ee_enabled,
             }
 
         mgr = get_mgr(request)
         pty = get_pty_supervisor()
+        tmux = get_tmux_supervisor()
         return {
             "auth_required": cfg.enable_auth,
             "authenticated": True,
-            "version": "v26.08.21.2",
+            "version": "v26.08.21.3",
+            "e2ee_enabled": cfg.e2ee_enabled,
             "active_conversation_id": mgr.active_conversation_id,
-            "supervisor_running": pty is not None and pty.running,
+            "supervisor_running": (pty is not None and pty.running) or (tmux is not None and tmux.has_session()),
             "primary_mobile_url": cfg.get_primary_mobile_url(),
             "connect_urls": cfg.get_connect_urls(),
             "connected_clients": len(mgr._connected_clients),
@@ -173,8 +182,16 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Send user prompt from mobile UI into the active session."""
+        """Send user prompt from mobile UI into active session."""
         verify_auth(request, token, token_header)
+
+        # Check tmux supervisor
+        tmux = get_tmux_supervisor()
+        if tmux and tmux.has_session():
+            tmux.inject_input(req.prompt)
+            return {"status": "ok", "delivered_via": "tmux"}
+
+        # Check PTY supervisor
         pty = get_pty_supervisor()
         if pty and pty.running:
             pty.inject_input(req.prompt)
@@ -194,6 +211,31 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             "status": "ok",
             "delivered_via": "broadcast",
             "message": "Prompt broadcasted. To enable direct CLI typing, launch with 'agy-remote run'.",
+        }
+
+    @app.post("/api/upload")
+    async def upload_file(
+        request: Request,
+        file: UploadFile = File(...),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Upload image/screenshot from mobile camera or gallery into workspace."""
+        verify_auth(request, token, token_header)
+        upload_dir = Path.cwd() / ".agents" / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        filename = f"mobile_{uuid.uuid4().hex[:8]}_{file.filename or 'image.jpg'}"
+        dest = upload_dir / filename
+        content = await file.read()
+        with open(dest, "wb") as f:
+            f.write(content)
+
+        return {
+            "status": "ok",
+            "filename": filename,
+            "relative_path": f".agents/uploads/{filename}",
+            "absolute_path": str(dest),
         }
 
     @app.post("/api/approvals/{approval_id}/respond")
@@ -228,6 +270,13 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         conversation_id = payload.get("conversationId", "default")
         approval_id = str(uuid.uuid4())
 
+        # Trigger Web Push Notification to mobile lock screen
+        push_mgr.send_notification(
+            title=f"Permission Required: {tool_name}",
+            body=f"{tool_name}: {args.get('CommandLine') or args.get('TargetFile') or 'Action requested'}",
+            data={"approval_id": approval_id, "type": "approval_request"},
+        )
+
         mgr = get_mgr(request)
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,
@@ -238,7 +287,28 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         return JSONResponse(content=decision_payload)
 
     # -------------------------------------------------------------------------
-    # WebSocket Endpoint
+    # Web Push Notification Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/push/vapid-public-key")
+    async def get_vapid_key() -> dict[str, str]:
+        """Get public VAPID key for browser push subscription."""
+        return {"public_key": push_mgr.public_key}
+
+    @app.post("/api/push/subscribe")
+    async def subscribe_push(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, str]:
+        """Register a browser push subscription."""
+        verify_auth(request, token, token_header)
+        sub_data = await request.json()
+        push_mgr.add_subscription(sub_data)
+        return {"status": "subscribed"}
+
+    # -------------------------------------------------------------------------
+    # WebSocket Endpoint with E2EE
     # -------------------------------------------------------------------------
 
     @app.websocket("/ws")
@@ -246,7 +316,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         websocket: WebSocket,
         token: str | None = Query(None),
     ) -> None:
-        """Bidirectional WebSocket for live updates and mobile interaction."""
+        """Bidirectional WebSocket for live updates with E2EE envelope support."""
         if cfg.enable_auth and token != cfg.auth_token:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
@@ -255,20 +325,41 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         mgr = session_mgr
         await mgr.register_client(websocket)
 
+        raw_key_bytes = decode_key(cfg.e2ee_key) if cfg.e2ee_enabled else None
+
         try:
             while True:
-                msg = await websocket.receive_json()
+                raw_msg = await websocket.receive_json()
+
+                # Decrypt if envelope is E2EE encrypted
+                if raw_msg.get("encrypted") and raw_key_bytes:
+                    try:
+                        msg = decrypt_payload(raw_msg, raw_key_bytes)
+                    except Exception as e:
+                        logger.debug("Failed decrypting client WS payload: %s", e)
+                        continue
+                else:
+                    msg = raw_msg
+
                 action = msg.get("action")
                 data = msg.get("data", {})
 
                 if action == "ping":
-                    await websocket.send_json({"event": "pong"})
+                    pong = {"event": "pong"}
+                    if cfg.e2ee_enabled and raw_key_bytes:
+                        await websocket.send_json(encrypt_payload(pong, raw_key_bytes))
+                    else:
+                        await websocket.send_json(pong)
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:
-                        pty = get_pty_supervisor()
-                        if pty and pty.running:
-                            pty.inject_input(prompt_text)
+                        tmux = get_tmux_supervisor()
+                        if tmux and tmux.has_session():
+                            tmux.inject_input(prompt_text)
+                        else:
+                            pty = get_pty_supervisor()
+                            if pty and pty.running:
+                                pty.inject_input(prompt_text)
                         await mgr.broadcast(
                             {
                                 "event": "prompt_sent",

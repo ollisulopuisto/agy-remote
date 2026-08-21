@@ -10,6 +10,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from .crypto import generate_e2ee_key
+
 
 def get_default_brain_dir() -> Path:
     """Find the default brain directory used by Antigravity CLI."""
@@ -70,6 +72,8 @@ class RemoteConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8765
     auth_token: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    e2ee_key: str = Field(default_factory=generate_e2ee_key)
+    e2ee_enabled: bool = True
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
     tailscale_ip: str | None = Field(default_factory=get_tailscale_ip)
@@ -80,12 +84,13 @@ class RemoteConfig(BaseModel):
         """Return list of (label, url) for mobile connection."""
         urls = []
         token_param = f"?token={self.auth_token}" if self.enable_auth else ""
+        hash_fragment = f"#key={self.e2ee_key}" if self.e2ee_enabled else ""
 
         if self.tailscale_ip:
             urls.append(
                 (
                     "Tailscale (Preferred Mobile)",
-                    f"http://{self.tailscale_ip}:{self.port}/{token_param}",
+                    f"http://{self.tailscale_ip}:{self.port}/{token_param}{hash_fragment}",
                 )
             )
 
@@ -93,14 +98,14 @@ class RemoteConfig(BaseModel):
             urls.append(
                 (
                     "Local Wi-Fi / LAN",
-                    f"http://{self.lan_ip}:{self.port}/{token_param}",
+                    f"http://{self.lan_ip}:{self.port}/{token_param}{hash_fragment}",
                 )
             )
 
         urls.append(
             (
                 "Localhost",
-                f"http://localhost:{self.port}/{token_param}",
+                f"http://localhost:{self.port}/{token_param}{hash_fragment}",
             )
         )
 
@@ -120,11 +125,17 @@ def get_config() -> RemoteConfig:
     global config_instance
     if config_instance is None:
         token = os.environ.get("AGY_REMOTE_TOKEN")
+        e2ee_key = os.environ.get("AGY_REMOTE_E2EE_KEY")
         brain_path_env = os.environ.get("AGY_BRAIN_DIR")
         brain_dir = Path(brain_path_env) if brain_path_env else get_default_brain_dir()
         port = int(os.environ.get("AGY_REMOTE_PORT", "8765"))
         host = os.environ.get("AGY_REMOTE_HOST", "0.0.0.0")
         no_auth = os.environ.get("AGY_REMOTE_NO_AUTH", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        no_e2ee = os.environ.get("AGY_REMOTE_NO_E2EE", "0").lower() in (
             "1",
             "true",
             "yes",
@@ -135,9 +146,12 @@ def get_config() -> RemoteConfig:
             "port": port,
             "brain_dir": brain_dir,
             "enable_auth": not no_auth,
+            "e2ee_enabled": not no_e2ee,
         }
         if token:
             kwargs["auth_token"] = token
+        if e2ee_key:
+            kwargs["e2ee_key"] = e2ee_key
 
         config_instance = RemoteConfig(**kwargs)
     return config_instance
