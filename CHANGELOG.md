@@ -2,6 +2,15 @@
  
 ## v26.08.22.23 — The phone follows the session you are working in
 
+- **The answer never appeared until you switched sessions.** opencode creates
+  an assistant message empty and fills it in, so the backend emits one
+  `step_added` and then a stream of `step_updated` revisions as the thinking,
+  the text and the tool calls arrive. The PWA had no `step_updated` branch at
+  all — measured on one reply: 2 `step_added`, **25 `step_updated`**, every one
+  of them dropped. The empty card sat there until a session switch reloaded the
+  transcript over REST. Revisions now redraw the step in place. (The agy
+  backend only ever emits `step_added`, which is why it never showed.)
+
 - **A dead socket still said "E2EE Live".** iOS suspends a backgrounded PWA and
   hands back a socket that reads `OPEN` with nothing underneath: writes go
   nowhere and `onclose` never fires, so the badge stayed green over a

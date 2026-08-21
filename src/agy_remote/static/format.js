@@ -127,7 +127,29 @@
     return now - lastPongAt > timeoutMs;
   }
 
+  // Where a revised step goes. opencode creates an assistant message empty and
+  // fills it in, so the text, the tool calls and the thinking all arrive as
+  // revisions of a step already on screen -- an update that is not applied is
+  // the whole answer missing until something reloads the transcript.
+  function applyStepUpdate(steps, step) {
+    var next = steps.slice();
+    var index = -1;
+    if (step && step.id) {
+      for (var i = 0; i < next.length; i++) {
+        if (next[i] && next[i].id === step.id) { index = i; break; }
+      }
+    }
+    if (index === -1) {
+      index = next.length;
+      next.push(step);
+    } else {
+      next[index] = step;
+    }
+    return { steps: next, index: index };
+  }
+
   global.AgyFormat = {
+    applyStepUpdate: applyStepUpdate,
     socketIsStale: socketIsStale,
     promptRoute: promptRoute,
     agentIdentity: agentIdentity,

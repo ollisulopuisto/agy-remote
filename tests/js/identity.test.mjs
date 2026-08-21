@@ -65,3 +65,28 @@ test('a socket that stopped answering is treated as dead', () => {
   // Never seen a pong at all: nothing to judge it stale by yet.
   assert.equal(socketIsStale(null, 999999, 20000), false);
 });
+
+test('a revised step replaces the one already on screen', () => {
+  const { applyStepUpdate } = sandbox.window.AgyFormat;
+  // opencode creates an assistant message empty and fills it in: the text, the
+  // tool calls and the thinking all arrive as revisions of the same step. The
+  // PWA only ever handled `step_added`, so everything after the empty first
+  // frame was dropped and the answer appeared only on a session switch.
+  const steps = [{ id: 'msg_1', content: 'hi' }, { id: 'msg_2', content: '' }];
+
+  const revised = applyStepUpdate(steps, { id: 'msg_2', content: 'the answer' });
+  assert.equal(revised.index, 1);
+  assert.equal(revised.steps.length, 2);
+  assert.equal(revised.steps[1].content, 'the answer');
+  assert.equal(revised.steps[0].content, 'hi');
+
+  // A step nobody has seen yet belongs at the end, not nowhere.
+  const fresh = applyStepUpdate(steps, { id: 'msg_3', content: 'new' });
+  assert.equal(fresh.index, 2);
+  assert.equal(fresh.steps.length, 3);
+
+  // No id to match on: appended rather than silently swallowed.
+  const anon = applyStepUpdate(steps, { content: 'unidentified' });
+  assert.equal(anon.index, 2);
+  assert.equal(anon.steps.length, 3);
+});

@@ -467,10 +467,19 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
-  } else if (type === 'step_added') {
+  } else if (type === 'step_added' || type === 'step_updated') {
+    // `step_updated` used to fall through to nothing. opencode revises a step
+    // as its text, tools and thinking arrive, so dropping the revisions left
+    // an empty card until a session switch reloaded the transcript.
     if (data.conversation_id === currentConversationId) {
-      currentSteps.push(data.step);
-      appendStep(data.step);
+      const applied = window.AgyFormat.applyStepUpdate(currentSteps, data.step);
+      const isNew = applied.index === currentSteps.length;
+      currentSteps = applied.steps;
+      if (isNew) {
+        chatContainer.appendChild(stepNodes(data.step));
+      } else {
+        replaceStep(data.step);
+      }
       if (autoScroll) scrollToBottom();
     }
   } else if (type === 'terminal_screen') {
@@ -509,13 +518,39 @@ function renderAllMessages() {
   }
 
   chatContainer.appendChild(sessionDivider());
-  currentSteps.forEach(step => appendStep(step));
+  currentSteps.forEach(step => chatContainer.appendChild(stepNodes(step)));
   pendingApprovals.forEach(app => renderApprovalBanner(app));
   scrollToBottom();
 }
 
 // Append a Single Step
-function appendStep(step) {
+// The nodes one step draws, tagged with its id. A step can render more than
+// one element, and a revision has to replace every one of them.
+function stepNodes(step) {
+  const frag = document.createDocumentFragment();
+  appendStep(step, frag);
+  Array.from(frag.children).forEach(node => {
+    node.dataset.stepId = step.id || '';
+  });
+  return frag;
+}
+
+// Redraw a step already on screen. opencode fills an assistant message in
+// after creating it empty, so this carries the actual answer.
+function replaceStep(step) {
+  if (!step.id) return;
+  const existing = Array.from(chatContainer.children).filter(n => n.dataset.stepId === step.id);
+  const nodes = stepNodes(step);
+  if (existing.length === 0) {
+    chatContainer.appendChild(nodes);
+    return;
+  }
+  chatContainer.insertBefore(nodes, existing[0]);
+  existing.forEach(node => node.remove());
+}
+
+function appendStep(step, target) {
+  target = target || chatContainer;
   const stepType = step.type || 'UNKNOWN';
   const source = step.source || 'UNKNOWN';
 
@@ -523,7 +558,7 @@ function appendStep(step) {
     const userDiv = document.createElement('div');
     userDiv.className = 'message-user';
     userDiv.textContent = step.content || '';
-    chatContainer.appendChild(userDiv);
+    target.appendChild(userDiv);
     return;
   }
 
@@ -593,7 +628,7 @@ function appendStep(step) {
       });
     }
 
-    chatContainer.appendChild(modelDiv);
+    target.appendChild(modelDiv);
     return;
   }
 
@@ -615,14 +650,14 @@ function appendStep(step) {
   body.textContent = content;
 
   if (AgyFormat.isCollapsible(content)) {
-    chatContainer.appendChild(collapsed(label, body, 'message-system'));
+    target.appendChild(collapsed(label, body, 'message-system'));
     return;
   }
 
   const systemDiv = document.createElement('div');
   systemDiv.className = 'message-system';
   systemDiv.textContent = label;
-  chatContainer.appendChild(systemDiv);
+  target.appendChild(systemDiv);
 }
 
 // Which session you are looking at, and when it began.
