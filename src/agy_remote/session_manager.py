@@ -30,6 +30,8 @@ class SessionManager:
         self.config = config or get_config()
         self.brain_dir = self.config.brain_dir
         self.active_conversation_id: str | None = None
+        #: Track whichever conversation is newest, until the user picks one.
+        self.follow_latest: bool = True
         self.active_steps: list[TranscriptStep] = []
         self._last_file_pos: int = 0
         self._connected_clients: set[WebSocket] = set()
@@ -220,8 +222,16 @@ class SessionManager:
 
         return None
 
-    async def switch_conversation(self, conversation_id: str) -> bool:
-        """Switch active conversation to the specified ID and load steps."""
+    async def switch_conversation(self, conversation_id: str, pin: bool = False) -> bool:
+        """Switch active conversation to the specified ID and load steps.
+
+        `pin` marks the choice as the user's own, made from the phone. Picking
+        an older session then stops the watcher from dragging the view forward
+        the moment a new one appears; picking the newest resumes following.
+        """
+        if pin:
+            self.follow_latest = conversation_id == self.get_latest_conversation_id()
+
         self.active_conversation_id = conversation_id
         self.active_steps = []
         self._last_file_pos = 0
@@ -330,15 +340,31 @@ class SessionManager:
 
         return new_steps
 
+    async def follow_latest_conversation(self) -> bool:
+        """Move the view to the newest conversation, unless the user pinned one.
+
+        Launching agy starts a new conversation, and the phone has no way to
+        know: it kept rendering whatever session was newest when the server
+        booted, hours stale, while the desktop worked in the new one. The old
+        guard only ever switched when nothing at all was active, so in practice
+        it never fired after startup.
+        """
+        if not self.follow_latest:
+            return False
+
+        latest_id = self.get_latest_conversation_id()
+        if not latest_id or latest_id == self.active_conversation_id:
+            return False
+
+        await self.switch_conversation(latest_id)
+        return True
+
     async def _watch_loop(self) -> None:
         """Continuous polling/tailing loop for the active conversation log."""
         while self._running:
             try:
                 # 1. Check if a newer conversation was started
-                latest_id = self.get_latest_conversation_id()
-                if latest_id and latest_id != self.active_conversation_id and not self.active_conversation_id:
-                    # Switch automatically if active session is empty or user just launched agy
-                    await self.switch_conversation(latest_id)
+                await self.follow_latest_conversation()
 
                 # 2. Tail the active conversation log
                 if self.active_conversation_id:

@@ -266,7 +266,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         """Switch active conversation."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
-        success = await mgr.switch_conversation(conversation_id)
+        success = await mgr.switch_conversation(conversation_id, pin=True)
         if not success:
             raise HTTPException(status_code=404, detail="Could not switch conversation")
         return {"status": "ok", "active_conversation_id": conversation_id}
@@ -500,7 +500,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                     # Only switch to an id that resolves inside brain_dir, so a
                     # crafted id cannot leave the manager pointing at nothing.
                     if isinstance(target_id, str) and mgr.get_transcript_path(target_id):
-                        await mgr.switch_conversation(target_id)
+                        await mgr.switch_conversation(target_id, pin=True)
         except WebSocketDisconnect:
             pass
         except Exception as e:

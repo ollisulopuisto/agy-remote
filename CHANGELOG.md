@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.22.6 — The phone follows the session you are actually in
+
+- **Starting agy left the phone on an hours-old conversation.** The watcher
+  latched onto the newest conversation once at startup and never moved again:
+  the switch was guarded by `not self.active_conversation_id`, which is false
+  the moment anything is active, so it could not fire after boot. Launching
+  `agy-remote run` therefore showed the desktop working in a new session while
+  the phone rendered a stale one, with no indication anything was wrong. The
+  watcher now follows the newest conversation as it appears.
+- Picking an older session on the phone pins it, so a new session starting does
+  not yank the view away mid-read. Selecting the newest one resumes following.
+
 ## v26.08.22.5 — One command, one URL
 
 - **Every launch invalidated the phone's saved URL.** The token and E2EE key

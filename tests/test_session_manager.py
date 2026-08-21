@@ -156,3 +156,72 @@ def test_modified_transcript_is_reparsed(tmp_path: Path):
     summaries = mgr.list_conversations()
     assert mgr.parse_count == before + 1
     assert summaries[0].step_count == 4
+
+
+# ---------------------------------------------------------------------------
+# Starting a new agy session must move the phone's view to it. Without this the
+# phone silently keeps rendering a hours-old conversation while the desktop
+# works in the new one.
+# ---------------------------------------------------------------------------
+
+
+def _write_conversation(brain_dir: Path, conv_id: str, first_message: str, mtime: float) -> Path:
+    log = brain_dir / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_INPUT", "content": first_message}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(log, (mtime, mtime))
+    return log
+
+
+@pytest.mark.asyncio
+async def test_watcher_follows_a_newly_started_conversation(tmp_path: Path):
+    now = time.time()
+    _write_conversation(tmp_path, "old-conv", "yesterday's work", now - 3600)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    await mgr.switch_conversation("old-conv")
+    assert mgr.active_conversation_id == "old-conv"
+
+    # agy is launched and writes a brand new conversation.
+    _write_conversation(tmp_path, "new-conv", "today's work", now)
+
+    await mgr.follow_latest_conversation()
+    assert mgr.active_conversation_id == "new-conv"
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_the_user_picked_is_not_yanked_away(tmp_path: Path):
+    """Browsing an old session on the phone must survive a new session starting."""
+    now = time.time()
+    _write_conversation(tmp_path, "old-conv", "yesterday's work", now - 3600)
+    _write_conversation(tmp_path, "current-conv", "today's work", now)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    await mgr.switch_conversation("old-conv", pin=True)
+
+    _write_conversation(tmp_path, "newest-conv", "even newer", now + 60)
+    await mgr.follow_latest_conversation()
+
+    assert mgr.active_conversation_id == "old-conv"
+
+
+@pytest.mark.asyncio
+async def test_selecting_the_newest_conversation_resumes_following(tmp_path: Path):
+    now = time.time()
+    _write_conversation(tmp_path, "old-conv", "yesterday's work", now - 3600)
+    _write_conversation(tmp_path, "current-conv", "today's work", now)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    await mgr.switch_conversation("old-conv", pin=True)
+    await mgr.switch_conversation("current-conv", pin=True)
+
+    _write_conversation(tmp_path, "newest-conv", "even newer", now + 60)
+    await mgr.follow_latest_conversation()
+
+    assert mgr.active_conversation_id == "newest-conv"
