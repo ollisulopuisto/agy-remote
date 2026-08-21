@@ -4,12 +4,13 @@ requires-python = ">=3.13"
 
 [[package]]
 name = "agy-remote"
-version = "26.8.22.22"
+version = "26.8.21.40"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "pydantic" },
     { name = "pyte" },
@@ -35,6 +36,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.7" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.4" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "pyte", specifier = ">=0.8.2" },

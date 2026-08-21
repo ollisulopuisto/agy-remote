@@ -740,6 +740,13 @@ def port_is_free(host: str, port: int) -> bool:
     return True
 
 
+def find_free_port(host: str = "127.0.0.1") -> int:
+    """Find an available ephemeral TCP port on host."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
 def write_runtime_state(cfg: RemoteConfig) -> Path | None:
     """Publish the live token and port for helper processes to pick up.
 

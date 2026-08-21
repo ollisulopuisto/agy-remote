@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .config import RemoteConfig
-from .models import ApprovalResponseRequest, ConversationSummary, TranscriptStep
+from .models import ConversationSummary, TranscriptStep
 from .transcript import clean_user_content, is_scaffolding, normalize_tool_calls
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

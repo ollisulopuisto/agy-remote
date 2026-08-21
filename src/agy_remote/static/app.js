@@ -1,6 +1,7 @@
 // agy-remote Mobile PWA Client Application with E2EE, Push & Media Attachments
 
 let ws = null;
+let currentAgent = 'agy';
 let currentConversationId = null;
 let currentSteps = [];
 let pendingApprovals = [];
@@ -391,6 +392,7 @@ function handleServerEvent(event) {
 
   if (type === 'init') {
     applyTerminal(data.terminal);
+    currentAgent = data.agent || 'agy';
     currentConversation = data.conversation || null;
     currentConversationId = data.active_conversation_id;
     currentSteps = data.steps || [];
@@ -624,7 +626,21 @@ function renderApprovalBanner(app) {
   banner.id = `approval-${app.id}`;
   banner.className = 'approval-banner';
 
-  const cmdText = app.args?.CommandLine || app.args?.TargetFile || JSON.stringify(app.args || {});
+  const cmdText =
+    app.args?.CommandLine ||
+    app.args?.TargetFile ||
+    app.args?.command ||
+    app.args?.title ||
+    app.args?.pattern ||
+    (typeof app.args === 'string' ? app.args : JSON.stringify(app.args || {}));
+
+  const alwaysBtn =
+    currentAgent === 'opencode'
+      ? `<button class="btn-always" data-approval-id="${escapeHtml(app.id)}" data-decision="always">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+          Always
+        </button>`
+      : '';
 
   banner.innerHTML = `
     <div class="approval-title">
@@ -637,6 +653,7 @@ function renderApprovalBanner(app) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
         Allow
       </button>
+      ${alwaysBtn}
       <button class="btn-deny" data-approval-id="${escapeHtml(app.id)}" data-decision="deny">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         Deny
@@ -804,7 +821,7 @@ async function sendKey(key) {
 // Auto Resize Input Area
 function autoResizeInput() {
   promptInput.style.height = 'auto';
-  promptInput.style.height = Math.min(promptInput.scrollHeight, 120) + 'px';
+  promptInput.style.height = Math.min(Math.max(promptInput.scrollHeight, 52), 220) + 'px';
 }
 
 function scrollToBottom() {
@@ -886,7 +903,9 @@ function triggerVibrate(pattern = [60, 40, 80]) {
 }
 
 function updateHeader() {
-  if (currentConversationId) {
+  if (currentConversation && currentConversation.title) {
+    sessionSubtitle.textContent = currentConversation.title;
+  } else if (currentConversationId) {
     sessionSubtitle.textContent = `Session: ${currentConversationId.slice(0, 8)}...`;
   } else {
     sessionSubtitle.textContent = 'No Active Session';
