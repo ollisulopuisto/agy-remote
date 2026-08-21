@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.08.21.40 — opencode agent backend support
+
+- **opencode agent backend.** Added `OpencodeBackend` connecting to opencode's
+  HTTP/SSE server on loopback (`GET /event`, `GET /session`, `POST /session/:id/prompt_async`,
+  `POST /session/:id/permissions/:id`). Translates SSE message, part, and
+  permission events into normalized `agy-remote` events.
+- **REST & SSE permission approval flow.** Phone approvals for tool calls in
+  opencode sessions are registered from `permission.updated` events and
+  delivered back over REST to opencode's permission endpoint.
+- **CLI integration.** Added `--agent` and `--opencode-port` flags to `serve`
+  and `run`, plus dedicated `agy-remote opencode` command with auto-allocated
+  ephemeral loopback port support.
+- **QR countdown in PTY mode.** Added configurable countdown pause (`--qr-timeout`,
+  default 30s) before launching the PTY supervisor, so full-screen TUIs like
+  `opencode` don't immediately clear the terminal before the QR can be scanned.
+- **Interactive port conflict resolution.** Prompt interactive users to adopt
+  the next available port on conflict (`[Y/n]`) rather than aborting.
+- **Mobile PWA refinements.** Enlarged multiline prompt input field (auto-expanding
+  up to 220px), slimmed macro buttons, and active session titles in the header.
+
 ## v26.08.22.22 — Two agy sessions, two servers, two URLs
 
 - **A second `agy-remote` on a busy port started anyway, without a server.**

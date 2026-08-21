@@ -71,7 +71,7 @@ def _stub_launch(monkeypatch, tmp_path: Path, port: int) -> dict[str, list]:
 
 def test_run_refuses_a_port_already_in_use(monkeypatch, tmp_path: Path, busy_port: int):
     seen = _stub_launch(monkeypatch, tmp_path, busy_port)
-    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(busy_port)])
+    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(busy_port)], input="n\n")
 
     assert res.exit_code == 2, res.output
     assert "already" in res.output.lower()
@@ -83,10 +83,27 @@ def test_run_refuses_a_port_already_in_use(monkeypatch, tmp_path: Path, busy_por
 
 def test_serve_refuses_a_port_already_in_use(monkeypatch, tmp_path: Path, busy_port: int):
     seen = _stub_launch(monkeypatch, tmp_path, busy_port)
-    res = CliRunner().invoke(cli_mod.cli, ["serve", "--host", "127.0.0.1", "-p", str(busy_port)])
+    res = CliRunner().invoke(cli_mod.cli, ["serve", "--host", "127.0.0.1", "-p", str(busy_port)], input="n\n")
 
     assert res.exit_code == 2, res.output
     assert seen["banner"] == []
+
+
+def test_run_accepts_alternate_port_when_prompted(monkeypatch, tmp_path: Path, busy_port: int):
+    seen = _stub_launch(monkeypatch, tmp_path, busy_port)
+    monkeypatch.setattr(cli_mod, "_serve_in_background_or_exit", lambda cfg, app: None)
+    monkeypatch.setattr(cli_mod, "wait_for_keypress_or_timeout", lambda *a, **kw: False)
+
+    # Pressing Enter directly adopts the new port because default is True [Y/n]
+    res = CliRunner().invoke(
+        cli_mod.cli,
+        ["run", "--host", "127.0.0.1", "-p", str(busy_port)],
+        input="\n",
+    )
+
+    assert res.exit_code == 0, res.output
+    assert "starting new instance on port" in res.output.lower()
+    assert len(seen["banner"]) == 1
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")

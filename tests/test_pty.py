@@ -166,3 +166,36 @@ def test_ctrl_z_does_not_suspend_child_session():
         os.close(master_fd)
 
     assert result == b"received:\x1a\n", result.decode()
+
+
+def test_pty_mode_respects_qr_timeout(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+
+    from click.testing import CliRunner
+
+    import agy_remote.cli as _  # noqa: F401
+
+    cli_mod = sys.modules["agy_remote.cli"]
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        cli_mod,
+        "wait_for_keypress_or_timeout",
+        lambda timeout_seconds=30, **kw: calls.append(f"timeout_{timeout_seconds}"),
+    )
+    mock_sup = MagicMock()
+    mock_sup.start_sync.return_value = 0
+    monkeypatch.setattr(cli_mod, "set_pty_supervisor", lambda sup: None)
+    monkeypatch.setattr(cli_mod, "PtySupervisor", lambda *a, **kw: mock_sup)
+    monkeypatch.setattr(cli_mod, "_serve_in_background_or_exit", lambda *a, **kw: None)
+    monkeypatch.setattr(cli_mod, "_preflight_port_or_exit", lambda *a, **kw: None)
+    monkeypatch.setattr(cli_mod, "_setup_tls", lambda *a, **kw: None)
+    monkeypatch.setattr(cli_mod, "_guard_or_exit", lambda *a, **kw: None)
+
+    runner = CliRunner()
+    res = runner.invoke(cli_mod.cli, ["run", "--qr-timeout", "20"])
+    assert res.exit_code == 0, res.output
+    assert "timeout_20.0" in calls
+    mock_sup.start_sync.assert_called_once()
+

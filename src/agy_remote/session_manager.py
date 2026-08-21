@@ -206,7 +206,16 @@ class SessionManager:
         terminal and never writes them to the transcript, so a phone holding
         only the transcript is pressing keys at a screen it cannot see.
         """
-        mirror = TerminalMirror(rows=getattr(supervisor, "rows", 24), cols=getattr(supervisor, "cols", 80))
+        if supervisor is None or not hasattr(supervisor, "add_output_listener"):
+            self.terminal = None
+            return
+        rows = getattr(supervisor, "rows", 24)
+        cols = getattr(supervisor, "cols", 80)
+        if not isinstance(rows, int):
+            rows = 24
+        if not isinstance(cols, int):
+            cols = 80
+        mirror = TerminalMirror(rows=rows, cols=cols)
         supervisor.add_output_listener(mirror.feed)
         self.terminal = mirror
 

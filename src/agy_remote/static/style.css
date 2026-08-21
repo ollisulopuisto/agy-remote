@@ -410,41 +410,57 @@ body {
   gap: 6px;
 }
 
+.btn-always {
+  flex: 1;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background-color: rgba(0, 229, 255, 0.1);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 /* Bottom Bar & Input */
 .bottom-bar {
   background-color: var(--bg-card);
   border-top: 1px solid var(--border-color);
-  padding: 8px 12px;
-  padding-bottom: max(10px, calc(8px + env(safe-area-inset-bottom, 0px)));
+  padding: 6px 12px;
+  padding-bottom: max(8px, calc(6px + env(safe-area-inset-bottom, 0px)));
   padding-left: max(12px, env(safe-area-inset-left, 0px));
   padding-right: max(12px, env(safe-area-inset-right, 0px));
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
   z-index: 20;
 }
 
 .quick-actions {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  padding: 2px 0 4px;
+  padding: 1px 0 2px;
 }
 .quick-actions::-webkit-scrollbar {
   display: none;
 }
 
 .chip-btn {
-  background-color: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: #cbd5e1;
-  font-size: 12.5px;
-  padding: 6px 13px;
-  min-height: 34px;
-  border-radius: 17px;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  min-height: 28px;
+  border-radius: 14px;
   cursor: pointer;
   white-space: nowrap;
   display: inline-flex;
@@ -472,14 +488,14 @@ body {
   flex: 1;
   background-color: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 22px;
+  border-radius: 16px;
   color: var(--text-main);
-  padding: 11px 16px;
+  padding: 13px 16px;
   font-size: 16px; /* 16px prevents iOS Safari auto-zooming on focus */
   resize: none;
-  max-height: 120px;
-  min-height: 44px;
-  line-height: 1.35;
+  max-height: 220px;
+  min-height: 52px;
+  line-height: 1.4;
   outline: none;
   font-family: inherit;
   box-sizing: border-box;
