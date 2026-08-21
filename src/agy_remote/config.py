@@ -23,6 +23,7 @@ logger = logging.getLogger("agy_remote.config")
 #: so it cannot inherit the in-memory config; without this it would mint a
 #: fresh random token and fail authentication on every approval request.
 RUNTIME_STATE_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-session.json"
+CREDENTIALS_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-credentials.json"
 
 
 def get_default_brain_dir() -> Path:
@@ -388,13 +389,64 @@ def get_config() -> RemoteConfig:
             "enable_auth": not no_auth,
             "e2ee_enabled": not no_e2ee,
         }
-        if token:
-            kwargs["auth_token"] = token
-        if e2ee_key:
-            kwargs["e2ee_key"] = e2ee_key
+        stored = load_or_create_credentials()
+        kwargs["auth_token"] = token or stored["auth_token"]
+        kwargs["e2ee_key"] = e2ee_key or stored["e2ee_key"]
 
         config_instance = RemoteConfig(**kwargs)
     return config_instance
+
+
+def load_or_create_credentials() -> dict[str, str]:
+    """Return this host's long-lived token and E2EE key, minting them once.
+
+    Both were previously regenerated on every launch, so each restart silently
+    invalidated the URL saved on the phone: the QR had to be rescanned, and any
+    bookmark or installed PWA came back with a dead token. They are properties
+    of the host, not of a process, so they are kept on disk and reused.
+
+    Owner-only, like the runtime state: the token is equivalent to shell access
+    on this machine, and the key decrypts every payload the phone ever sees.
+    """
+    try:
+        with open(CREDENTIALS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("auth_token") and data.get("e2ee_key"):
+            return {"auth_token": str(data["auth_token"]), "e2ee_key": str(data["e2ee_key"])}
+    except (OSError, json.JSONDecodeError) as e:
+        logger.debug("Could not read stored credentials: %s", e)
+
+    credentials = {
+        "auth_token": secrets.token_urlsafe(16),
+        "e2ee_key": generate_e2ee_key(),
+    }
+    _write_credentials(credentials)
+    return credentials
+
+
+def _write_credentials(credentials: dict[str, str]) -> None:
+    """Persist credentials owner-only, tolerating an unwritable home directory."""
+    try:
+        CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(CREDENTIALS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(credentials, indent=2))
+        os.chmod(CREDENTIALS_FILE, 0o600)
+    except OSError as e:
+        # Not fatal: the server still runs, it just issues fresh credentials
+        # next time, which is exactly the old behaviour.
+        logger.debug("Could not store credentials: %s", e)
+
+
+def rotate_credentials() -> None:
+    """Discard the stored credentials so the next launch mints new ones.
+
+    Every paired phone is revoked by this, which is the point of it.
+    """
+    try:
+        CREDENTIALS_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        logger.debug("Could not rotate credentials: %s", e)
 
 
 def write_runtime_state(cfg: RemoteConfig) -> Path:

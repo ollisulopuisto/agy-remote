@@ -24,6 +24,7 @@ from .config import (
     get_tailscale_dns_name,
     is_loopback_host,
     read_runtime_state,
+    rotate_credentials,
 )
 from .hooks import install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
@@ -181,6 +182,11 @@ def cli() -> None:
     default=None,
     help="Path to Antigravity brain directory",
 )
+@click.option(
+    "--rotate-token",
+    is_flag=True,
+    help="Issue a new token and encryption key, revoking every paired phone",
+)
 def serve(
     port: int,
     host: str,
@@ -189,8 +195,11 @@ def serve(
     no_e2ee: bool,
     tls: bool | None,
     brain_dir: Path | None,
+    rotate_token: bool,
 ) -> None:
     """Start the agy-remote server and watch active sessions."""
+    if rotate_token:
+        rotate_credentials()
     cfg = get_config()
     cfg.port = port
     cfg.host = host
@@ -231,6 +240,11 @@ def serve(
     default=None,
     help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
 )
+@click.option(
+    "--rotate-token",
+    is_flag=True,
+    help="Issue a new token and encryption key, revoking every paired phone",
+)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -241,8 +255,11 @@ def run(
     no_auth: bool,
     no_e2ee: bool,
     tls: bool | None,
+    rotate_token: bool,
 ) -> None:
     """Launch agy CLI inside supervisor with simultaneous desktop & mobile control."""
+    if rotate_token:
+        rotate_credentials()
     cfg = get_config()
     cfg.port = port
     cfg.host = host

@@ -188,6 +188,11 @@ uv run agy-remote push-test "Test alert from agy-remote"
 
 ### Threat model in one line
 
+The token and encryption key are minted once and kept in
+`~/.gemini/antigravity-cli/agy-remote-credentials.json` (owner-only), so the URL
+saved on your phone keeps working across restarts and `agy-remote run` needs no
+arguments. `--rotate-token` issues new ones and revokes every paired device.
+
 **Anyone who can reach this server and holds the token can run arbitrary code on your machine** — prompts are injected straight into your live `agy` session. Treat the token like an SSH key.
 
 ### What protects what
@@ -237,6 +242,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
 | `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
+| `agy-remote run --rotate-token` | Issue a new token and encryption key, revoking every paired phone. |
 | `agy-remote setup-hooks` | Install Antigravity lifecycle hooks for remote tool approvals. |
 | `agy-remote push-test [msg]` | Send a test Web Push notification to registered mobile devices. |
 
@@ -246,11 +252,11 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | :--- | :--- | :--- |
 | `AGY_REMOTE_PORT` | `8765` | Server port. |
 | `AGY_REMOTE_HOST` | `0.0.0.0` | Server bind host. |
-| `AGY_REMOTE_TOKEN` | *Auto-generated* | Custom authentication token. |
+| `AGY_REMOTE_TOKEN` | *Stored* | Override the stored authentication token. |
 | `AGY_REMOTE_NO_AUTH` | `0` | Set `1` to disable token authentication. **Refused unless bound to loopback.** |
 | `AGY_REMOTE_NO_E2EE` | `0` | Set `1` to disable payload encryption. Leave enabled unless debugging. |
 | `AGY_BRAIN_DIR` | `~/.gemini/antigravity-cli/brain` | Custom path to Antigravity brain data. |
-| `AGY_REMOTE_E2EE_KEY` | *Auto-generated* | Custom base64 256-bit payload key. |
+| `AGY_REMOTE_E2EE_KEY` | *Stored* | Override the stored base64 256-bit payload key. |
 
 ---
 

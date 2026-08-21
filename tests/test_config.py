@@ -73,3 +73,61 @@ def test_pick_lan_address_falls_back_when_nothing_matches():
 
     assert pick_lan_address([("utun0", "172.16.30.1")]) is None
     assert pick_lan_address([]) is None
+
+
+# ---------------------------------------------------------------------------
+# Credentials must survive a restart, or every launch invalidates the phone's
+# saved URL and the QR has to be scanned again.
+# ---------------------------------------------------------------------------
+
+
+def _fresh_config(monkeypatch, tmp_path: Path):
+    """Build a config the way the CLI does, against a throwaway credential store."""
+    from agy_remote import config as config_mod
+
+    monkeypatch.setattr(config_mod, "CREDENTIALS_FILE", tmp_path / "credentials.json")
+    monkeypatch.setattr(config_mod, "config_instance", None)
+    for var in ("AGY_REMOTE_TOKEN", "AGY_REMOTE_E2EE_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    return config_mod.get_config()
+
+
+def test_token_and_key_are_stable_across_restarts(monkeypatch, tmp_path: Path):
+    first = _fresh_config(monkeypatch, tmp_path)
+    second = _fresh_config(monkeypatch, tmp_path)
+
+    assert first.auth_token == second.auth_token
+    assert first.e2ee_key == second.e2ee_key
+    assert first.auth_token  # not empty
+
+
+def test_credential_store_is_owner_only(monkeypatch, tmp_path: Path):
+    """The token is equivalent to shell access; nobody else may read it."""
+    import stat
+
+    _fresh_config(monkeypatch, tmp_path)
+    store = tmp_path / "credentials.json"
+    assert store.exists()
+    assert stat.S_IMODE(store.stat().st_mode) == 0o600
+
+
+def test_explicit_env_token_overrides_the_store(monkeypatch, tmp_path: Path):
+    from agy_remote import config as config_mod
+
+    _fresh_config(monkeypatch, tmp_path)
+
+    monkeypatch.setattr(config_mod, "CREDENTIALS_FILE", tmp_path / "credentials.json")
+    monkeypatch.setattr(config_mod, "config_instance", None)
+    monkeypatch.setenv("AGY_REMOTE_TOKEN", "explicit-token")
+    assert config_mod.get_config().auth_token == "explicit-token"
+
+
+def test_rotate_credentials_issues_new_ones(monkeypatch, tmp_path: Path):
+    from agy_remote import config as config_mod
+
+    before = _fresh_config(monkeypatch, tmp_path)
+    config_mod.rotate_credentials()
+    after = _fresh_config(monkeypatch, tmp_path)
+
+    assert after.auth_token != before.auth_token
+    assert after.e2ee_key != before.e2ee_key

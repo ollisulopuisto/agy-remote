@@ -1,5 +1,19 @@
 # Changelog
 
+## v26.08.22.5 — One command, one URL
+
+- **Every launch invalidated the phone's saved URL.** The token and E2EE key
+  were generated per process, and the runtime state file that published them is
+  deleted on shutdown, so each restart minted new ones: the QR had to be
+  rescanned, and any bookmark or installed PWA came back with a dead token. The
+  workaround was to pass `--token` and `AGY_REMOTE_E2EE_KEY` on every start.
+  Both are properties of the host, not of a process, so they are now minted once
+  into `~/.gemini/antigravity-cli/agy-remote-credentials.json` (mode 0600) and
+  reused. `agy-remote run` takes no arguments again.
+- `--rotate-token` on `run` and `serve` discards the stored pair and issues a
+  new one, revoking every paired device. `AGY_REMOTE_TOKEN` and
+  `AGY_REMOTE_E2EE_KEY` still override the store for a single launch.
+
 ## v26.08.22.4 — Enter, not a line break
 
 - **A prompt sent from the phone typed itself into `agy` and stopped there.**
