@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,13 @@ class SessionManager:
         #: Nonce cache for envelopes arriving *from* clients.
         self.replay_guard = ReplayGuard()
 
+        #: Cache of parsed conversation summaries, keyed by transcript path and
+        #: invalidated on (mtime, size). Without this the watcher re-read every
+        #: transcript several times a second.
+        self._summary_cache: dict[Path, tuple[float, int, ConversationSummary]] = {}
+        #: Number of transcripts actually parsed; asserted on in tests.
+        self.parse_count: int = 0
+
     def seal(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Wrap an outbound payload in an AES-GCM envelope when E2EE is on.
 
@@ -80,89 +88,113 @@ class SessionManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._watcher_task
 
-    def list_conversations(self) -> list[ConversationSummary]:
-        """Scan brain_dir and return a sorted list of conversation summaries."""
+    def _iter_transcripts(self) -> list[tuple[str, Path]]:
+        """List (conversation_id, transcript path) pairs using stat only."""
         if not self.brain_dir.exists():
             return []
 
-        summaries: list[ConversationSummary] = []
+        found: list[tuple[str, Path]] = []
         for path in self.brain_dir.iterdir():
             if not path.is_dir():
                 continue
-            # Check for transcript log
             log_path = path / ".system_generated" / "logs" / "transcript.jsonl"
             if not log_path.exists():
-                # Some might have transcript directly or under subdirs
-                alt_path = path / "transcript.jsonl"
-                if alt_path.exists():
-                    log_path = alt_path
-                else:
+                log_path = path / "transcript.jsonl"
+                if not log_path.exists():
                     continue
+            found.append((path.name, log_path))
+        return found
 
+    def _summarize(self, conversation_id: str, log_path: Path) -> ConversationSummary | None:
+        """Parse one transcript into a summary, reusing the cache when possible."""
+        try:
+            stat = log_path.stat()
+        except OSError:
+            return None
+
+        cached = self._summary_cache.get(log_path)
+        if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+            summary = cached[2].model_copy()
+        else:
             try:
-                stat = log_path.stat()
-                updated_at = datetime.fromtimestamp(stat.st_mtime)
-                created_at = datetime.fromtimestamp(stat.st_ctime)
-
-                # Quick sample first user prompt and step count
-                step_count = 0
-                first_prompt: str | None = None
-                last_prompt: str | None = None
-                last_response: str | None = None
-
-                with open(log_path, encoding="utf-8", errors="replace") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        step_count += 1
-                        try:
-                            obj = json.loads(line)
-                            step_type = obj.get("type", "")
-                            content = obj.get("content") or ""
-                            if step_type == "USER_INPUT":
-                                if not first_prompt:
-                                    first_prompt = content[:100]
-                                last_prompt = content[:100]
-                            elif step_type == "PLANNER_RESPONSE":
-                                if content:
-                                    last_response = content[:150]
-                        except Exception:
-                            continue
-
-                title = first_prompt or f"Session {path.name[:8]}"
-                has_pending = any(
-                    a.get("conversation_id") == path.name and a.get("status") == "pending"
-                    for a in self._pending_approvals.values()
-                )
-
-                summaries.append(
-                    ConversationSummary(
-                        id=path.name,
-                        title=title,
-                        created_at=created_at,
-                        updated_at=updated_at,
-                        step_count=step_count,
-                        last_user_message=last_prompt,
-                        last_model_response=last_response,
-                        is_active=(path.name == self.active_conversation_id),
-                        has_pending_approval=has_pending,
-                    )
-                )
+                summary = self._parse_transcript(conversation_id, log_path, stat)
             except Exception as e:
-                logger.debug("Failed reading conversation %s: %s", path.name, e)
+                logger.debug("Failed reading conversation %s: %s", conversation_id, e)
+                return None
+            self._summary_cache[log_path] = (stat.st_mtime, stat.st_size, summary.model_copy())
 
-        # Sort newest first
-        summaries.sort(
-            key=lambda s: s.updated_at or datetime.min,
-            reverse=True,
+        # These change without the file changing, so refresh them every time.
+        summary.is_active = conversation_id == self.active_conversation_id
+        summary.has_pending_approval = any(
+            a.get("conversation_id") == conversation_id and a.get("status") == "pending"
+            for a in self._pending_approvals.values()
         )
+        return summary
+
+    def _parse_transcript(self, conversation_id: str, log_path: Path, stat: os.stat_result) -> ConversationSummary:
+        """Read a transcript end to end and build its summary."""
+        self.parse_count += 1
+        step_count = 0
+        first_prompt: str | None = None
+        last_prompt: str | None = None
+        last_response: str | None = None
+
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                step_count += 1
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                step_type = obj.get("type", "")
+                content = obj.get("content") or ""
+                if step_type == "USER_INPUT":
+                    if not first_prompt:
+                        first_prompt = content[:100]
+                    last_prompt = content[:100]
+                elif step_type == "PLANNER_RESPONSE" and content:
+                    last_response = content[:150]
+
+        return ConversationSummary(
+            id=conversation_id,
+            title=first_prompt or f"Session {conversation_id[:8]}",
+            created_at=datetime.fromtimestamp(stat.st_ctime),
+            updated_at=datetime.fromtimestamp(stat.st_mtime),
+            step_count=step_count,
+            last_user_message=last_prompt,
+            last_model_response=last_response,
+        )
+
+    def list_conversations(self) -> list[ConversationSummary]:
+        """Scan brain_dir and return a sorted list of conversation summaries."""
+        summaries = [
+            summary
+            for conversation_id, log_path in self._iter_transcripts()
+            if (summary := self._summarize(conversation_id, log_path)) is not None
+        ]
+        summaries.sort(key=lambda s: s.updated_at or datetime.min, reverse=True)
         return summaries
 
     def get_latest_conversation_id(self) -> str | None:
-        """Find the most recently updated conversation ID."""
-        convs = self.list_conversations()
-        return convs[0].id if convs else None
+        """Find the most recently updated conversation ID from mtimes alone.
+
+        The watcher loop asks this several times a second, so it must not read
+        file contents: parsing every transcript here kept a core busy full time
+        on a brain directory of any real size.
+        """
+        newest_id: str | None = None
+        newest_mtime = float("-inf")
+        for conversation_id, log_path in self._iter_transcripts():
+            try:
+                mtime = log_path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest_mtime:
+                newest_mtime, newest_id = mtime, conversation_id
+        return newest_id
 
     def get_transcript_path(self, conversation_id: str) -> Path | None:
         """Resolve the path to transcript.jsonl for a conversation with traversal protection."""

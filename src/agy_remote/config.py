@@ -298,6 +298,19 @@ class RemoteConfig(BaseModel):
     def scheme(self) -> str:
         return "https" if self.tls_enabled else "http"
 
+    @property
+    def local_base_url(self) -> str:
+        """Base URL for same-machine helpers such as the PreToolUse hook.
+
+        Under TLS this must be the MagicDNS name, not a loopback address: the
+        certificate is issued for that name, so https://127.0.0.1 would fail
+        verification. MagicDNS resolves it locally, so the request stays on
+        this machine.
+        """
+        if self.tls_enabled and self.tailscale_dns_name:
+            return f"https://{self.tailscale_dns_name}:{self.port}"
+        return f"http://127.0.0.1:{self.port}"
+
     def get_connect_urls(self) -> list[tuple[str, str]]:
         """Return list of (label, url) for mobile connection."""
         urls = []
@@ -393,6 +406,7 @@ def write_runtime_state(cfg: RemoteConfig) -> Path:
     payload = json.dumps(
         {
             "auth_token": cfg.auth_token,
+            "base_url": cfg.local_base_url,
             "e2ee_key": cfg.e2ee_key,
             "e2ee_enabled": cfg.e2ee_enabled,
             "enable_auth": cfg.enable_auth,

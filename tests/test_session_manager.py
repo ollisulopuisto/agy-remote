@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -89,3 +91,68 @@ async def test_approval_flow(tmp_path: Path):
 
     result = await approval_task
     assert result["decision"] == "allow"
+
+
+# ---------------------------------------------------------------------------
+# The watcher loop re-parsed every transcript 3x/second.
+# ---------------------------------------------------------------------------
+
+
+def _make_conv(brain: Path, name: str, lines: int = 3) -> Path:
+    d = brain / name / ".system_generated" / "logs"
+    d.mkdir(parents=True)
+    log = d / "transcript.jsonl"
+    log.write_text(
+        "".join(json.dumps({"step_index": i, "type": "USER_INPUT", "content": f"m{i}"}) + "\n" for i in range(lines))
+    )
+    return log
+
+
+def test_latest_conversation_lookup_parses_nothing(tmp_path: Path):
+    """Finding the newest conversation only needs mtimes, not file contents.
+
+    _watch_loop called this every 0.3s; parsing every transcript to answer it
+    kept a core busy continuously on a real brain directory.
+    """
+    for name in ("conv-a", "conv-b", "conv-c"):
+        _make_conv(tmp_path, name)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    assert mgr.get_latest_conversation_id() is not None
+    assert mgr.parse_count == 0, f"parsed {mgr.parse_count} transcripts just to find the newest"
+
+
+def test_unchanged_transcripts_are_not_reparsed(tmp_path: Path):
+    """A second listing must reuse cached summaries for untouched files."""
+    for name in ("conv-a", "conv-b"):
+        _make_conv(tmp_path, name)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    mgr.list_conversations()
+    first = mgr.parse_count
+    assert first == 2
+
+    mgr.list_conversations()
+    assert mgr.parse_count == first, "re-parsed unchanged transcripts"
+
+
+def test_modified_transcript_is_reparsed(tmp_path: Path):
+    """A changed file must invalidate its cache entry."""
+    log = _make_conv(tmp_path, "conv-a")
+    cfg = RemoteConfig(brain_dir=tmp_path, e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    mgr.list_conversations()
+    before = mgr.parse_count
+
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"step_index": 9, "type": "USER_INPUT", "content": "new"}) + "\n")
+    os.utime(log, (time.time() + 5, time.time() + 5))
+
+    summaries = mgr.list_conversations()
+    assert mgr.parse_count == before + 1
+    assert summaries[0].step_count == 4

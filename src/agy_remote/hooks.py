@@ -16,8 +16,12 @@ from .config import read_runtime_state
 DEFAULT_PORT = 8765
 
 
-def resolve_server_endpoint() -> tuple[int, str]:
-    """Find the running server's port and token as cheaply as possible.
+def resolve_server_endpoint() -> tuple[str, str]:
+    """Find the running server's base URL and token as cheaply as possible.
+
+    The scheme matters: once the server serves HTTPS, posting http:// to it
+    fails outright and the hook silently degrades to "ask", so no approval
+    ever reaches the phone.
 
     This runs on every single tool call, so the no-server path must not fall
     back to get_config(): that shells out to `tailscale ip` and `ifconfig`,
@@ -25,13 +29,15 @@ def resolve_server_endpoint() -> tuple[int, str]:
     """
     state = read_runtime_state()
     if state:
-        return int(state.get("port", DEFAULT_PORT)), state.get("auth_token", "")
+        port = int(state.get("port", DEFAULT_PORT))
+        base_url = state.get("base_url") or f"http://127.0.0.1:{port}"
+        return base_url, state.get("auth_token", "")
 
     try:
         port = int(os.environ.get("AGY_REMOTE_PORT", DEFAULT_PORT))
     except ValueError:
         port = DEFAULT_PORT
-    return port, os.environ.get("AGY_REMOTE_TOKEN", "")
+    return f"http://127.0.0.1:{port}", os.environ.get("AGY_REMOTE_TOKEN", "")
 
 
 def resolve_hook_command() -> str:
@@ -66,9 +72,9 @@ def run_pre_tool_hook() -> None:
         # Use the running server's published credentials. get_config() would
         # mint a *fresh* random token in this separate process, which never
         # matches the server's and so 401s on every approval request.
-        port, auth_token = resolve_server_endpoint()
+        base_url, auth_token = resolve_server_endpoint()
 
-        url = f"http://127.0.0.1:{port}/api/hook/pre-tool"
+        url = f"{base_url}/api/hook/pre-tool"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,

@@ -52,7 +52,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 api_key_header = APIKeyHeader(name="X-Auth-Token", auto_error=False)
 
-VERSION = "26.08.22.2"
+VERSION = "26.08.22.3"
 
 #: Extensions accepted by /api/upload, mapped to their magic-byte signatures.
 #: SVG is deliberately absent: it is an active-content format that can carry

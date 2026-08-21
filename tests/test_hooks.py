@@ -59,6 +59,48 @@ def test_hook_fallback_does_no_network_detection(monkeypatch):
     # hooks.py must not import the expensive config builder at all.
     assert not hasattr(hooks_mod, "get_config"), "hooks.py still reaches for get_config()"
 
-    port, token = hooks_mod.resolve_server_endpoint()
-    assert port == 8765
+    base_url, token = hooks_mod.resolve_server_endpoint()
+    assert base_url == "http://127.0.0.1:8765"
     assert token == ""
+
+
+def test_hook_uses_https_when_the_server_serves_tls(monkeypatch):
+    """Regression: the hook posted http:// to an HTTPS port and always failed.
+
+    The connection was refused, the hook fell back to "ask", and no approval
+    ever reached the phone. The certificate is issued for the MagicDNS name,
+    so that is the address the hook must use.
+    """
+    import agy_remote.hooks as hooks_mod
+
+    monkeypatch.setattr(
+        hooks_mod,
+        "read_runtime_state",
+        lambda: {
+            "auth_token": "tok",
+            "port": 8766,
+            "base_url": "https://mac-studio.example.ts.net:8766",
+        },
+    )
+    base_url, token = hooks_mod.resolve_server_endpoint()
+    assert base_url == "https://mac-studio.example.ts.net:8766"
+    assert token == "tok"
+
+
+def test_config_local_base_url_tracks_tls(tmp_path):
+    from agy_remote.config import RemoteConfig
+
+    plain = RemoteConfig(brain_dir=tmp_path, port=8765)
+    assert plain.local_base_url == "http://127.0.0.1:8765"
+
+    cert, key = tmp_path / "c", tmp_path / "k"
+    cert.write_text("x")
+    key.write_text("y")
+    secure = RemoteConfig(
+        brain_dir=tmp_path,
+        port=8766,
+        tls_cert=cert,
+        tls_key=key,
+        tailscale_dns_name="mac-studio.example.ts.net",
+    )
+    assert secure.local_base_url == "https://mac-studio.example.ts.net:8766"

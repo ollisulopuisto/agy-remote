@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.08.22.3 — Working approvals over HTTPS, and a fixed watcher
+
+- **The PreToolUse hook posted `http://` to an HTTPS port.** The connection was
+  refused, the hook fell back to `"ask"`, and no approval ever reached the
+  phone. The server now publishes its own base URL — the MagicDNS name under
+  TLS, since the certificate is issued for that name and `https://127.0.0.1`
+  would fail verification.
+- **The watcher loop burned a whole core.** `_watch_loop` called
+  `get_latest_conversation_id()` every 0.3s, which fully parsed every
+  `transcript.jsonl` in the brain directory: 0.45s of parsing across 637 MB,
+  three times a second, forever. Measured 42–82% CPU on an idle server.
+  Finding the newest conversation now uses mtimes alone, and summaries are
+  cached per file and invalidated on `(mtime, size)`. Idle CPU is now 2–5%,
+  and the test suite dropped from 17s to 1.7s.
+
+Verified end to end: a prompt sent from the phone reaches `agy`, its
+`run_command` is gated, the tool name and arguments arrive on the phone over a
+sealed WebSocket, and the tap propagates back as the hook's decision.
+
+
 ## v26.08.22.2 — HTTPS, working hooks, and honest failure
 
 ### Web Crypto requires HTTPS
