@@ -1,5 +1,23 @@
 # Changelog
 
+## v26.08.22.11 — One line per tool call
+
+- **The transcript was a wall of plumbing.** The desktop shows a tool call as
+  one line -- `Bash(git status)`, `Search(Grep search for season)` -- with its
+  arguments and output behind `ctrl+o`. The phone rendered every argument and
+  every byte of output inline, so a single `du` pushed the conversation off the
+  screen. Tool calls now collapse to `name(the argument that matters)`, and the
+  detail is one tap away.
+- Tool *output* (agy's `GENERIC` steps) collapses to `output · N lines`; short
+  single-line output still shows as itself, with nothing to expand.
+- `SYSTEM/CHECKPOINT` steps -- which v26.08.22.9 stopped dropping, and which run
+  to dozens of lines -- collapse to their first line.
+- Collapsing uses native `<details>`, so it stays keyboard- and
+  screenreader-operable without a hand-rolled toggle.
+- Adds the project's first JavaScript tests, using node's built-in runner and a
+  `vm` sandbox, so the PWA's pure formatting logic is covered without pulling in
+  a test framework: `node --test "tests/js/*.test.mjs"`.
+
 ## v26.08.22.10 — Ctrl+C works again
 
 - **Ctrl+C and Ctrl+Z did nothing in the supervised terminal.** They are not

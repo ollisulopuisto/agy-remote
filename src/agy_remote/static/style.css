@@ -662,3 +662,62 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Collapsed by default: a tool call is one line until you ask for more, which
+   is how the desktop shows it. */
+.tool-card > summary,
+.output-card > summary,
+details.message-system > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.tool-card > summary::-webkit-details-marker,
+.output-card > summary::-webkit-details-marker,
+details.message-system > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A caret that turns, so a collapsed row does not look like a dead end. */
+.tool-card > summary::before,
+.output-card > summary::before,
+details.message-system > summary::before {
+  content: '▸';
+  display: inline-block;
+  width: 12px;
+  margin-right: 2px;
+  color: var(--text-muted);
+  transition: transform 0.12s ease;
+}
+
+.tool-card[open] > summary::before,
+.output-card[open] > summary::before,
+details.message-system[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.output-card {
+  margin: 6px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+
+.output-card > summary {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+details.message-system > summary {
+  font-size: 11.5px;
+}
+
+.system-body {
+  margin-top: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+  max-height: 40vh;
+  overflow-y: auto;
+}

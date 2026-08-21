@@ -318,6 +318,9 @@ uv run pytest
 # Check code formatting and linting
 uv run ruff format .
 uv run ruff check .
+
+# Run the PWA's formatting tests (node's built-in runner, no dependencies)
+node --test "tests/js/*.test.mjs"
 ```
 
 ---

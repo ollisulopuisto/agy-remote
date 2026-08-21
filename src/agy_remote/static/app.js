@@ -476,37 +476,45 @@ function appendStep(step) {
       modelDiv.appendChild(thinkingBox);
     }
 
-    // Markdown Content
+    // Markdown content. A GENERIC step is not the model talking -- it is the
+    // output of the tool it just ran, which is the bulkiest thing in a
+    // transcript and the least often wanted, so it collapses to a line count.
     if (step.content && step.content.trim()) {
       const textDiv = document.createElement('div');
       textDiv.className = 'model-text-content';
       textDiv.innerHTML = renderMarkdown(step.content);
-      modelDiv.appendChild(textDiv);
+
+      if (stepType === 'GENERIC' && AgyFormat.isCollapsible(step.content)) {
+        modelDiv.appendChild(collapsed(AgyFormat.outputSummary(step.content), textDiv, 'output-card'));
+      } else {
+        modelDiv.appendChild(textDiv);
+      }
     }
 
-    // Tool Calls with Diff Rendering
+    // Tool calls: one line each, arguments and diff behind an expand, the way
+    // the desktop shows them. Rendering every argument inline buried the
+    // conversation under a single `du`.
     if (step.tool_calls && step.tool_calls.length > 0) {
       step.tool_calls.forEach(tc => {
-        const toolCard = document.createElement('div');
-        toolCard.className = 'tool-card';
         const toolName = tc.name || tc.function?.name || 'tool_call';
         const toolArgs = tc.args || tc.function?.arguments || {};
 
         let bodyContent = '';
         if (toolArgs.TargetContent && toolArgs.ReplacementContent) {
-          // Render visual diff for replace_file_content
           bodyContent = renderDiff(toolArgs.TargetContent, toolArgs.ReplacementContent, toolArgs.TargetFile);
         } else {
           bodyContent = `<div class="tool-body">${renderToolArgs(toolArgs)}</div>`;
         }
 
+        const toolCard = document.createElement('details');
+        toolCard.className = 'tool-card';
         toolCard.innerHTML = `
-          <div class="tool-header">
+          <summary class="tool-header">
             <span class="tool-name-tag">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              ${escapeHtml(toolName)}
+              ${escapeHtml(AgyFormat.toolSummary(toolName, toolArgs))}
             </span>
-          </div>
+          </summary>
           ${bodyContent}
         `;
         modelDiv.appendChild(toolCard);
@@ -523,10 +531,34 @@ function appendStep(step) {
   const content = (step.content || '').trim();
   if (!content) return;
 
+  const label = `${stepType.toLowerCase().replace(/_/g, ' ')}: ${AgyFormat.firstLine(content)}`;
+  const body = document.createElement('div');
+  body.className = 'system-body';
+  body.textContent = content;
+
+  if (AgyFormat.isCollapsible(content)) {
+    chatContainer.appendChild(collapsed(label, body, 'message-system'));
+    return;
+  }
+
   const systemDiv = document.createElement('div');
   systemDiv.className = 'message-system';
-  systemDiv.textContent = `${stepType.toLowerCase().replace(/_/g, ' ')}: ${content}`;
+  systemDiv.textContent = label;
   chatContainer.appendChild(systemDiv);
+}
+
+// A <details> block: summary line visible, everything else one tap away. Native
+// disclosure rather than a hand-rolled toggle, so it stays keyboard- and
+// screenreader-operable for free.
+function collapsed(summaryText, bodyElement, className) {
+  const box = document.createElement('details');
+  box.className = className;
+
+  const summary = document.createElement('summary');
+  summary.textContent = summaryText;
+  box.appendChild(summary);
+  box.appendChild(bodyElement);
+  return box;
 }
 
 // Tool arguments, one per line. JSON.stringify of the whole object buried the
