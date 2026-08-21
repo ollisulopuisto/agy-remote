@@ -675,7 +675,28 @@ function toggleThinking(header) {
 
 // One delegated listener for dynamically-rendered controls, so no generated
 // markup needs an inline handler (which the CSP forbids).
-chatContainer.addEventListener('click', (e) => {
+chatContainer.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest('.copy-code-btn');
+  if (copyBtn) {
+    const textToCopy = copyBtn.getAttribute('data-copy');
+    if (textToCopy && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        triggerVibrate(20);
+        const originalText = copyBtn.textContent;
+        copyBtn.textContent = '✓ Copied';
+        copyBtn.style.color = 'var(--success)';
+        setTimeout(() => {
+          copyBtn.textContent = originalText;
+          copyBtn.style.color = '';
+        }, 1800);
+      } catch (err) {
+        console.warn('Copy failed:', err);
+      }
+    }
+    return;
+  }
+
   const header = e.target.closest('[data-toggle="thinking"]');
   if (header) {
     toggleThinking(header);
@@ -803,8 +824,11 @@ function renderMarkdown(text) {
   const codeBlocks = [];
   // Stash fenced code first so its contents are never treated as markup.
   let out = String(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const cleanCode = code.replace(/\n$/, '');
     const i = codeBlocks.push(
-      `<pre class="md-code"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`
+      `<div class="code-block-wrapper">` +
+      `<button class="copy-code-btn" data-copy="${escapeHtml(cleanCode)}" title="Copy code">Copy</button>` +
+      `<pre class="md-code"><code>${escapeHtml(cleanCode)}</code></pre></div>`
     ) - 1;
     return `\u0000CODE${i}\u0000`;
   });
@@ -905,6 +929,32 @@ function closeDrawer() {
   drawerBackdrop.classList.remove('open');
 }
 
+// Mobile Visual Viewport Handling (iOS & Android virtual keyboard)
+function syncViewportHeight() {
+  if (window.visualViewport) {
+    const height = window.visualViewport.height;
+    document.documentElement.style.setProperty('--app-height', `${height}px`);
+  } else {
+    document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+  }
+}
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    syncViewportHeight();
+    if (autoScroll) scrollToBottom();
+  });
+  window.visualViewport.addEventListener('scroll', () => {
+    // Prevent iOS rubberband scroll from shifting the fixed UI out of view
+    window.scrollTo(0, 0);
+  });
+}
+window.addEventListener('resize', syncViewportHeight);
+window.addEventListener('orientationchange', () => {
+  setTimeout(syncViewportHeight, 200);
+});
+syncViewportHeight();
+
 // Event Listeners
 sendBtn.addEventListener('click', () => sendPrompt());
 
@@ -916,9 +966,32 @@ promptInput.addEventListener('keydown', (e) => {
 });
 
 promptInput.addEventListener('input', autoResizeInput);
+promptInput.addEventListener('focus', () => {
+  setTimeout(() => {
+    syncViewportHeight();
+    if (autoScroll) scrollToBottom();
+  }, 300);
+});
+
 menuBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
 drawerBackdrop.addEventListener('click', closeDrawer);
+
+// Swipe gesture to close drawer
+let drawerTouchStartX = 0;
+let drawerTouchStartY = 0;
+drawer.addEventListener('touchstart', (e) => {
+  drawerTouchStartX = e.touches[0].clientX;
+  drawerTouchStartY = e.touches[0].clientY;
+}, { passive: true });
+
+drawer.addEventListener('touchend', (e) => {
+  const diffX = e.changedTouches[0].clientX - drawerTouchStartX;
+  const diffY = e.changedTouches[0].clientY - drawerTouchStartY;
+  if (diffX < -50 && Math.abs(diffX) > Math.abs(diffY)) {
+    closeDrawer();
+  }
+}, { passive: true });
 
 // Quick Action Chips: either a named keypress or a literal slash command.
 document.querySelectorAll('.chip-btn').forEach(btn => {
