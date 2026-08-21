@@ -1,5 +1,18 @@
 # Changelog
 
+## v26.08.22.18 — Tailscale found wherever it lives
+
+- **HTTPS silently degraded when `tailscale` was not on PATH.** The macOS app
+  bundle, Homebrew, Flatpak, and Snap all put the CLI somewhere a plain
+  `tailscale` lookup may miss, and without it no certificate could be issued —
+  the server fell back to plain HTTP and the phone lost Web Crypto. The binary
+  is now discovered across the standard install locations, with an explicit
+  override via `--tailscale-path` (alias `--tailscale-bin`) on `run`/`serve`
+  or the `AGY_REMOTE_TAILSCALE_BIN` environment variable.
+- Discovery order: explicit flag → environment variables → `PATH` → known
+  locations. A configured path that does not exist or is not executable warns
+  and degrades instead of crashing.
+
 ## v26.08.22.17 — Expiry also ends live connections
 
 - Closes the edge left in v26.08.22.16: a WebSocket authenticated before the
