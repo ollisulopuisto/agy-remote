@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,60 @@ logger = logging.getLogger("agy_remote.config")
 RUNTIME_STATE_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-session.json"
 CREDENTIALS_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-credentials.json"
 
+#: Standard locations where Tailscale CLI binary is typically installed across platforms.
+TAILSCALE_SEARCH_LOCATIONS: list[Path] = [
+    # macOS application bundle locations
+    Path("/Applications/Tailscale.app/Contents/MacOS/Tailscale"),
+    Path("/Applications/Tailscale.app/Contents/Resources/tailscale"),
+    Path.home() / "Applications" / "Tailscale.app" / "Contents" / "MacOS" / "Tailscale",
+    # Homebrew & standard Unix locations
+    Path("/opt/homebrew/bin/tailscale"),
+    Path("/usr/local/bin/tailscale"),
+    Path("/usr/bin/tailscale"),
+    Path("/usr/sbin/tailscale"),
+    Path.home() / ".local" / "bin" / "tailscale",
+    # Linux packages (Flatpak, Snap, etc.)
+    Path("/var/lib/flatpak/exports/bin/tailscale"),
+    Path.home() / ".local" / "share" / "flatpak" / "exports" / "bin" / "tailscale",
+    Path("/snap/bin/tailscale"),
+]
+
+
+def find_tailscale_binary(custom_path: str | Path | None = None) -> str | None:
+    """Find the Tailscale CLI executable from custom path, env var, PATH, or standard locations."""
+    if custom_path:
+        str_path = str(custom_path)
+        if os.sep not in str_path and (os.altsep is None or os.altsep not in str_path):
+            found = shutil.which(str_path)
+            if found:
+                return found
+        p = Path(custom_path).expanduser()
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+        logger.warning("Specified Tailscale binary does not exist or is not executable: %s", custom_path)
+        return None
+
+    for env_var in ("AGY_REMOTE_TAILSCALE_BIN", "AGY_REMOTE_TAILSCALE_PATH", "TAILSCALE_BIN"):
+        val = os.environ.get(env_var)
+        if val:
+            p = Path(val).expanduser()
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
+
+    found = shutil.which("tailscale")
+    if found:
+        return found
+
+    for loc in TAILSCALE_SEARCH_LOCATIONS:
+        try:
+            loc_expanded = loc.expanduser()
+            if loc_expanded.is_file() and os.access(loc_expanded, os.X_OK):
+                return str(loc_expanded)
+        except OSError:
+            continue
+
+    return None
+
 
 def get_default_brain_dir() -> Path:
     """Find the default brain directory used by Antigravity CLI."""
@@ -42,11 +97,14 @@ def get_default_brain_dir() -> Path:
     return home / ".gemini" / "antigravity-cli" / "brain"
 
 
-def get_tailscale_ip() -> str | None:
+def get_tailscale_ip(tailscale_bin: str | Path | None = None) -> str | None:
     """Attempt to detect the local machine's Tailscale IPv4 address."""
+    binary = find_tailscale_binary(tailscale_bin)
+    if not binary:
+        return None
     try:
         res = subprocess.run(
-            ["tailscale", "ip", "-4"],
+            [binary, "ip", "-4"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -139,11 +197,14 @@ def parse_tailscale_dns_name(status_json: str) -> str | None:
     return name.rstrip(".") or None
 
 
-def get_tailscale_dns_name() -> str | None:
+def get_tailscale_dns_name(tailscale_bin: str | Path | None = None) -> str | None:
     """This node's MagicDNS name, needed to request a TLS certificate."""
+    binary = find_tailscale_binary(tailscale_bin)
+    if not binary:
+        return None
     try:
         res = subprocess.run(
-            ["tailscale", "status", "--json"],
+            [binary, "status", "--json"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -161,7 +222,11 @@ class TailscaleCertError(RuntimeError):
     """Raised when a Tailscale TLS certificate could not be obtained."""
 
 
-def ensure_tailscale_cert(dns_name: str, cert_dir: Path | None = None) -> tuple[Path, Path]:
+def ensure_tailscale_cert(
+    dns_name: str,
+    cert_dir: Path | None = None,
+    tailscale_bin: str | Path | None = None,
+) -> tuple[Path, Path]:
     """Fetch (or refresh) a Let's Encrypt certificate for this tailnet node.
 
     Browsers only expose Web Crypto in a secure context, so HTTPS is what makes
@@ -172,6 +237,10 @@ def ensure_tailscale_cert(dns_name: str, cert_dir: Path | None = None) -> tuple[
     Raises:
         TailscaleCertError: if the certificate could not be issued.
     """
+    binary = find_tailscale_binary(tailscale_bin)
+    if not binary:
+        raise TailscaleCertError("Tailscale CLI executable not found.")
+
     cert_dir = cert_dir or TLS_DIR
     cert_dir.mkdir(parents=True, exist_ok=True)
     cert_path = cert_dir / f"{dns_name}.crt"
@@ -180,7 +249,7 @@ def ensure_tailscale_cert(dns_name: str, cert_dir: Path | None = None) -> tuple[
     try:
         res = subprocess.run(
             [
-                "tailscale",
+                binary,
                 "cert",
                 "--cert-file",
                 str(cert_path),
@@ -194,12 +263,12 @@ def ensure_tailscale_cert(dns_name: str, cert_dir: Path | None = None) -> tuple[
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        raise TailscaleCertError(f"Could not run `tailscale cert`: {e}") from e
+        raise TailscaleCertError(f"Could not run `{binary} cert`: {e}") from e
 
     if res.returncode != 0 or not cert_path.exists() or not key_path.exists():
         detail = (res.stderr or res.stdout or "").strip()
         raise TailscaleCertError(
-            f"`tailscale cert` failed for {dns_name}.\n{detail}\n"
+            f"`{binary} cert` failed for {dns_name}.\n{detail}\n"
             "HTTPS certificates must be enabled for your tailnet in the admin "
             "console (DNS -> HTTPS Certificates)."
         )
@@ -294,12 +363,17 @@ class RemoteConfig(BaseModel):
     e2ee_enabled: bool = True
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
-    tailscale_ip: str | None = Field(default_factory=get_tailscale_ip)
+    tailscale_bin: str | None = Field(default_factory=find_tailscale_binary)
+    tailscale_ip: str | None = None
     tailscale_dns_name: str | None = None
     lan_ip: str = Field(default_factory=get_lan_ip)
     hostname: str = Field(default_factory=get_hostname)
     tls_cert: Path | None = None
     tls_key: Path | None = None
+
+    def model_post_init(self, __context: object) -> None:
+        if "tailscale_ip" not in self.model_fields_set:
+            self.tailscale_ip = get_tailscale_ip(self.tailscale_bin)
 
     @property
     def tls_enabled(self) -> bool:
@@ -372,7 +446,7 @@ class RemoteConfig(BaseModel):
 config_instance: RemoteConfig | None = None
 
 
-def get_config() -> RemoteConfig:
+def get_config(tailscale_bin: str | Path | None = None) -> RemoteConfig:
     """Get global configuration singleton."""
     global config_instance
     if config_instance is None:
@@ -400,6 +474,8 @@ def get_config() -> RemoteConfig:
             "enable_auth": not no_auth,
             "e2ee_enabled": not no_e2ee,
         }
+        if tailscale_bin:
+            kwargs["tailscale_bin"] = str(tailscale_bin)
         stored = load_or_create_credentials()
         kwargs["auth_token"] = token or stored["auth_token"]
         kwargs["e2ee_key"] = e2ee_key or stored["e2ee_key"]
@@ -408,6 +484,9 @@ def get_config() -> RemoteConfig:
             kwargs["credentials_expire_at"] = stored["expires_at"]
 
         config_instance = RemoteConfig(**kwargs)
+    elif tailscale_bin:
+        config_instance.tailscale_bin = str(tailscale_bin)
+        config_instance.tailscale_ip = get_tailscale_ip(tailscale_bin)
     return config_instance
 
 

@@ -218,3 +218,106 @@ def test_an_explicit_env_token_has_no_deadline(monkeypatch, tmp_path: Path):
 def test_ttl_zero_produces_no_deadline(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("AGY_REMOTE_CREDENTIAL_TTL_DAYS", "0")
     assert _fresh_config(monkeypatch, tmp_path).credentials_expire_at is None
+
+
+def test_find_tailscale_binary_explicit(tmp_path: Path):
+    from agy_remote.config import find_tailscale_binary
+
+    fake_ts = tmp_path / "tailscale"
+    fake_ts.write_text("#!/bin/sh\necho ok\n")
+    fake_ts.chmod(0o755)
+
+    assert find_tailscale_binary(str(fake_ts)) == str(fake_ts)
+    assert find_tailscale_binary(tmp_path / "nonexistent") is None
+
+
+def test_find_tailscale_binary_env_var(monkeypatch, tmp_path: Path):
+    from agy_remote.config import find_tailscale_binary
+
+    fake_ts = tmp_path / "tailscale"
+    fake_ts.write_text("#!/bin/sh\necho ok\n")
+    fake_ts.chmod(0o755)
+
+    monkeypatch.setenv("AGY_REMOTE_TAILSCALE_BIN", str(fake_ts))
+    assert find_tailscale_binary() == str(fake_ts)
+
+
+def test_find_tailscale_binary_fallback_locations(monkeypatch, tmp_path: Path):
+    from agy_remote import config as config_mod
+
+    monkeypatch.delenv("AGY_REMOTE_TAILSCALE_BIN", raising=False)
+    monkeypatch.delenv("AGY_REMOTE_TAILSCALE_PATH", raising=False)
+    monkeypatch.setattr(config_mod.shutil, "which", lambda cmd: None)
+
+    fake_app_ts = tmp_path / "Applications" / "Tailscale.app" / "Contents" / "MacOS" / "Tailscale"
+    fake_app_ts.parent.mkdir(parents=True, exist_ok=True)
+    fake_app_ts.write_text("#!/bin/sh\necho ok\n")
+    fake_app_ts.chmod(0o755)
+
+    monkeypatch.setattr(config_mod, "TAILSCALE_SEARCH_LOCATIONS", [fake_app_ts])
+    assert config_mod.find_tailscale_binary() == str(fake_app_ts)
+
+
+def test_get_tailscale_ip_and_dns_with_custom_bin(monkeypatch, tmp_path: Path):
+    import subprocess
+
+    from agy_remote.config import ensure_tailscale_cert, get_tailscale_dns_name, get_tailscale_ip
+
+    fake_ts = tmp_path / "custom_tailscale"
+    fake_ts.write_text("#!/bin/sh\necho ok\n")
+    fake_ts.chmod(0o755)
+
+    called_cmds = []
+
+    def fake_run(cmd, **kwargs):
+        called_cmds.append(cmd)
+        if "ip" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="100.80.90.100\n", stderr="")
+        if "status" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout='{"Self":{"DNSName":"my-node.ts.net."}}', stderr="")
+        if "cert" in cmd:
+            cert_file = Path(cmd[cmd.index("--cert-file") + 1])
+            key_file = Path(cmd[cmd.index("--key-file") + 1])
+            cert_file.write_text("CERT")
+            key_file.write_text("KEY")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="error")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ip = get_tailscale_ip(tailscale_bin=str(fake_ts))
+    assert ip == "100.80.90.100"
+    assert called_cmds[-1][0] == str(fake_ts)
+
+    dns = get_tailscale_dns_name(tailscale_bin=str(fake_ts))
+    assert dns == "my-node.ts.net"
+    assert called_cmds[-1][0] == str(fake_ts)
+
+    cert, key = ensure_tailscale_cert("my-node.ts.net", cert_dir=tmp_path, tailscale_bin=str(fake_ts))
+    assert cert.exists() and key.exists()
+    assert called_cmds[-1][0] == str(fake_ts)
+
+
+def test_cli_options_accept_tailscale_path(monkeypatch, tmp_path: Path):
+    from click.testing import CliRunner
+
+    from agy_remote import config as config_mod
+    from agy_remote.cli import cli
+
+    fake_ts = tmp_path / "custom_tailscale"
+    fake_ts.write_text("#!/bin/sh\necho ok\n")
+    fake_ts.chmod(0o755)
+
+    monkeypatch.setattr(config_mod, "CREDENTIALS_FILE", tmp_path / "credentials.json")
+    monkeypatch.setattr(config_mod, "config_instance", None)
+
+    runner = CliRunner()
+    # Test --help contains --tailscale-path
+    res_serve = runner.invoke(cli, ["serve", "--help"])
+    assert "--tailscale-path" in res_serve.output
+    assert "--tailscale-bin" in res_serve.output
+
+    res_run = runner.invoke(cli, ["run", "--help"])
+    assert "--tailscale-path" in res_run.output
+    assert "--tailscale-bin" in res_run.output
+

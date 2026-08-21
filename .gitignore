@@ -39,11 +39,14 @@ htmlcov/
 access.json
 config.yaml
 
-# IDE
+# IDE & backups
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+*.bak
+*.backup
 .DS_Store
 
 # App uploads & local keys

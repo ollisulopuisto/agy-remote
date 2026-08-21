@@ -107,11 +107,11 @@ def _setup_tls(cfg: RemoteConfig, tls: bool | None) -> None:
     if tls is False:
         return
 
-    dns_name = get_tailscale_dns_name()
+    dns_name = get_tailscale_dns_name(cfg.tailscale_bin)
     if not dns_name:
         message = (
-            "Tailscale is not running, so no HTTPS certificate can be issued.\n"
-            "  Start it with:  sudo brew services start tailscale && sudo tailscale up"
+            "Tailscale is not running or CLI not found, so no HTTPS certificate can be issued.\n"
+            "  Start it or supply --tailscale-path / --tailscale-bin if installed in a custom path."
         )
         if tls:
             console.print(f"[bold red]--tls requested but unavailable:[/bold red] {message}")
@@ -121,7 +121,7 @@ def _setup_tls(cfg: RemoteConfig, tls: bool | None) -> None:
         return
 
     try:
-        cert, key = ensure_tailscale_cert(dns_name)
+        cert, key = ensure_tailscale_cert(dns_name, tailscale_bin=cfg.tailscale_bin)
     except TailscaleCertError as e:
         if tls:
             console.print(f"[bold red]Could not obtain a certificate:[/bold red] {e}")
@@ -177,6 +177,13 @@ def cli() -> None:
     help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
 )
 @click.option(
+    "--tailscale-path",
+    "--tailscale-bin",
+    "tailscale_bin",
+    default=None,
+    help="Custom path to Tailscale CLI executable",
+)
+@click.option(
     "--brain-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -194,13 +201,14 @@ def serve(
     no_auth: bool,
     no_e2ee: bool,
     tls: bool | None,
+    tailscale_bin: str | None,
     brain_dir: Path | None,
     rotate_token: bool,
 ) -> None:
     """Start the agy-remote server and watch active sessions."""
     if rotate_token:
         rotate_credentials()
-    cfg = get_config()
+    cfg = get_config(tailscale_bin=tailscale_bin)
     cfg.port = port
     cfg.host = host
     if token:
@@ -241,6 +249,13 @@ def serve(
     help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
 )
 @click.option(
+    "--tailscale-path",
+    "--tailscale-bin",
+    "tailscale_bin",
+    default=None,
+    help="Custom path to Tailscale CLI executable",
+)
+@click.option(
     "--rotate-token",
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
@@ -255,12 +270,13 @@ def run(
     no_auth: bool,
     no_e2ee: bool,
     tls: bool | None,
+    tailscale_bin: str | None,
     rotate_token: bool,
 ) -> None:
     """Launch agy CLI inside supervisor with simultaneous desktop & mobile control."""
     if rotate_token:
         rotate_credentials()
-    cfg = get_config()
+    cfg = get_config(tailscale_bin=tailscale_bin)
     cfg.port = port
     cfg.host = host
     if token:
