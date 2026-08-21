@@ -1,10 +1,11 @@
 [project]
 name = "agy-remote"
-version = "26.8.22.12"
+version = "26.8.22.13"
 description = "Mobile Remote Web Controller & PWA for Antigravity CLI (agy)"
 readme = "README.md"
+license = { file = "LICENSE" }
 authors = [
-    { email = "author@example.invalid" }
+    { name = "Olli Sulopuisto" }
 ]
 requires-python = ">=3.13"
 dependencies = [

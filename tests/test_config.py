@@ -1,5 +1,6 @@
 """Unit tests for configuration module."""
 
+import json
 from pathlib import Path
 
 from agy_remote.config import RemoteConfig
@@ -120,6 +121,67 @@ def test_explicit_env_token_overrides_the_store(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(config_mod, "config_instance", None)
     monkeypatch.setenv("AGY_REMOTE_TOKEN", "explicit-token")
     assert config_mod.get_config().auth_token == "explicit-token"
+
+
+def test_credentials_expire_after_their_ttl(monkeypatch, tmp_path: Path):
+    """A pairing URL is a durable secret; age must eventually invalidate it.
+
+    The store made the token long-lived, which quietly turned every phone
+    bookmark into a credential that never expires. A leaked QR screenshot or a
+    lost phone should not stay a way in forever.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from agy_remote import config as config_mod
+
+    before = _fresh_config(monkeypatch, tmp_path)
+
+    # Age the stored credentials past the TTL.
+    store = tmp_path / "credentials.json"
+    data = json.loads(store.read_text())
+    data["created_at"] = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
+    store.write_text(json.dumps(data))
+
+    after = _fresh_config(monkeypatch, tmp_path)
+    assert after.auth_token != before.auth_token
+    assert after.e2ee_key != before.e2ee_key
+
+
+def test_credentials_within_ttl_are_kept(monkeypatch, tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    before = _fresh_config(monkeypatch, tmp_path)
+    store = tmp_path / "credentials.json"
+    data = json.loads(store.read_text())
+    data["created_at"] = (datetime.now(timezone.utc) - timedelta(days=29)).isoformat()
+    store.write_text(json.dumps(data))
+
+    assert _fresh_config(monkeypatch, tmp_path).auth_token == before.auth_token
+
+
+def test_ttl_zero_means_credentials_never_expire(monkeypatch, tmp_path: Path):
+    from datetime import datetime, timedelta, timezone
+
+    before = _fresh_config(monkeypatch, tmp_path)
+    store = tmp_path / "credentials.json"
+    data = json.loads(store.read_text())
+    data["created_at"] = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+    store.write_text(json.dumps(data))
+
+    monkeypatch.setenv("AGY_REMOTE_CREDENTIAL_TTL_DAYS", "0")
+    assert _fresh_config(monkeypatch, tmp_path).auth_token == before.auth_token
+
+
+def test_a_legacy_store_without_a_birthdate_is_stamped_not_discarded(monkeypatch, tmp_path: Path):
+    """Existing pairings must survive the upgrade; the clock starts now."""
+    before = _fresh_config(monkeypatch, tmp_path)
+    store = tmp_path / "credentials.json"
+    data = json.loads(store.read_text())
+    del data["created_at"]
+    store.write_text(json.dumps(data))
+
+    assert _fresh_config(monkeypatch, tmp_path).auth_token == before.auth_token
+    assert "created_at" in json.loads(store.read_text())
 
 
 def test_rotate_credentials_issues_new_ones(monkeypatch, tmp_path: Path):

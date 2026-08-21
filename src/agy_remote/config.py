@@ -10,6 +10,7 @@ import re
 import secrets
 import socket
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -397,13 +398,29 @@ def get_config() -> RemoteConfig:
     return config_instance
 
 
+#: How long a pairing stays valid. The stored token turned every phone bookmark
+#: into a credential that never expires; a leaked QR screenshot or a lost phone
+#: should not stay a way in forever. 0 disables expiry.
+DEFAULT_CREDENTIAL_TTL_DAYS = 30
+
+
+def credential_ttl_days() -> int:
+    """The configured pairing lifetime, in days."""
+    try:
+        return int(os.environ.get("AGY_REMOTE_CREDENTIAL_TTL_DAYS", DEFAULT_CREDENTIAL_TTL_DAYS))
+    except ValueError:
+        return DEFAULT_CREDENTIAL_TTL_DAYS
+
+
 def load_or_create_credentials() -> dict[str, str]:
-    """Return this host's long-lived token and E2EE key, minting them once.
+    """Return this host's token and E2EE key, minting them once and expiring by age.
 
     Both were previously regenerated on every launch, so each restart silently
     invalidated the URL saved on the phone: the QR had to be rescanned, and any
     bookmark or installed PWA came back with a dead token. They are properties
-    of the host, not of a process, so they are kept on disk and reused.
+    of the host, not of a process, so they are kept on disk and reused -- but a
+    pairing URL is a durable secret, so it expires after `credential_ttl_days()`
+    and the next launch re-pairs with a fresh QR.
 
     Owner-only, like the runtime state: the token is equivalent to shell access
     on this machine, and the key decrypts every payload the phone ever sees.
@@ -412,16 +429,42 @@ def load_or_create_credentials() -> dict[str, str]:
         with open(CREDENTIALS_FILE, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict) and data.get("auth_token") and data.get("e2ee_key"):
-            return {"auth_token": str(data["auth_token"]), "e2ee_key": str(data["e2ee_key"])}
+            if "created_at" not in data:
+                # A store from before expiry existed: keep the pairing alive
+                # and start its clock now.
+                data["created_at"] = datetime.now(timezone.utc).isoformat()
+                _write_credentials(data)
+
+            if not _credentials_expired(data.get("created_at")):
+                return {"auth_token": str(data["auth_token"]), "e2ee_key": str(data["e2ee_key"])}
+            logger.info("Stored credentials are older than %s days; issuing new ones", credential_ttl_days())
     except (OSError, json.JSONDecodeError) as e:
         logger.debug("Could not read stored credentials: %s", e)
 
     credentials = {
         "auth_token": secrets.token_urlsafe(16),
         "e2ee_key": generate_e2ee_key(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     _write_credentials(credentials)
-    return credentials
+    return {"auth_token": credentials["auth_token"], "e2ee_key": credentials["e2ee_key"]}
+
+
+def _credentials_expired(created_at: str | None) -> bool:
+    """Whether a pairing minted at `created_at` has outlived the TTL."""
+    ttl_days = credential_ttl_days()
+    if ttl_days <= 0:
+        return False
+
+    try:
+        born = datetime.fromisoformat(str(created_at))
+    except (ValueError, TypeError):
+        # An unreadable birthdate on a secret defaults to expired, not eternal.
+        return True
+
+    if born.tzinfo is None:
+        born = born.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - born > timedelta(days=ttl_days)
 
 
 def _write_credentials(credentials: dict[str, str]) -> None:

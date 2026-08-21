@@ -1,5 +1,18 @@
 # Changelog
 
+## v26.08.22.13 — Pairings expire, and a license
+
+- **A pairing URL never expired.** The credential store (v26.08.22.5) made the
+  token long-lived, which quietly turned every phone bookmark into a credential
+  valid forever — a leaked QR screenshot or a lost phone stayed a way in until
+  someone remembered `--rotate-token`. Credentials now carry their mint date and
+  expire after 30 days (`AGY_REMOTE_CREDENTIAL_TTL_DAYS`, `0` to disable); the
+  next launch re-pairs with a fresh QR. A store from before expiry existed is
+  stamped rather than discarded, so existing pairings survive the upgrade, and
+  an unreadable birthdate counts as expired, not eternal.
+- MIT license added; author contact and a real LAN address scrubbed from
+  metadata and test fixtures ahead of publishing.
+
 ## v26.08.22.12 — A new session looks like a new session
 
 - **Every fresh session read as a continuation of the last one.** agy opens each

@@ -238,7 +238,11 @@ uv run agy-remote push-test "Test alert from agy-remote"
 The token and encryption key are minted once and kept in
 `~/.gemini/antigravity-cli/agy-remote-credentials.json` (owner-only), so the URL
 saved on your phone keeps working across restarts and `agy-remote run` needs no
-arguments. `--rotate-token` issues new ones and revokes every paired device.
+arguments. `--rotate-token` issues new ones and revokes every paired device. Pairings also
+expire on their own after **30 days** (`AGY_REMOTE_CREDENTIAL_TTL_DAYS`; `0`
+disables expiry): a pairing URL is a durable secret, and a leaked QR screenshot
+or a lost phone should not stay a way in forever. After expiry the next launch
+prints a fresh QR to re-scan.
 
 **Anyone who can reach this server and holds the token can run arbitrary code on your machine** — prompts are injected straight into your live `agy` session. Treat the token like an SSH key.
 
