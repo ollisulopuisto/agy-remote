@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .config import RemoteConfig, get_config
+from .crypto import ReplayGuard, decode_key, encrypt_payload
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
@@ -35,6 +36,29 @@ class SessionManager:
         self._approval_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._watcher_task: asyncio.Task[None] | None = None
         self._running: bool = False
+
+        # Key material for sealing every frame we put on the wire. Derived once
+        # so a malformed key fails loudly at startup rather than per-message.
+        self._key_bytes: bytes | None = None
+        if self.config.e2ee_enabled:
+            self._key_bytes = decode_key(self.config.e2ee_key)
+        #: Nonce cache for envelopes arriving *from* clients.
+        self.replay_guard = ReplayGuard()
+
+    def seal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Wrap an outbound payload in an AES-GCM envelope when E2EE is on.
+
+        Every server-to-client frame goes through here. Transcript content,
+        tool arguments and diffs are the most sensitive data this app handles,
+        so none of it may reach the socket in cleartext.
+        """
+        if self._key_bytes is None:
+            return payload
+        return encrypt_payload(payload, self._key_bytes)
+
+    async def send_to(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
+        """Seal and deliver a single payload to one client."""
+        await websocket.send_json(self.seal(payload))
 
     async def start(self) -> None:
         """Start the session manager and background watcher loop."""
@@ -210,7 +234,7 @@ class SessionManager:
             },
         }
         try:
-            await websocket.send_json(init_data)
+            await websocket.send_json(self.seal(init_data))
         except Exception as e:
             logger.debug("Failed sending init payload to websocket: %s", e)
 
@@ -223,10 +247,13 @@ class SessionManager:
         if not self._connected_clients:
             return
 
+        # Seal once and reuse: every client shares the same pre-shared key.
+        envelope = self.seal(payload)
+
         to_remove = set()
         for ws in self._connected_clients:
             try:
-                await ws.send_json(payload)
+                await ws.send_json(envelope)
             except Exception:
                 to_remove.add(ws)
 

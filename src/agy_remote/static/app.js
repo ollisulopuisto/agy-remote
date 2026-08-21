@@ -28,6 +28,17 @@ if (e2eeKeyBase64) {
   localStorage.setItem('agy_e2ee_key', e2eeKeyBase64);
 }
 
+// Both credentials are now in localStorage, so scrub them out of the visible
+// URL: the token would otherwise sit in browser history, in the address bar
+// over someone's shoulder, and in any Referer this page emits.
+if (urlParams.get('token') || window.location.hash.includes('key=')) {
+  try {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  } catch (e) {
+    console.debug('Could not scrub credentials from URL:', e);
+  }
+}
+
 // DOM Elements
 const chatContainer = document.getElementById('chatContainer');
 const promptInput = document.getElementById('promptInput');
@@ -48,8 +59,77 @@ const menuBtn = document.getElementById('menuBtn');
 const closeDrawerBtn = document.getElementById('closeDrawerBtn');
 
 // ----------------------------------------------------------------------------
-// Web Crypto API (Client-side AES-256-GCM E2EE)
+// Web Crypto API (AES-256-GCM payload encryption)
+//
+// Envelope v1: { encrypted, v, ts, nonce, data }
+// `ts` is bound as GCM additional-authenticated-data and every accepted nonce
+// is remembered, so a captured frame cannot be replayed back at either side.
 // ----------------------------------------------------------------------------
+const E2EE_VERSION = 1;
+const E2EE_MAX_AGE_SECONDS = 300;
+const seenNonces = new Map();
+
+function envelopeAad(ts) {
+  return new TextEncoder().encode(`agy-remote/v${E2EE_VERSION}/${ts}`);
+}
+
+function checkReplay(nonceB64, ts) {
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - ts) > E2EE_MAX_AGE_SECONDS) {
+    throw new Error(`stale envelope (ts=${ts})`);
+  }
+  if (seenNonces.has(nonceB64)) {
+    throw new Error('replayed envelope nonce');
+  }
+  if (seenNonces.size > 512) {
+    const cutoff = now - E2EE_MAX_AGE_SECONDS;
+    for (const [n, t] of seenNonces) {
+      if (t < cutoff) seenNonces.delete(n);
+    }
+  }
+  seenNonces.set(nonceB64, ts);
+}
+
+function b64encode(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+// Web Crypto is gated on secure contexts: https:// or localhost only. Over
+// plain http:// to a LAN or tailnet address the API simply does not exist, so
+// there is no way to decrypt anything. Say so plainly rather than failing with
+// an opaque "frame rejected".
+function cryptoUnavailableReason() {
+  if (!e2eeKeyBase64) return 'No encryption key in this link. Re-scan the QR code.';
+  if (!window.crypto?.subtle) {
+    return window.isSecureContext
+      ? 'This browser does not provide the Web Crypto API.'
+      : 'Encryption needs HTTPS. This page was loaded over plain http://, where '
+        + 'browsers disable the Web Crypto API entirely. Restart agy-remote with '
+        + 'Tailscale HTTPS, or set AGY_REMOTE_NO_E2EE=1 to run without encryption.';
+  }
+  return null;
+}
+
+function showBlockingNotice(text) {
+  statusBadge.className = 'status-badge disconnected';
+  statusText.textContent = 'Not encrypted';
+  sessionSubtitle.textContent = 'Cannot decrypt';
+  chatContainer.innerHTML = '';
+  const box = document.createElement('div');
+  box.style.cssText =
+    'margin:24px 12px;padding:16px;border:1px solid #f59e0b;border-radius:10px;'
+    + 'background:rgba(245,158,11,0.08);color:#fcd34d;font-size:13px;line-height:1.55;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:700;margin-bottom:8px;color:#fbbf24;';
+  title.textContent = 'Encrypted session cannot be opened';
+  const body = document.createElement('div');
+  body.textContent = text;
+  box.append(title, body);
+  chatContainer.appendChild(box);
+}
+
 async function initCrypto() {
   if (!e2eeKeyBase64 || !window.crypto?.subtle) return;
   try {
@@ -57,6 +137,7 @@ async function initCrypto() {
     let b64 = e2eeKeyBase64.replace(/-/g, '+').replace(/_/g, '/');
     while (b64.length % 4) b64 += '=';
     const rawKey = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    if (rawKey.length !== 32) throw new Error(`key must be 32 bytes, got ${rawKey.length}`);
 
     cryptoKey = await window.crypto.subtle.importKey(
       'raw',
@@ -66,7 +147,8 @@ async function initCrypto() {
       ['encrypt', 'decrypt']
     );
   } catch (e) {
-    console.debug('E2EE key init error:', e);
+    console.warn('E2EE key init error:', e);
+    cryptoKey = null;
   }
 }
 
@@ -74,34 +156,42 @@ async function encryptData(obj) {
   if (!cryptoKey) return obj;
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
   const nonce = window.crypto.getRandomValues(new Uint8Array(12));
+  const ts = Math.floor(Date.now() / 1000);
   const ciphertext = await window.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce },
+    { name: 'AES-GCM', iv: nonce, additionalData: envelopeAad(ts) },
     cryptoKey,
     plaintext
   );
 
   return {
     encrypted: true,
-    nonce: btoa(String.fromCharCode(...nonce)),
-    data: btoa(String.fromCharCode(...new Uint8Array(ciphertext)))
+    v: E2EE_VERSION,
+    ts: ts,
+    nonce: b64encode(nonce),
+    data: b64encode(new Uint8Array(ciphertext))
   };
 }
 
 async function decryptData(envelope) {
-  if (!envelope || !envelope.encrypted || !cryptoKey) return envelope;
-  try {
-    const nonce = Uint8Array.from(atob(envelope.nonce), c => c.charCodeAt(0));
-    const data = Uint8Array.from(atob(envelope.data), c => c.charCodeAt(0));
-    const decrypted = await window.crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: nonce },
-      cryptoKey,
-      data
-    );
-    return JSON.parse(new TextDecoder().decode(decrypted));
-  } catch (e) {
-    console.warn('Decryption failed:', e);
-    return envelope;
+  if (!envelope || !envelope.encrypted) return envelope;
+  if (!cryptoKey) {
+    // Sealed frame with no key: surface it instead of rendering an envelope.
+    throw new Error('encrypted frame received but no E2EE key is loaded');
   }
+  if (envelope.v !== E2EE_VERSION) {
+    throw new Error(`unsupported envelope version ${envelope.v}`);
+  }
+
+  checkReplay(envelope.nonce, envelope.ts);
+
+  const nonce = Uint8Array.from(atob(envelope.nonce), c => c.charCodeAt(0));
+  const data = Uint8Array.from(atob(envelope.data), c => c.charCodeAt(0));
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonce, additionalData: envelopeAad(envelope.ts) },
+    cryptoKey,
+    data
+  );
+  return JSON.parse(new TextDecoder().decode(decrypted));
 }
 
 // ----------------------------------------------------------------------------
@@ -239,18 +329,21 @@ function renderAttachmentChips() {
   attachedFiles.forEach((f, idx) => {
     const chip = document.createElement('div');
     chip.className = 'attachment-chip';
-    chip.innerHTML = `
-      <span>📎 ${f.split('/').pop()}</span>
-      <span onclick="removeAttachment(${idx})" style="cursor: pointer; font-weight: bold;">✕</span>
-    `;
+    const label = document.createElement('span');
+    label.textContent = `📎 ${f.split('/').pop()}`;
+    const remove = document.createElement('span');
+    remove.textContent = '✕';
+    remove.style.cssText = 'cursor: pointer; font-weight: bold;';
+    remove.addEventListener('click', () => removeAttachment(idx));
+    chip.append(label, remove);
     attachmentsPreview.appendChild(chip);
   });
 }
 
-window.removeAttachment = function(idx) {
+function removeAttachment(idx) {
   attachedFiles.splice(idx, 1);
   renderAttachmentChips();
-};
+}
 
 // ----------------------------------------------------------------------------
 // WebSocket Connection
@@ -278,7 +371,10 @@ function connectWebSocket() {
       }
       handleServerEvent(payload);
     } catch (e) {
-      console.error('Error handling WS event:', e);
+      // Drop the frame: a failed tag check, a replay or a stale timestamp all
+      // mean this did not come from the server we paired with.
+      console.warn('Rejected WS frame:', e.message);
+      statusText.textContent = 'Frame rejected';
     }
   };
 
@@ -365,7 +461,7 @@ function appendStep(step) {
       const thinkingBox = document.createElement('div');
       thinkingBox.className = 'thinking-box';
       thinkingBox.innerHTML = `
-        <div class="thinking-header" onclick="toggleThinking(this)">
+        <div class="thinking-header" data-toggle="thinking">
           <span class="thinking-title">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
             Thinking Process
@@ -453,11 +549,11 @@ function renderApprovalBanner(app) {
     </div>
     <div class="approval-cmd">${escapeHtml(cmdText)}</div>
     <div class="approval-actions">
-      <button class="btn-approve" onclick="respondApproval('${app.id}', 'allow')">
+      <button class="btn-approve" data-approval-id="${escapeHtml(app.id)}" data-decision="allow">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
         Allow
       </button>
-      <button class="btn-deny" onclick="respondApproval('${app.id}', 'deny')">
+      <button class="btn-deny" data-approval-id="${escapeHtml(app.id)}" data-decision="deny">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         Deny
       </button>
@@ -468,7 +564,7 @@ function renderApprovalBanner(app) {
 }
 
 // Send Approval Response
-window.respondApproval = async function(approvalId, decision) {
+async function respondApproval(approvalId, decision) {
   triggerVibrate(40);
   const payload = {
     action: 'approve_tool',
@@ -478,10 +574,10 @@ window.respondApproval = async function(approvalId, decision) {
     const msg = cryptoKey ? await encryptData(payload) : payload;
     ws.send(JSON.stringify(msg));
   }
-};
+}
 
 // Toggle Thinking Section
-window.toggleThinking = function(header) {
+function toggleThinking(header) {
   const content = header.nextElementSibling;
   const arrow = header.querySelector('span:last-child');
   if (content.style.display === 'none') {
@@ -491,7 +587,21 @@ window.toggleThinking = function(header) {
     content.style.display = 'none';
     arrow.textContent = '▶';
   }
-};
+}
+
+// One delegated listener for dynamically-rendered controls, so no generated
+// markup needs an inline handler (which the CSP forbids).
+chatContainer.addEventListener('click', (e) => {
+  const header = e.target.closest('[data-toggle="thinking"]');
+  if (header) {
+    toggleThinking(header);
+    return;
+  }
+  const btn = e.target.closest('[data-approval-id]');
+  if (btn) {
+    respondApproval(btn.dataset.approvalId, btn.dataset.decision);
+  }
+});
 
 // Send Prompt
 async function sendPrompt(text) {
@@ -531,9 +641,59 @@ function scrollToBottom() {
   chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
+// Escape-first Markdown renderer.
+//
+// Model and tool output is attacker-influenceable: an agent that reads a web
+// page or a file can be induced to emit an XSS payload. Because the result of
+// this function is assigned to innerHTML, it MUST NOT be able to emit markup
+// that came from `text`. Everything is HTML-escaped up front, and only the
+// tags this function itself introduces can survive.
 function renderMarkdown(text) {
-  if (window.marked) return window.marked.parse(text);
-  return escapeHtml(text).replace(/\n/g, '<br/>');
+  if (!text) return '';
+
+  const codeBlocks = [];
+  // Stash fenced code first so its contents are never treated as markup.
+  let out = String(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = codeBlocks.push(
+      `<pre class="md-code"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`
+    ) - 1;
+    return `\u0000CODE${i}\u0000`;
+  });
+
+  out = escapeHtml(out);
+
+  const inline = [];
+  out = out.replace(/`([^`\n]+)`/g, (_, code) => {
+    const i = inline.push(`<code class="md-inline">${code}</code>`) - 1;
+    return `\u0000IC${i}\u0000`;
+  });
+
+  out = out
+    .replace(/^######\s+(.*)$/gm, '<h6>$1</h6>')
+    .replace(/^#####\s+(.*)$/gm, '<h5>$1</h5>')
+    .replace(/^####\s+(.*)$/gm, '<h4>$1</h4>')
+    .replace(/^###\s+(.*)$/gm, '<h3>$1</h3>')
+    .replace(/^##\s+(.*)$/gm, '<h2>$1</h2>')
+    .replace(/^#\s+(.*)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/^\s*[-*+]\s+(.*)$/gm, '<li>$1</li>')
+    .replace(/^\s*\d+\.\s+(.*)$/gm, '<li>$1</li>');
+
+  out = out.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m.replace(/\n/g, '')}</ul>`);
+
+  // Links: only http(s), and the href is rebuilt from an escaped, validated
+  // string so `javascript:` and friends can never appear.
+  out = out.replace(/\[([^\]\n]+)\]\((https?:&#x2F;&#x2F;[^)\s]+|https?:\/\/[^)\s]+)\)/g, (m, label, href) => {
+    const clean = href.replace(/&#x2F;/g, '/');
+    if (!/^https?:\/\//i.test(clean)) return m;
+    return `<a href="${escapeHtml(clean)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+
+  out = out.replace(/\n/g, '<br/>');
+  out = out.replace(/\u0000IC(\d+)\u0000/g, (_, i) => inline[Number(i)]);
+  out = out.replace(/(<br\/>)?\u0000CODE(\d+)\u0000/g, (_, br, i) => codeBlocks[Number(i)]);
+  return out;
 }
 
 function escapeHtml(str) {
@@ -635,5 +795,23 @@ if ('serviceWorker' in navigator) {
   setupSpeechRecognition();
   setupPushNotifications();
   setupAttachments();
+
+  // If the server is sealing frames we cannot open, connecting only produces a
+  // stream of rejections. Explain the cause instead.
+  let serverUsesE2ee = true;
+  try {
+    const res = await fetch(`/api/status?token=${encodeURIComponent(authToken)}`);
+    const status = await res.json();
+    serverUsesE2ee = status.e2ee_enabled !== false;
+  } catch (e) {
+    console.debug('Could not read server status:', e);
+  }
+
+  const reason = cryptoUnavailableReason();
+  if (serverUsesE2ee && reason) {
+    showBlockingNotice(reason);
+    return;
+  }
+
   connectWebSocket();
 })();

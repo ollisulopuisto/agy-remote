@@ -1,7 +1,7 @@
 # 🚀 agy-remote
 
-> **Self-Hosted, End-to-End Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`)**  
-> Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, client-side AES-256-GCM encryption, self-hosted Web Push alerts, persistent `tmux` execution, collapsible reasoning, one-tap tool approvals, and voice dictation.
+> **Self-Hosted, Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`)**  
+> Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, self-hosted Web Push alerts, persistent `tmux` execution, collapsible reasoning, one-tap tool approvals, and voice dictation.
 
 ---
 
@@ -31,9 +31,9 @@
 When running autonomous coding agents like Antigravity CLI (`agy`), tasks frequently involve multi-step file edits, automated tests, and tool permission gates that take minutes to complete. Staying tethered to your desk or using awkward mobile SSH clients (where monospace terminals break text wrapping on narrow phone screens and soft keyboards make tool approvals painful) is suboptimal.
 
 **`agy-remote`** bridges your local desktop session to a rich, responsive **Progressive Web App (PWA)** on your phone:
-- **Zero Cloud Dependence**: 100% self-hosted on your machine.
-- **End-to-End Encrypted**: AES-256-GCM encryption with cryptographic keys shared exclusively via URL hash fragments (`#key=...`).
-- **First-Class Mobile UX**: Native mobile text wrapping, collapsible thinking accordions, syntax-highlighted diffs, voice dictation, and one-tap tool approval banners.
+- **Zero Cloud Dependence**: 100% self-hosted, and the PWA loads no third-party scripts — it works on an air-gapped tailnet.
+- **Encrypted Payloads**: AES-256-GCM on every WebSocket frame with replay protection, keyed by a secret shared via the URL hash (`#key=...`). See [Security](#-security--cryptography) for what this does and does not protect.
+- **First-Class Mobile UX**: Native mobile text wrapping, collapsible thinking accordions, colored diffs, voice dictation, and one-tap tool approval banners.
 
 ---
 
@@ -79,13 +79,13 @@ flowchart TD
 
 ## ✨ Key Features
 
-- 🔐 **End-to-End Encryption (E2EE)**: Full 256-bit AES-GCM envelope encryption. Keys are placed inside the browser's `#key=...` URL hash fragment, ensuring that network proxies or intermediate nodes never see the encryption key.
+- 🔐 **Payload Encryption**: Every WebSocket frame in both directions is sealed with 256-bit AES-GCM, with replay protection. The key travels in the `#key=...` URL hash, which browsers never send to the server, and is scrubbed from the address bar on load. See [Security](#-security--cryptography) for the precise threat model.
 - 🔔 **Self-Hosted Web Push Notifications**: Native iOS & Android lock-screen push alerts via local VAPID keys whenever `agy` needs tool approval or completes a task.
 - 🔄 **tmux Session Persistence**: Keep sessions running in the background across laptop sleep, screen locks, or closed terminals (`agy-remote run --tmux`).
 - 📱 **Responsive PWA**: Installable directly to your iOS or Android Home Screen with safe-area padding and a sleek dark theme.
 - 🛡️ **One-Tap Tool Permissions**: Forwards `PreToolUse` security prompts to your phone with haptic feedback to `[Allow]` or `[Deny]` commands.
 - 📎 **Photo & Screenshot Upload**: Capture screenshots or camera photos directly from mobile into your workspace.
-- 📝 **Visual Diff Viewer**: Interactive colored diffs for file edits.
+- 📝 **Visual Diff Viewer**: Interactive colored diffs for file edits, rendered locally.
 - 🎙️ **Voice Dictation**: Dictate instructions into active prompts using mobile Web Speech recognition.
 - 🔗 **Tailscale & LAN Auto-Discovery**: Auto-detects Tailscale IPv4 and renders an interactive **ASCII QR Code** in your terminal on launch.
 
@@ -186,16 +186,46 @@ uv run agy-remote push-test "Test alert from agy-remote"
 
 ## 🔒 Security & Cryptography
 
-| Security Layer | Implementation Details |
-| :--- | :--- |
-| **Transport Encryption** | Tailscale WireGuard Mesh / HTTPS / WSS. |
-| **Payload E2EE** | Client-side 256-bit **AES-GCM** using the browser Web Crypto API (`SubtleCrypto`). |
-| **Zero-Knowledge Keying** | Encryption key is passed via URL hash (`#key=...`), which is never transmitted in HTTP headers. |
-| **Authentication** | High-entropy session tokens verified with constant-time `secrets.compare_digest`. |
-| **Path Traversal Defense** | Strict alphanumeric checks on `conversation_id` and directory containment verification. |
-| **Upload Sanitization** | Image-only MIME/extension validation, filename base isolation, and a 25MB file size limit. |
+### Threat model in one line
 
----
+**Anyone who can reach this server and holds the token can run arbitrary code on your machine** — prompts are injected straight into your live `agy` session. Treat the token like an SSH key.
+
+### What protects what
+
+| Layer | Implementation | Covers |
+| :--- | :--- | :--- |
+| **Transport** | Tailscale WireGuard mesh (recommended), or plain HTTP on LAN | Phone ↔ tailnet peer. **Not** the last hop behind a subnet router. |
+| **Payload encryption** | AES-256-GCM over **every** WebSocket frame, both directions | Transcripts, tool args, diffs, prompts, approvals — even on a cleartext hop |
+| **Replay defence** | Timestamp bound as GCM AAD + nonce cache, ±300 s window | Captured `send_prompt` / `approve_tool` frames cannot be re-injected |
+| **Downgrade defence** | Unsealed frames are rejected outright when E2EE is on | Token holder without the key cannot drive the agent |
+| **Authentication** | High-entropy token, constant-time `secrets.compare_digest` on *every* entry point (REST, WebSocket, hook) | Unauthorized access |
+| **Bind safety** | `--no-auth` is refused on any non-loopback bind | Unauthenticated RCE |
+| **Browser** | Strict CSP, zero third-party origins, escape-first Markdown renderer | Prompt-injected XSS stealing the key from `localStorage` |
+| **Path traversal** | Strict `conversation_id` charset + containment check | Reading files outside the brain dir |
+| **Uploads** | Extension allowlist **and** magic-byte sniffing, 25 MB cap, `0600` | Active-content and disguised-payload drops |
+| **Secrets at rest** | `vapid.json` and the runtime state file are `0600` | Local key theft |
+
+### Honest naming
+
+The key is generated by the server and shared with the browser through the URL hash, so this is **pre-shared-key payload encryption between your phone and your Mac** — not zero-knowledge end-to-end encryption. The server is one of the two endpoints and necessarily sees plaintext. What it buys you is real: the payload stays sealed across any hop the transport does not protect.
+
+### Where the encryption actually earns its keep
+
+With a **Tailscale subnet router** (e.g. OpenWrt) rather than Tailscale on the Mac itself:
+
+```
+Phone  ──WireGuard──▶  OpenWrt (subnet router)  ──plain LAN──▶  Mac
+        encrypted                                cleartext
+```
+
+The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so the AES-GCM payload layer is the only thing protecting your transcripts there. **Keep E2EE enabled in this topology.** Running `tailscaled` on the Mac itself removes the gap entirely and is the stronger setup.
+
+### Operational guidance
+
+- ✅ Tailscale (on the Mac, ideally) with auth enabled — the intended configuration.
+- ⚠️ LAN-only: works, but anyone on the Wi-Fi can reach the port. Keep auth **and** E2EE on.
+- ❌ Never `AGY_REMOTE_NO_AUTH=1` on a routable bind — the server refuses to start.
+- ❌ Never expose the port to the public internet or via port-forwarding.
 
 ## 📖 CLI Reference
 
@@ -217,9 +247,10 @@ uv run agy-remote push-test "Test alert from agy-remote"
 | `AGY_REMOTE_PORT` | `8765` | Server port. |
 | `AGY_REMOTE_HOST` | `0.0.0.0` | Server bind host. |
 | `AGY_REMOTE_TOKEN` | *Auto-generated* | Custom authentication token. |
-| `AGY_REMOTE_NO_AUTH` | `0` | Set `1` to disable token authentication. |
-| `AGY_REMOTE_NO_E2EE` | `0` | Set `1` to disable End-to-End Encryption. |
+| `AGY_REMOTE_NO_AUTH` | `0` | Set `1` to disable token authentication. **Refused unless bound to loopback.** |
+| `AGY_REMOTE_NO_E2EE` | `0` | Set `1` to disable payload encryption. Leave enabled unless debugging. |
 | `AGY_BRAIN_DIR` | `~/.gemini/antigravity-cli/brain` | Custom path to Antigravity brain data. |
+| `AGY_REMOTE_E2EE_KEY` | *Auto-generated* | Custom base64 256-bit payload key. |
 
 ---
 
@@ -240,8 +271,14 @@ uv run ruff check .
 
 ## ❓ Troubleshooting & FAQ
 
-**Q: Why does the QR code show `127.0.0.1` instead of Tailscale?**  
-A: Ensure the Tailscale desktop client is running (`tailscale status`). `agy-remote` automatically prioritizes Tailscale IPv4 addresses when available.
+**Q: Why does the QR code show my LAN IP instead of Tailscale?**  
+A: The Tailscale *daemon* must be running on this machine, not just installed — check `tailscale status`. `agy-remote` prioritizes a Tailscale IPv4 when one exists, and falls back to the LAN address otherwise.
+
+**Q: My router runs Tailscale. Does the Mac need it too?**  
+A: Tailscale is per-device, not a router feature. A router acting as a **subnet router** can advertise the Mac's subnet, and your phone (which must itself be a tailnet node) will then reach the Mac — but the tunnel ends at the router, leaving the final LAN hop in cleartext. Keep payload encryption enabled in that setup, or install Tailscale on the Mac for an end-to-end tunnel.
+
+**Q: Do I need Tailscale at all?**  
+A: No. If the phone and Mac share a Wi-Fi network, use the LAN URL. Keep auth and E2EE on, since anyone on that network can reach the port.
 
 **Q: Why are push notifications not arriving on iOS?**  
 A: On iOS, Web Push requires saving the page as a PWA via **Share ➔ Add to Home Screen** in Safari (iOS 16.4+). Launch the app from your home screen and tap the bell icon to grant permissions.

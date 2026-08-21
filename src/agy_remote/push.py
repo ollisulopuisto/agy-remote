@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +38,12 @@ class PushManager:
                     self.public_key: str = data["public_key"]
                     self.private_key: str = data["private_key"]
                     self.subscriptions = data.get("subscriptions", [])
-                    return
+                # Repair permissions on key files written by older versions,
+                # which created them world-readable.
+                if stat.S_IMODE(self.key_file.stat().st_mode) != 0o600:
+                    logger.warning("Tightening permissions on %s to 0600", self.key_file)
+                    os.chmod(self.key_file, 0o600)
+                return
             except Exception as e:
                 logger.debug("Failed loading VAPID key: %s, generating new one", e)
 
@@ -52,9 +59,17 @@ class PushManager:
         self._save()
 
     def _save(self) -> None:
-        """Persist VAPID keys and subscriptions to disk."""
+        """Persist VAPID keys and subscriptions to disk, owner-readable only.
+
+        This file holds the VAPID *private* key and every push endpoint. Anyone
+        who can read it can send notifications that appear to come from this
+        server, so it must never be group- or world-readable.
+        """
         try:
-            with open(self.key_file, "w", encoding="utf-8") as f:
+            # Create with 0600 from the outset rather than chmod-ing afterwards,
+            # which would leave a window where the key is world-readable.
+            fd = os.open(self.key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "public_key": self.public_key,
@@ -64,6 +79,9 @@ class PushManager:
                     f,
                     indent=2,
                 )
+            # Re-assert the mode in case the file already existed with looser
+            # permissions (O_CREAT does not change an existing file's mode).
+            os.chmod(self.key_file, 0o600)
         except Exception as e:
             logger.debug("Failed saving VAPID file: %s", e)
 

@@ -3,12 +3,53 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import shutil
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import get_config
+from .config import read_runtime_state
+
+DEFAULT_PORT = 8765
+
+
+def resolve_server_endpoint() -> tuple[int, str]:
+    """Find the running server's port and token as cheaply as possible.
+
+    This runs on every single tool call, so the no-server path must not fall
+    back to get_config(): that shells out to `tailscale ip` and `ifconfig`,
+    adding ~2s of latency per tool call to detect addresses a hook never uses.
+    """
+    state = read_runtime_state()
+    if state:
+        return int(state.get("port", DEFAULT_PORT)), state.get("auth_token", "")
+
+    try:
+        port = int(os.environ.get("AGY_REMOTE_PORT", DEFAULT_PORT))
+    except ValueError:
+        port = DEFAULT_PORT
+    return port, os.environ.get("AGY_REMOTE_TOKEN", "")
+
+
+def resolve_hook_command() -> str:
+    """Build an absolute command line agy's `sh -c` can actually execute.
+
+    `agy-remote` normally lives in a project virtualenv that is not on PATH,
+    so the bare name fails to launch and approvals never reach the phone.
+    """
+    candidate = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    if candidate and candidate.name.startswith("agy-remote") and candidate.exists():
+        return f"{shlex.quote(str(candidate))} hook-pre-tool"
+
+    found = shutil.which("agy-remote")
+    if found:
+        return f"{shlex.quote(str(Path(found).resolve()))} hook-pre-tool"
+
+    # Last resort: the interpreter running us can always reach the module.
+    return f"{shlex.quote(sys.executable)} -m agy_remote.cli hook-pre-tool"
 
 
 def run_pre_tool_hook() -> None:
@@ -21,17 +62,20 @@ def run_pre_tool_hook() -> None:
             return
 
         payload = json.loads(raw_input)
-        config = get_config()
 
-        # Post to local agy-remote server
-        url = f"http://127.0.0.1:{config.port}/api/hook/pre-tool"
+        # Use the running server's published credentials. get_config() would
+        # mint a *fresh* random token in this separate process, which never
+        # matches the server's and so 401s on every approval request.
+        port, auth_token = resolve_server_endpoint()
+
+        url = f"http://127.0.0.1:{port}/api/hook/pre-tool"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,
             data=data,
             headers={
                 "Content-Type": "application/json",
-                "X-Auth-Token": config.auth_token,
+                "X-Auth-Token": auth_token,
             },
             method="POST",
         )
@@ -62,7 +106,7 @@ def install_hooks_config(target_dir: Path | None = None) -> Path:
         "hooks": [
             {
                 "type": "command",
-                "command": "agy-remote hook-pre-tool",
+                "command": resolve_hook_command(),
                 "timeout": 300,
             }
         ],

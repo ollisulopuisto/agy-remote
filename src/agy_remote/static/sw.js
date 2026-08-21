@@ -1,5 +1,5 @@
 // Service Worker with Web Push Notifications for agy-remote PWA
-const CACHE_NAME = 'agy-remote-v2';
+const CACHE_NAME = 'agy-remote-v3';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
