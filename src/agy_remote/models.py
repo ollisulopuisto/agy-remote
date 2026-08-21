@@ -20,8 +20,14 @@ class ToolCall(BaseModel):
 
 
 class TranscriptStep(BaseModel):
-    """A single step from transcript.jsonl."""
+    """A single step from a transcript.
 
+    `id` is the agent's own identity for the step (agy: none, so clients fall
+    back to `step_index`; opencode: the message id). It is what lets a client
+    replace a step in place when `step_updated` arrives.
+    """
+
+    id: str | None = None
     step_index: int
     source: str = "UNKNOWN"  # e.g., "USER_EXPLICIT", "USER_INPUT", "MODEL", "SYSTEM"
     type: str = "UNKNOWN"  # e.g., "USER_INPUT", "PLANNER_RESPONSE", "TOOL_OUTPUT"
@@ -85,9 +91,13 @@ class KeyPressRequest(BaseModel):
 
 
 class ApprovalResponseRequest(BaseModel):
-    """Request payload to resolve a tool approval."""
+    """Request payload to resolve a tool approval.
 
-    decision: Literal["allow", "deny", "force_ask"]
+    `always` is opencode's "approve future matching requests"; agy has no such
+    outcome, and the server maps it to a plain allow for agy sessions.
+    """
+
+    decision: Literal["allow", "deny", "force_ask", "always"]
     reason: str | None = None
     overwrite_args: dict[str, Any] | None = None
 

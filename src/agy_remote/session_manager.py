@@ -1,17 +1,22 @@
-"""Session management, log tailing, and live state synchronization."""
+"""Session management, log tailing, and live state synchronization.
+
+The manager owns the agent-agnostic half: the WebSocket fan-out, the E2EE
+sealing, the pending-approval state machine, the terminal mirror and the
+watcher loop. Everything agent-specific (where steps come from, how a prompt
+or a decision travels to the CLI) lives in a backend, see `backends.py`.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
 
+from .backends import AgentBackend, make_backend
 from .config import RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
 from .models import (
@@ -20,22 +25,20 @@ from .models import (
     TranscriptStep,
 )
 from .screen import TerminalMirror
-from .transcript import clean_user_content, is_scaffolding, normalize_tool_calls
 
 logger = logging.getLogger("agy_remote.session")
 
 
 class SessionManager:
-    """Manages active Antigravity CLI conversations and real-time streaming."""
+    """Manages active agent conversations and real-time streaming."""
 
-    def __init__(self, config: RemoteConfig | None = None) -> None:
+    def __init__(self, config: RemoteConfig | None = None, backend: AgentBackend | None = None) -> None:
         self.config = config or get_config()
-        self.brain_dir = self.config.brain_dir
+        self.backend = backend or make_backend(self.config)
         self.active_conversation_id: str | None = None
         #: Track whichever conversation is newest, until the user picks one.
         self.follow_latest: bool = True
         self.active_steps: list[TranscriptStep] = []
-        self._last_file_pos: int = 0
         self._connected_clients: set[WebSocket] = set()
         self._pending_approvals: dict[str, dict[str, Any]] = {}
         self._approval_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -52,12 +55,10 @@ class SessionManager:
         #: Nonce cache for envelopes arriving *from* clients.
         self.replay_guard = ReplayGuard()
 
-        #: Cache of parsed conversation summaries, keyed by transcript path and
-        #: invalidated on (mtime, size). Without this the watcher re-read every
-        #: transcript several times a second.
-        self._summary_cache: dict[Path, tuple[float, int, ConversationSummary]] = {}
-        #: Number of transcripts actually parsed; asserted on in tests.
-        self.parse_count: int = 0
+    @property
+    def parse_count(self) -> int:
+        """Transcripts parsed by the backend; asserted on in tests."""
+        return getattr(self.backend, "parse_count", 0)
 
     def seal(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Wrap an outbound payload in an AES-GCM envelope when E2EE is on.
@@ -77,7 +78,7 @@ class SessionManager:
     async def start(self) -> None:
         """Start the session manager and background watcher loop."""
         self._running = True
-        self.brain_dir.mkdir(parents=True, exist_ok=True)
+        await self.backend.start(self)
         # Find the latest conversation
         latest = self.get_latest_conversation_id()
         if latest:
@@ -93,141 +94,19 @@ class SessionManager:
 
             with contextlib.suppress(asyncio.CancelledError):
                 await self._watcher_task
-
-    def _iter_transcripts(self) -> list[tuple[str, Path]]:
-        """List (conversation_id, transcript path) pairs using stat only."""
-        if not self.brain_dir.exists():
-            return []
-
-        found: list[tuple[str, Path]] = []
-        for path in self.brain_dir.iterdir():
-            if not path.is_dir():
-                continue
-            log_path = path / ".system_generated" / "logs" / "transcript.jsonl"
-            if not log_path.exists():
-                log_path = path / "transcript.jsonl"
-                if not log_path.exists():
-                    continue
-            found.append((path.name, log_path))
-        return found
-
-    def _summarize(self, conversation_id: str, log_path: Path) -> ConversationSummary | None:
-        """Parse one transcript into a summary, reusing the cache when possible."""
-        try:
-            stat = log_path.stat()
-        except OSError:
-            return None
-
-        cached = self._summary_cache.get(log_path)
-        if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
-            summary = cached[2].model_copy()
-        else:
-            try:
-                summary = self._parse_transcript(conversation_id, log_path, stat)
-            except Exception as e:
-                logger.debug("Failed reading conversation %s: %s", conversation_id, e)
-                return None
-            self._summary_cache[log_path] = (stat.st_mtime, stat.st_size, summary.model_copy())
-
-        # These change without the file changing, so refresh them every time.
-        summary.is_active = conversation_id == self.active_conversation_id
-        summary.has_pending_approval = any(
-            a.get("conversation_id") == conversation_id and a.get("status") == "pending"
-            for a in self._pending_approvals.values()
-        )
-        return summary
-
-    def _parse_transcript(self, conversation_id: str, log_path: Path, stat: os.stat_result) -> ConversationSummary:
-        """Read a transcript end to end and build its summary."""
-        self.parse_count += 1
-        step_count = 0
-        first_prompt: str | None = None
-        last_prompt: str | None = None
-        last_response: str | None = None
-
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                step_count += 1
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                step_type = obj.get("type", "")
-                content = obj.get("content") or ""
-                if step_type == "USER_INPUT":
-                    # The drawer titles every conversation from this; unwrapped,
-                    # every one of them reads "<USER_REQUEST>".
-                    content = clean_user_content(content)
-                    if not first_prompt:
-                        first_prompt = content[:100]
-                    last_prompt = content[:100]
-                elif step_type == "PLANNER_RESPONSE" and content:
-                    last_response = content[:150]
-
-        return ConversationSummary(
-            id=conversation_id,
-            title=first_prompt or f"Session {conversation_id[:8]}",
-            created_at=datetime.fromtimestamp(stat.st_ctime),
-            updated_at=datetime.fromtimestamp(stat.st_mtime),
-            step_count=step_count,
-            last_user_message=last_prompt,
-            last_model_response=last_response,
-        )
+        await self.backend.stop()
 
     def list_conversations(self) -> list[ConversationSummary]:
-        """Scan brain_dir and return a sorted list of conversation summaries."""
-        summaries = [
-            summary
-            for conversation_id, log_path in self._iter_transcripts()
-            if (summary := self._summarize(conversation_id, log_path)) is not None
-        ]
-        summaries.sort(key=lambda s: s.updated_at or datetime.min, reverse=True)
-        return summaries
+        """All known conversations, newest first."""
+        return self.backend.list_conversations(self)
 
     def get_latest_conversation_id(self) -> str | None:
-        """Find the most recently updated conversation ID from mtimes alone.
-
-        The watcher loop asks this several times a second, so it must not read
-        file contents: parsing every transcript here kept a core busy full time
-        on a brain directory of any real size.
-        """
-        newest_id: str | None = None
-        newest_mtime = float("-inf")
-        for conversation_id, log_path in self._iter_transcripts():
-            try:
-                mtime = log_path.stat().st_mtime
-            except OSError:
-                continue
-            if mtime > newest_mtime:
-                newest_mtime, newest_id = mtime, conversation_id
-        return newest_id
+        """The most recently updated conversation ID, cheaply."""
+        return self.backend.get_latest_conversation_id()
 
     def get_transcript_path(self, conversation_id: str) -> Path | None:
-        """Resolve the path to transcript.jsonl for a conversation with traversal protection."""
-        if not conversation_id or not all(c.isalnum() or c in "-_" for c in conversation_id):
-            return None
-
-        primary = (self.brain_dir / conversation_id / ".system_generated" / "logs" / "transcript.jsonl").resolve()
-        try:
-            if not primary.is_relative_to(self.brain_dir.resolve()):
-                return None
-        except (ValueError, RuntimeError):
-            return None
-
-        if primary.exists():
-            return primary
-
-        fallback = (self.brain_dir / conversation_id / "transcript.jsonl").resolve()
-        try:
-            if fallback.is_relative_to(self.brain_dir.resolve()) and fallback.exists():
-                return fallback
-        except (ValueError, RuntimeError):
-            return None
-
-        return None
+        """Where the conversation lives on disk, or None for API-backed agents."""
+        return self.backend.get_transcript_path(conversation_id)
 
     async def switch_conversation(self, conversation_id: str, pin: bool = False) -> bool:
         """Switch active conversation to the specified ID and load steps.
@@ -241,11 +120,8 @@ class SessionManager:
 
         self.active_conversation_id = conversation_id
         self.active_steps = []
-        self._last_file_pos = 0
-
-        transcript_path = self.get_transcript_path(conversation_id)
-        if transcript_path and transcript_path.exists():
-            await self._read_new_steps(transcript_path, initial=True)
+        self.backend.on_switch(conversation_id)
+        self.active_steps = await self.backend.load_steps(self, conversation_id)
 
         await self.broadcast(
             {
@@ -264,15 +140,7 @@ class SessionManager:
 
     def _summary_of(self, conversation_id: str | None) -> dict[str, Any] | None:
         """The summary for one conversation, as clients need it to name a session."""
-        if not conversation_id:
-            return None
-
-        log_path = self.get_transcript_path(conversation_id)
-        if not log_path or not log_path.exists():
-            return None
-
-        summary = self._summarize(conversation_id, log_path)
-        return summary.model_dump(mode="json") if summary else None
+        return self.backend.summary_of(self, conversation_id)
 
     def get_active_pending_approvals(self) -> list[dict[str, Any]]:
         """Return pending approvals for current active conversation."""
@@ -291,6 +159,9 @@ class SessionManager:
         init_data = {
             "event": "init",
             "data": {
+                # Which agent CLI is behind this server; the PWA adapts its
+                # quick actions and approval buttons to it.
+                "agent": self.backend.name,
                 "active_conversation_id": self.active_conversation_id,
                 "steps": [step.model_dump() for step in self.active_steps],
                 "conversations": [c.model_dump(mode="json") for c in self.list_conversations()],
@@ -327,53 +198,6 @@ class SessionManager:
 
         for ws in to_remove:
             self._connected_clients.discard(ws)
-
-    async def _read_new_steps(self, path: Path, initial: bool = False) -> list[TranscriptStep]:
-        """Read appended lines from transcript.jsonl."""
-        new_steps: list[TranscriptStep] = []
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                if not initial:
-                    f.seek(self._last_file_pos)
-
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        source = data.get("source", "UNKNOWN")
-                        step_type = data.get("type", "UNKNOWN")
-                        content = data.get("content")
-                        # Only a user's own words carry agy's envelope; model
-                        # output must reach the phone exactly as written.
-                        if step_type == "USER_INPUT" or source in ("USER_INPUT", "USER_EXPLICIT"):
-                            content = clean_user_content(content)
-
-                        step = TranscriptStep(
-                            step_index=data.get("step_index", len(self.active_steps) + len(new_steps)),
-                            source=source,
-                            type=step_type,
-                            status=data.get("status", "DONE"),
-                            created_at=data.get("created_at"),
-                            content=content,
-                            thinking=data.get("thinking"),
-                            tool_calls=normalize_tool_calls(data.get("tool_calls") or []),
-                            truncated_fields=data.get("truncated_fields") or [],
-                            scaffolding=is_scaffolding(step_type, source),
-                        )
-                        new_steps.append(step)
-                    except Exception as err:
-                        logger.debug("Skipping unparseable transcript line: %s", err)
-
-                self._last_file_pos = f.tell()
-        except Exception as e:
-            logger.debug("Error reading transcript file %s: %s", path, e)
-
-        if new_steps:
-            self.active_steps.extend(new_steps)
-
-        return new_steps
 
     def attach_terminal(self, supervisor: Any) -> None:
         """Mirror a supervised session's screen for clients that cannot see it.
@@ -441,35 +265,19 @@ class SessionManager:
         return len(expired)
 
     async def _watch_loop(self) -> None:
-        """Continuous polling/tailing loop for the active conversation log."""
+        """Continuous loop keeping the phone in step with the agent.
+
+        The agent-specific half (follow a newer conversation, stream new
+        steps) is the backend's `tick`; the rest is shared by every agent.
+        """
         while self._running:
             try:
-                # 1. Check if a newer conversation was started
-                await self.follow_latest_conversation()
+                await self.backend.tick(self)
 
-                # 2. Tail the active conversation log
-                if self.active_conversation_id:
-                    transcript_path = self.get_transcript_path(self.active_conversation_id)
-                    if transcript_path and transcript_path.exists():
-                        stat = transcript_path.stat()
-                        if stat.st_size > self._last_file_pos:
-                            new_steps = await self._read_new_steps(transcript_path)
-                            if new_steps:
-                                for step in new_steps:
-                                    await self.broadcast(
-                                        {
-                                            "event": "step_added",
-                                            "data": {
-                                                "conversation_id": self.active_conversation_id,
-                                                "step": step.model_dump(),
-                                            },
-                                        }
-                                    )
-
-                # 3. Mirror the terminal, for the panels the transcript never sees
+                # Mirror the terminal, for the panels the transcript never sees
                 await self.broadcast_terminal()
 
-                # 4. End sessions whose pairing has expired mid-connection
+                # End sessions whose pairing has expired mid-connection
                 await self.disconnect_expired_clients()
 
                 await asyncio.sleep(0.3)
@@ -482,14 +290,19 @@ class SessionManager:
     # -------------------------------------------------------------------------
     # Tool Approvals / Permissions Handling
     # -------------------------------------------------------------------------
-    async def request_approval(
+    async def register_approval(
         self,
         approval_id: str,
         conversation_id: str,
         tool_name: str,
         args: dict[str, Any],
     ) -> dict[str, Any]:
-        """Register a pending approval from PreToolUse hook and wait for user response."""
+        """Register a pending approval and broadcast it to the phone.
+
+        Non-blocking: agy's hook endpoint awaits the answer separately
+        (`await_approval`), while opencode's permission arrives as an event
+        whose answer travels back as a REST call (`deliver_resolution`).
+        """
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._approval_futures[approval_id] = fut
@@ -511,10 +324,22 @@ class SessionManager:
                 "data": approval_data,
             }
         )
+        return approval_data
+
+    async def await_approval(self, approval_id: str, timeout: float = 300.0) -> dict[str, Any]:
+        """Wait for the phone's answer to a registered approval.
+
+        Used by agy, whose hook process blocks until this returns. opencode
+        never waits: its permission simply stays open until someone answers,
+        in the TUI or on the phone.
+        """
+        fut = self._approval_futures.get(approval_id)
+        if fut is None:
+            return {"decision": "deny", "reason": "Unknown approval."}
 
         try:
             # Wait up to 5 minutes for approval from mobile
-            res = await asyncio.wait_for(fut, timeout=300.0)
+            res = await asyncio.wait_for(fut, timeout=timeout)
             return res
         except TimeoutError:
             self._pending_approvals[approval_id]["status"] = "denied"
@@ -525,17 +350,39 @@ class SessionManager:
         finally:
             self._approval_futures.pop(approval_id, None)
 
+    async def request_approval(
+        self,
+        approval_id: str,
+        conversation_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Register a pending approval and wait for the user's response.
+
+        The agy PreToolUse hook path: the hook process blocks on this call and
+        returns whatever the phone decides (or a timeout denial) to the CLI.
+        """
+        await self.register_approval(approval_id, conversation_id, tool_name, args)
+        return await self.await_approval(approval_id)
+
     async def resolve_approval(
         self,
         approval_id: str,
         req: ApprovalResponseRequest,
+        source: str = "phone",
     ) -> bool:
-        """Resolve a pending tool approval from the mobile UI."""
+        """Resolve a pending tool approval.
+
+        `source` is "phone" for a tap on the PWA (the decision must then be
+        carried to the agent) and "agent" for a resolution that happened on the
+        agent's own side (the TUI answered), which only needs the phone's
+        banner cleared.
+        """
         if approval_id not in self._pending_approvals:
             return False
 
         app = self._pending_approvals[approval_id]
-        app["status"] = "allowed" if req.decision == "allow" else "denied"
+        app["status"] = "allowed" if req.decision in ("allow", "always") else "denied"
         app["reason"] = req.reason
 
         response_payload: dict[str, Any] = {
@@ -548,6 +395,9 @@ class SessionManager:
         fut = self._approval_futures.get(approval_id)
         if fut and not fut.done():
             fut.set_result(response_payload)
+
+        if source == "phone":
+            await self.backend.deliver_resolution(self, app, response_payload)
 
         # Broadcast resolution
         await self.broadcast(

@@ -259,20 +259,17 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         mgr = get_mgr(request)
         if mgr.active_conversation_id == conversation_id:
             steps = [s.model_dump() for s in mgr.active_steps]
+            result: dict[str, Any] = {
+                "id": conversation_id,
+                "steps": steps,
+                "pending_approvals": mgr.get_active_pending_approvals(),
+            }
         else:
-            path = mgr.get_transcript_path(conversation_id)
-            if not path or not path.exists():
+            result = await mgr.backend.load_conversation(mgr, conversation_id)
+            if result is None:
                 raise HTTPException(status_code=404, detail="Conversation not found")
-            temp_mgr = SessionManager(cfg)
-            steps = [s.model_dump() for s in await temp_mgr._read_new_steps(path, initial=True)]
 
-        return {
-            "id": conversation_id,
-            "steps": steps,
-            "pending_approvals": mgr.get_active_pending_approvals()
-            if mgr.active_conversation_id == conversation_id
-            else [],
-        }
+        return result
 
     @app.post("/api/conversations/{conversation_id}/switch")
     async def switch_conversation_endpoint(
@@ -337,19 +334,9 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         """Send user prompt from mobile UI into active session."""
         verify_auth(request, token, token_header)
 
-        # Check tmux supervisor
-        tmux = get_tmux_supervisor()
-        if tmux and tmux.has_session():
-            tmux.inject_input(req.prompt)
-            return {"status": "ok", "delivered_via": "tmux"}
-
-        # Check PTY supervisor
-        pty = get_pty_supervisor()
-        if pty and pty.running:
-            pty.inject_input(req.prompt)
-            return {"status": "ok", "delivered_via": "pty"}
-
         mgr = get_mgr(request)
+        delivered_via = await mgr.backend.send_prompt(mgr, req.prompt)
+
         await mgr.broadcast(
             {
                 "event": "prompt_sent",
@@ -359,11 +346,13 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 },
             }
         )
-        return {
-            "status": "ok",
-            "delivered_via": "broadcast",
-            "message": "Prompt broadcasted. To enable direct CLI typing, launch with 'agy-remote run'.",
-        }
+        if delivered_via == "broadcast":
+            return {
+                "status": "ok",
+                "delivered_via": "broadcast",
+                "message": "Prompt broadcasted. To enable direct CLI typing, launch with 'agy-remote run'.",
+            }
+        return {"status": "ok", "delivered_via": delivered_via}
 
     @app.post("/api/upload")
     async def upload_file(
@@ -430,6 +419,12 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         if cfg.enable_auth and not token_ok(token_header):
             raise HTTPException(status_code=401, detail="Unauthorized hook call")
 
+        mgr = get_mgr(request)
+        if mgr.backend.name != "agy":
+            # opencode has no hook protocol; its permissions arrive as events.
+            # A stale agy hook firing here must not mint phantom approvals.
+            raise HTTPException(status_code=400, detail="This server is fronting an opencode session")
+
         payload = await request.json()
         tool_call = payload.get("toolCall", {})
         tool_name = tool_call.get("name", "unknown_tool")
@@ -444,7 +439,6 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             data={"approval_id": approval_id, "type": "approval_request"},
         )
 
-        mgr = get_mgr(request)
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,
             conversation_id=conversation_id,
@@ -527,13 +521,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:
-                        tmux = get_tmux_supervisor()
-                        if tmux and tmux.has_session():
-                            tmux.inject_input(prompt_text)
-                        else:
-                            pty = get_pty_supervisor()
-                            if pty and pty.running:
-                                pty.inject_input(prompt_text)
+                        await mgr.backend.send_prompt(mgr, prompt_text)
                         await mgr.broadcast(
                             {
                                 "event": "prompt_sent",
@@ -564,9 +552,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                         await mgr.resolve_approval(approval_id, response)
                 elif action == "switch_conversation":
                     target_id = data.get("conversation_id")
-                    # Only switch to an id that resolves inside brain_dir, so a
-                    # crafted id cannot leave the manager pointing at nothing.
-                    if isinstance(target_id, str) and mgr.get_transcript_path(target_id):
+                    # Only switch to an id that resolves to a real
+                    # conversation, so a crafted id cannot leave the manager
+                    # pointing at nothing.
+                    if isinstance(target_id, str) and mgr.backend.is_known_conversation(target_id):
                         await mgr.switch_conversation(target_id, pin=True)
         except WebSocketDisconnect:
             pass
