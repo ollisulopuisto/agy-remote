@@ -101,7 +101,17 @@
     return parts.join(' · ');
   }
 
+  // Which agent is behind this server. The name was hardcoded in the header,
+  // so an opencode session was labelled agy -- and since both backends are
+  // normalized to the same step vocabulary, nothing else on screen corrected
+  // it. An unreported agent is "agent", never a guess at one of them.
+  function agentIdentity(agent) {
+    var name = String(agent == null ? '' : agent).trim() || 'agent';
+    return { label: name, title: name + ' remote' };
+  }
+
   global.AgyFormat = {
+    agentIdentity: agentIdentity,
     sessionLabel: sessionLabel,
     toolSummary: toolSummary,
     outputSummary: outputSummary,

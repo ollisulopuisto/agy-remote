@@ -20,7 +20,7 @@ self.addEventListener('fetch', (event) => {
 
 // Handle incoming Web Push Notifications (Lock Screen / System Banners)
 self.addEventListener('push', (event) => {
-  let payload = { title: 'Antigravity Alert', body: 'New session event', data: {} };
+  let payload = { title: 'Agent Remote', body: 'New session event', data: {} };
   if (event.data) {
     try {
       payload = event.data.json();

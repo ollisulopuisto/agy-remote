@@ -1,6 +1,15 @@
 # Changelog
  
-## v26.08.21.42 — Approval banners stay in their own session, honest port conflicts
+## v26.08.21.42 — The PWA says which agent it is fronting
+
+- **The PWA called every session an agy session.** The header shipped a literal
+  `agy`, the tab and installed-app name said "Antigravity Remote", and the push
+  fallback title said "Antigravity Alert" — while both backends are normalized
+  into one step vocabulary (`USER_INPUT` / `PLANNER_RESPONSE`), so nothing on
+  screen corrected the label. An opencode session was indistinguishable from an
+  agy one. `/api/status` now reports `agent`, and the header and tab title are
+  filled in from what the server says it fronts — falling back to "agent",
+  never to a guess at one of them.
 
 - **A port conflict blamed agy-remote for someone else's port.** Any program can
   hold 8765; a stray `python -m http.server` was reported as "An agy-remote is

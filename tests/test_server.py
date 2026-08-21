@@ -207,3 +207,28 @@ def test_a_pairing_without_a_deadline_never_expires(tmp_path: Path):
 
     resp = client.get("/api/status?token=secret123")
     assert resp.json()["authenticated"] is True
+
+
+def test_status_names_the_agent_it_fronts(tmp_path: Path):
+    """The PWA has to know which engine is behind it, and only `init` said so.
+
+    The header, the tab title and the tool vocabulary are all agy's by default,
+    so an opencode session was rendered as an agy one -- and a client that
+    reconnects over REST (or loads before the socket opens) had no field to
+    correct it from.
+    """
+    for agent in ("agy", "opencode"):
+        cfg = RemoteConfig(
+            brain_dir=tmp_path,
+            auth_token="secret123",
+            enable_auth=True,
+            agent=agent,
+            opencode_port=4096,
+        )
+        client = TestClient(create_app(cfg))
+
+        body = client.get("/api/status?token=secret123").json()
+        assert body["agent"] == agent
+
+    # Still says nothing to an unauthenticated caller.
+    assert "agent" not in client.get("/api/status").json()

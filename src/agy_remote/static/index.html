@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b0f19">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Antigravity Remote</title>
+  <title>Agent Remote</title>
   <!--
     No third-party origins. This page holds the E2EE key and auth token in
     localStorage, so any remotely-loaded script could exfiltrate both; a CDN
@@ -29,9 +29,9 @@
       </button>
       <div class="header-title-container">
         <div class="app-title">
-          <span>agy</span>
+          <span id="agentName"></span>
           <span style="color: var(--primary);">remote</span>
-          <span class="mode-badge" id="modeBadge" title="agy execution mode" hidden></span>
+          <span class="mode-badge" id="modeBadge" title="agent execution mode" hidden></span>
         </div>
         <div class="session-subtitle" id="sessionSubtitle">Connecting...</div>
       </div>

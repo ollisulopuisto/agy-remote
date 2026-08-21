@@ -229,6 +229,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             "authenticated": True,
             "version": f"v{VERSION}",
             "e2ee_enabled": cfg.e2ee_enabled,
+            # Which engine is behind this server. The PWA renders both backends
+            # through one normalized step shape, so without this it labels
+            # everything agy -- an opencode session included.
+            "agent": cfg.agent,
             "active_conversation_id": mgr.active_conversation_id,
             "supervisor_running": (pty is not None and pty.running) or (tmux is not None and tmux.has_session()),
             "primary_mobile_url": cfg.get_primary_mobile_url(),

@@ -1,7 +1,7 @@
 // agy-remote Mobile PWA Client Application with E2EE, Push & Media Attachments
 
 let ws = null;
-let currentAgent = 'agy';
+let currentAgent = '';
 let currentConversationId = null;
 let currentSteps = [];
 let pendingApprovals = [];
@@ -392,7 +392,8 @@ function handleServerEvent(event) {
 
   if (type === 'init') {
     applyTerminal(data.terminal);
-    currentAgent = data.agent || 'agy';
+    currentAgent = data.agent || '';
+    applyAgentIdentity();
     currentConversation = data.conversation || null;
     currentConversationId = data.active_conversation_id;
     currentSteps = data.steps || [];
@@ -904,6 +905,13 @@ function triggerVibrate(pattern = [60, 40, 80]) {
   if (navigator.vibrate) {
     try { navigator.vibrate(pattern); } catch (e) {}
   }
+}
+
+function applyAgentIdentity() {
+  const { label, title } = window.AgyFormat.agentIdentity(currentAgent);
+  const el = document.getElementById('agentName');
+  if (el) el.textContent = label;
+  document.title = title;
 }
 
 function updateHeader() {
