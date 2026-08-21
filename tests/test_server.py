@@ -232,3 +232,28 @@ def test_status_names_the_agent_it_fronts(tmp_path: Path):
 
     # Still says nothing to an unauthenticated caller.
     assert "agent" not in client.get("/api/status").json()
+
+
+def test_a_prompt_nothing_received_says_so(tmp_path: Path):
+    """ "Delivered" to a supervisor that is not there is not delivered.
+
+    With no agy under a supervisor, `send_prompt` types nowhere and returns
+    "broadcast". The REST reply explained that; the WebSocket path -- the one
+    the phone actually uses -- announced `prompt_sent` exactly as it does for a
+    prompt that landed, so the text was gone with nothing said.
+    """
+    from agy_remote.crypto import decode_key, decrypt_payload, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    app = create_app(cfg)
+    key = decode_key(cfg.e2ee_key)
+    client = TestClient(app)
+
+    with client.websocket_connect(f"/ws?token={cfg.auth_token}") as ws:
+        ws.receive_json()  # sealed init snapshot
+        ws.send_json(encrypt_payload({"action": "send_prompt", "data": {"prompt": "into the void"}}, key))
+        announced = decrypt_payload(ws.receive_json(), key)
+
+    assert announced["event"] == "prompt_sent"
+    # No supervisor in this config, so nothing could have typed it.
+    assert announced["data"]["delivered_via"] == "broadcast"

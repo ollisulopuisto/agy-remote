@@ -103,3 +103,13 @@ test('the phone adopts a session id when it has none', () => {
   assert.equal(adoptConversationId('ses_mine', 'ses_other'), 'ses_mine');
   assert.equal(adoptConversationId(null, null), null);
 });
+
+test('a prompt nothing received is not a prompt sent', () => {
+  const { promptWasDelivered } = sandbox.window.AgyFormat;
+  // "broadcast" is the agy backend saying no supervisor was there to type it.
+  assert.equal(promptWasDelivered('broadcast'), false);
+  assert.equal(promptWasDelivered(undefined), true);  // older server, says nothing
+  assert.equal(promptWasDelivered('opencode'), true);
+  assert.equal(promptWasDelivered('tmux'), true);
+  assert.equal(promptWasDelivered('pty'), true);
+});

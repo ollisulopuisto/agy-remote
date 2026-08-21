@@ -467,6 +467,16 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
+  } else if (type === 'prompt_sent') {
+    // The server took it but nothing was there to receive it: keep the text
+    // and say so, rather than letting it read as delivered.
+    if (!window.AgyFormat.promptWasDelivered(data && data.delivered_via)) {
+      if (!promptInput.value) {
+        promptInput.value = (data && data.prompt) || '';
+        autoResizeInput();
+      }
+      reportUndelivered('Nothing received it — no agent session is attached.');
+    }
   } else if (type === 'session_renamed') {
     // opencode names a session after its first exchange. Without this the
     // header keeps the `New session - <timestamp>` placeholder for good.

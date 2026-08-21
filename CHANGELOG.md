@@ -2,6 +2,13 @@
  
 ## v26.08.22.23 — The phone follows the session you are working in
 
+- **A prompt nothing received still read as sent.** With no agy under a
+  supervisor, `send_prompt` types nowhere and returns `"broadcast"`. The REST
+  reply said so; the WebSocket path — the one the phone uses — announced
+  `prompt_sent` exactly as for a prompt that landed, so the text was gone with
+  nothing said. `prompt_sent` now carries `delivered_via`, and the phone keeps
+  the text and says nothing received it.
+
 - **The phone sent prompts with no session attached.** A client that connected
   before any session existed held `null` and never recovered it, so its prompts
   went out unaddressed and the server's own idea of "active" decided where they

@@ -156,7 +156,16 @@
     return current ? current : (fromEvent || null);
   }
 
+  // Whether anything actually took the prompt. The agy backend answers
+  // "broadcast" when no supervisor was there to type it -- the prompt went
+  // nowhere, and a client that only hears `prompt_sent` cannot tell. A server
+  // too old to say anything is taken at its word.
+  function promptWasDelivered(deliveredVia) {
+    return deliveredVia === undefined || deliveredVia === null || deliveredVia !== 'broadcast';
+  }
+
   global.AgyFormat = {
+    promptWasDelivered: promptWasDelivered,
     adoptConversationId: adoptConversationId,
     applyStepUpdate: applyStepUpdate,
     socketIsStale: socketIsStale,

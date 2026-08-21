@@ -347,6 +347,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 "data": {
                     "prompt": req.prompt,
                     "conversation_id": req.conversation_id or mgr.active_conversation_id,
+                    "delivered_via": delivered_via,
                 },
             }
         )
@@ -537,11 +538,15 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:
-                        await mgr.backend.send_prompt(mgr, prompt_text, data.get("conversation_id"))
+                        # Say how it went out. "broadcast" means no supervisor
+                        # took it -- the prompt was typed nowhere, and a client
+                        # that hears only `prompt_sent` cannot tell that apart
+                        # from one that landed.
+                        delivered_via = await mgr.backend.send_prompt(mgr, prompt_text, data.get("conversation_id"))
                         await mgr.broadcast(
                             {
                                 "event": "prompt_sent",
-                                "data": {"prompt": prompt_text},
+                                "data": {"prompt": prompt_text, "delivered_via": delivered_via},
                             }
                         )
                 elif action == "request_screen":
