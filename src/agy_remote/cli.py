@@ -185,6 +185,22 @@ def agy_child_env(cfg: RemoteConfig) -> dict[str, str]:
     }
 
 
+def _mirror_supervised_screen(app: object, supervisor: object) -> None:
+    """Hand the supervisor to the screen mirror once it exists.
+
+    The lifespan attaches whatever `get_pty_supervisor()` returns, but the
+    server starts before the supervisor is built, so that lookup found None and
+    `mgr.terminal` stayed None for the life of the process. agy draws its
+    pickers, its confirmations and its execution mode on the terminal and never
+    writes them to the transcript, so the phone was pressing Shift+Tab at a
+    screen nobody was mirroring -- cycling default -> accept-edits -> plan with
+    no report of where it landed.
+    """
+    mgr = getattr(getattr(app, "state", None), "session_manager", None)
+    if mgr is not None:
+        mgr.attach_terminal(supervisor)
+
+
 def _preflight_port_or_exit(cfg: RemoteConfig) -> None:
     """Check port availability. If busy, prompt interactive users or exit."""
     if cfg.port == 0:
@@ -531,7 +547,8 @@ def run(
         _warn_if_second_instance(cfg)
 
     # Start FastAPI server in a background thread
-    _serve_in_background_or_exit(cfg, create_app(cfg))
+    app = create_app(cfg)
+    _serve_in_background_or_exit(cfg, app)
 
     try:
         child_env = agy_child_env(cfg)
@@ -548,6 +565,7 @@ def run(
         else:
             supervisor = PtySupervisor(cmd=child_cmd, env=child_env)
             set_pty_supervisor(supervisor)
+            _mirror_supervised_screen(app, supervisor)
             if qr_timeout > 0:
                 wait_for_keypress_or_timeout(
                     timeout_seconds=qr_timeout,

@@ -628,6 +628,11 @@ body {
   gap: 4px;
   border: 1px solid transparent;
   transition: background-color 0.15s ease;
+  /* The drawer list is a column flexbox, so with more sessions than fit the
+     items shrink instead of the list scrolling: each collapsed onto its
+     min-height and then squeezed its own children, leaving the title a 7px
+     slice through 13px glyphs. Let them keep their height and scroll. */
+  flex-shrink: 0;
 }
 
 .session-item:active {
@@ -644,6 +649,7 @@ body {
 }
 
 .session-item-title {
+  flex-shrink: 0;
   font-size: 13px;
   font-weight: 600;
   color: #fff;
@@ -653,6 +659,7 @@ body {
 }
 
 .session-item-meta {
+  flex-shrink: 0;
   font-size: 11px;
   color: var(--text-muted);
 }

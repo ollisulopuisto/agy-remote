@@ -97,8 +97,11 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """Start/stop the session manager and publish helper credentials."""
         await session_mgr.start()
-        # `agy-remote run` registers its supervisor before the server thread
-        # starts, so the screen is mirrored from the first byte agy writes.
+        # A supervisor that already exists (a re-attach, or a caller that built
+        # one first) is mirrored from here. `agy-remote run` builds its
+        # supervisor *after* starting the server, so it hands it over itself --
+        # this lookup found None and the screen went unmirrored for the life of
+        # the process.
         supervisor = get_pty_supervisor()
         if supervisor is not None:
             session_mgr.attach_terminal(supervisor)

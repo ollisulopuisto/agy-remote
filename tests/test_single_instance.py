@@ -214,3 +214,45 @@ def test_a_live_agy_remote_on_the_port_still_gets_its_guidance(monkeypatch, tmp_
     assert "tmux attach" in out
     assert "424242" in out
     assert seen["supervisor"] == []
+
+
+def test_the_supervised_screen_is_mirrored_even_though_it_starts_late(monkeypatch, tmp_path: Path):
+    """The server starts before the supervisor exists, so the mirror missed it.
+
+    `create_app`'s lifespan attaches the terminal from `get_pty_supervisor()`,
+    but `run` starts the server first and only then builds the supervisor -- so
+    the lookup returned None and `mgr.terminal` stayed None for the life of the
+    process. No screen, and with it no execution mode: Shift+Tab cycles
+    default -> accept-edits -> plan, and the status bar is the only report of
+    the result, so the phone toggled blind.
+    """
+    free = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    free.bind(("127.0.0.1", 0))
+    port = free.getsockname()[1]
+    free.close()
+
+    seen = _stub_launch(monkeypatch, tmp_path, port)
+    monkeypatch.setattr(cli_mod, "_serve_in_background_or_exit", lambda cfg, app: None)
+    monkeypatch.setattr(cli_mod, "wait_for_keypress_or_timeout", lambda *a, **kw: False)
+
+    attached: list = []
+
+    class RecordingManager:
+        terminal = None
+
+        def attach_terminal(self, supervisor) -> None:
+            attached.append(supervisor)
+
+    class FakeApp:
+        class state:
+            session_manager = RecordingManager()
+
+    monkeypatch.setattr(cli_mod, "create_app", lambda cfg: seen["app"].append(cfg) or FakeApp)
+
+    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(port)])
+
+    assert res.exit_code == 0, res.output
+    assert attached, "the supervisor was never handed to the screen mirror"
+    from agy_remote.pty_runner import get_pty_supervisor
+
+    assert attached[0] is get_pty_supervisor()

@@ -2,6 +2,21 @@
  
 ## v26.08.22.23 — The phone follows the session you are working in
 
+- **The terminal was never mirrored under `agy-remote run`, so the phone
+  toggled modes blind.** The lifespan attaches the screen mirror from
+  `get_pty_supervisor()`, but `run` starts the server first and builds the
+  supervisor afterwards, so the lookup returned `None` and `mgr.terminal`
+  stayed `None` for the life of the process — no `terminal_screen` events at
+  all. agy draws its pickers, its confirmations and its execution mode on the
+  terminal and never writes them to the transcript, so Shift+Tab from the phone
+  cycled `default → accept-edits → plan` with nothing reporting where it
+  landed. The supervisor is now handed to the mirror when it is created.
+- **The sessions drawer crushed its own rows.** The list is a column flexbox,
+  so with more sessions than fit on screen the items shrank instead of the list
+  scrolling: each collapsed onto its `min-height` and then squeezed its
+  children, leaving the title a 7px slice through 13px glyphs — measured at
+  279 sessions. Rows now keep their height and the list scrolls.
+
 - **A prompt nothing received still read as sent.** With no agy under a
   supervisor, `send_prompt` types nowhere and returns `"broadcast"`. The REST
   reply said so; the WebSocket path — the one the phone uses — announced
