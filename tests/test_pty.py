@@ -192,10 +192,10 @@ def test_pty_mode_respects_qr_timeout(monkeypatch):
     monkeypatch.setattr(cli_mod, "_preflight_port_or_exit", lambda *a, **kw: None)
     monkeypatch.setattr(cli_mod, "_setup_tls", lambda *a, **kw: None)
     monkeypatch.setattr(cli_mod, "_guard_or_exit", lambda *a, **kw: None)
+    monkeypatch.setattr(cli_mod, "_start_opencode_server_if_needed", lambda *a, **kw: None)
 
     runner = CliRunner()
     res = runner.invoke(cli_mod.cli, ["run", "--qr-timeout", "20"])
     assert res.exit_code == 0, res.output
     assert "timeout_20.0" in calls
     mock_sup.start_sync.assert_called_once()
-
