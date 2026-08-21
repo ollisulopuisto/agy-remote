@@ -96,6 +96,40 @@ function b64encode(bytes) {
   return btoa(s);
 }
 
+// Web Crypto is gated on secure contexts: https:// or localhost only. Over
+// plain http:// to a LAN or tailnet address the API simply does not exist, so
+// there is no way to decrypt anything. Say so plainly rather than failing with
+// an opaque "frame rejected".
+function cryptoUnavailableReason() {
+  if (!e2eeKeyBase64) return 'No encryption key in this link. Re-scan the QR code.';
+  if (!window.crypto?.subtle) {
+    return window.isSecureContext
+      ? 'This browser does not provide the Web Crypto API.'
+      : 'Encryption needs HTTPS. This page was loaded over plain http://, where '
+        + 'browsers disable the Web Crypto API entirely. Restart agy-remote with '
+        + 'Tailscale HTTPS, or set AGY_REMOTE_NO_E2EE=1 to run without encryption.';
+  }
+  return null;
+}
+
+function showBlockingNotice(text) {
+  statusBadge.className = 'status-badge disconnected';
+  statusText.textContent = 'Not encrypted';
+  sessionSubtitle.textContent = 'Cannot decrypt';
+  chatContainer.innerHTML = '';
+  const box = document.createElement('div');
+  box.style.cssText =
+    'margin:24px 12px;padding:16px;border:1px solid #f59e0b;border-radius:10px;'
+    + 'background:rgba(245,158,11,0.08);color:#fcd34d;font-size:13px;line-height:1.55;';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:700;margin-bottom:8px;color:#fbbf24;';
+  title.textContent = 'Encrypted session cannot be opened';
+  const body = document.createElement('div');
+  body.textContent = text;
+  box.append(title, body);
+  chatContainer.appendChild(box);
+}
+
 async function initCrypto() {
   if (!e2eeKeyBase64 || !window.crypto?.subtle) return;
   try {
@@ -761,5 +795,23 @@ if ('serviceWorker' in navigator) {
   setupSpeechRecognition();
   setupPushNotifications();
   setupAttachments();
+
+  // If the server is sealing frames we cannot open, connecting only produces a
+  // stream of rejections. Explain the cause instead.
+  let serverUsesE2ee = true;
+  try {
+    const res = await fetch(`/api/status?token=${encodeURIComponent(authToken)}`);
+    const status = await res.json();
+    serverUsesE2ee = status.e2ee_enabled !== false;
+  } catch (e) {
+    console.debug('Could not read server status:', e);
+  }
+
+  const reason = cryptoUnavailableReason();
+  if (serverUsesE2ee && reason) {
+    showBlockingNotice(reason);
+    return;
+  }
+
   connectWebSocket();
 })();

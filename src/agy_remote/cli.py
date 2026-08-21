@@ -17,8 +17,11 @@ from rich.table import Table
 from .config import (
     InsecureConfigError,
     RemoteConfig,
+    TailscaleCertError,
     adopt_runtime_state,
+    ensure_tailscale_cert,
     get_config,
+    get_tailscale_dns_name,
     is_loopback_host,
     read_runtime_state,
 )
@@ -55,7 +58,15 @@ def print_banner(cfg: RemoteConfig, mode: str = "Standalone") -> None:
     if cfg.enable_auth:
         table.add_row("Auth Token:", f"[yellow]{cfg.auth_token}[/]")
     if cfg.e2ee_enabled:
-        table.add_row("E2EE Status:", "[bold green]Active (AES-256-GCM via URL Hash)[/]")
+        if cfg.tls_enabled:
+            table.add_row("E2EE Status:", "[bold green]Active (AES-256-GCM over HTTPS)[/]")
+        else:
+            table.add_row(
+                "E2EE Status:",
+                "[yellow]Key issued, but browsers need HTTPS for Web Crypto[/]",
+            )
+    if cfg.tls_enabled:
+        table.add_row("TLS:", "[bold green]Tailscale certificate[/]")
     table.add_row("Brain Dir:", f"[dim]{cfg.brain_dir}[/]")
     if not cfg.enable_auth:
         table.add_row("Auth:", "[bold red]DISABLED (loopback only)[/]")
@@ -82,6 +93,58 @@ def print_banner(cfg: RemoteConfig, mode: str = "Standalone") -> None:
     console.print()
 
 
+def _setup_tls(cfg: RemoteConfig, tls: bool | None) -> None:
+    """Obtain a Tailscale HTTPS certificate and point `cfg` at it.
+
+    Browsers expose Web Crypto only in a secure context, so without HTTPS the
+    phone has no crypto API and payload encryption cannot work at all. A
+    Tailscale certificate is a real, publicly-trusted one, so phones accept it
+    with no warning and nothing to install.
+
+    `tls=None` means "use it if available"; `tls=True` makes it mandatory.
+    """
+    if tls is False:
+        return
+
+    dns_name = get_tailscale_dns_name()
+    if not dns_name:
+        message = (
+            "Tailscale is not running, so no HTTPS certificate can be issued.\n"
+            "  Start it with:  sudo brew services start tailscale && sudo tailscale up"
+        )
+        if tls:
+            console.print(f"[bold red]--tls requested but unavailable:[/bold red] {message}")
+            sys.exit(2)
+        console.print(f"[yellow]Serving over plain HTTP.[/yellow] {message}")
+        _warn_insecure_context(cfg)
+        return
+
+    try:
+        cert, key = ensure_tailscale_cert(dns_name)
+    except TailscaleCertError as e:
+        if tls:
+            console.print(f"[bold red]Could not obtain a certificate:[/bold red] {e}")
+            sys.exit(2)
+        console.print(f"[yellow]Serving over plain HTTP.[/yellow] {e}")
+        _warn_insecure_context(cfg)
+        return
+
+    cfg.tailscale_dns_name = dns_name
+    cfg.tls_cert, cfg.tls_key = cert, key
+    console.print(f"[green]HTTPS enabled[/green] for [bold]{dns_name}[/bold] (Tailscale certificate)\n")
+
+
+def _warn_insecure_context(cfg: RemoteConfig) -> None:
+    """Explain why E2EE cannot work over plain HTTP on a non-loopback address."""
+    if cfg.e2ee_enabled:
+        console.print(
+            "[yellow]Note:[/yellow] browsers only provide the Web Crypto API over HTTPS or on\n"
+            "  localhost, so payload encryption cannot work from a phone over plain HTTP.\n"
+            "  Enable HTTPS as above, or set AGY_REMOTE_NO_E2EE=1 to accept cleartext\n"
+            "  payloads on a network you trust.\n"
+        )
+
+
 def _guard_or_exit(cfg: RemoteConfig) -> None:
     """Abort with a readable message rather than a traceback on unsafe config."""
     from .config import validate_bind_security
@@ -94,7 +157,7 @@ def _guard_or_exit(cfg: RemoteConfig) -> None:
 
 
 @click.group()
-@click.version_option(version="v26.08.22.1", message="agy-remote %(version)s")
+@click.version_option(version="v26.08.22.2", message="agy-remote %(version)s")
 def cli() -> None:
     """Antigravity CLI (agy) Mobile Remote Controller with E2EE & Web Push."""
     pass
@@ -107,6 +170,12 @@ def cli() -> None:
 @click.option("--no-auth", is_flag=True, help="Disable authentication requirement")
 @click.option("--no-e2ee", is_flag=True, help="Disable End-to-End Encryption")
 @click.option(
+    "--tls/--no-tls",
+    "tls",
+    default=None,
+    help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
+)
+@click.option(
     "--brain-dir",
     type=click.Path(path_type=Path),
     default=None,
@@ -118,6 +187,7 @@ def serve(
     token: str | None,
     no_auth: bool,
     no_e2ee: bool,
+    tls: bool | None,
     brain_dir: Path | None,
 ) -> None:
     """Start the agy-remote server and watch active sessions."""
@@ -134,10 +204,18 @@ def serve(
         cfg.brain_dir = brain_dir
 
     _guard_or_exit(cfg)
+    _setup_tls(cfg, tls)
     print_banner(cfg, mode="Watcher Server")
 
     app = create_app(cfg)
-    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
+    uvicorn.run(
+        app,
+        host=cfg.host,
+        port=cfg.port,
+        log_level="warning",
+        ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
+        ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
+    )
 
 
 @cli.command("run", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
@@ -147,6 +225,12 @@ def serve(
 @click.option("--tmux", is_flag=True, help="Run inside a persistent tmux session")
 @click.option("--no-auth", is_flag=True, help="Disable authentication")
 @click.option("--no-e2ee", is_flag=True, help="Disable End-to-End Encryption")
+@click.option(
+    "--tls/--no-tls",
+    "tls",
+    default=None,
+    help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
+)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -156,6 +240,7 @@ def run(
     tmux: bool,
     no_auth: bool,
     no_e2ee: bool,
+    tls: bool | None,
 ) -> None:
     """Launch agy CLI inside supervisor with simultaneous desktop & mobile control."""
     cfg = get_config()
@@ -169,6 +254,7 @@ def run(
         cfg.e2ee_enabled = False
 
     _guard_or_exit(cfg)
+    _setup_tls(cfg, tls)
 
     agy_args = ["agy"] + ctx.args
     mode_label = "tmux Persistence" if tmux else "PTY Supervisor"
@@ -176,7 +262,16 @@ def run(
 
     # Start FastAPI server in a background thread
     app = create_app(cfg)
-    server = uvicorn.Server(uvicorn.Config(app, host=cfg.host, port=cfg.port, log_level="error"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=cfg.host,
+            port=cfg.port,
+            log_level="error",
+            ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
+            ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
+        )
+    )
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
 

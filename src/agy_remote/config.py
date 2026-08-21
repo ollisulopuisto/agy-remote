@@ -127,6 +127,85 @@ def pick_lan_address(pairs: list[tuple[str, str]]) -> str | None:
     return None
 
 
+def parse_tailscale_dns_name(status_json: str) -> str | None:
+    """Extract this node's MagicDNS name from `tailscale status --json`."""
+    try:
+        data = json.loads(status_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    name = (data.get("Self") or {}).get("DNSName") or ""
+    return name.rstrip(".") or None
+
+
+def get_tailscale_dns_name() -> str | None:
+    """This node's MagicDNS name, needed to request a TLS certificate."""
+    try:
+        res = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_tailscale_dns_name(res.stdout) if res.returncode == 0 else None
+
+
+TLS_DIR = Path.home() / ".gemini" / "antigravity-cli" / "tls"
+
+
+class TailscaleCertError(RuntimeError):
+    """Raised when a Tailscale TLS certificate could not be obtained."""
+
+
+def ensure_tailscale_cert(dns_name: str, cert_dir: Path | None = None) -> tuple[Path, Path]:
+    """Fetch (or refresh) a Let's Encrypt certificate for this tailnet node.
+
+    Browsers only expose Web Crypto in a secure context, so HTTPS is what makes
+    payload encryption possible on a phone at all. `tailscale cert` issues a
+    genuine certificate for the MagicDNS name, which phones trust with no
+    warning and no manual certificate installation.
+
+    Raises:
+        TailscaleCertError: if the certificate could not be issued.
+    """
+    cert_dir = cert_dir or TLS_DIR
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_path = cert_dir / f"{dns_name}.crt"
+    key_path = cert_dir / f"{dns_name}.key"
+
+    try:
+        res = subprocess.run(
+            [
+                "tailscale",
+                "cert",
+                "--cert-file",
+                str(cert_path),
+                "--key-file",
+                str(key_path),
+                dns_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise TailscaleCertError(f"Could not run `tailscale cert`: {e}") from e
+
+    if res.returncode != 0 or not cert_path.exists() or not key_path.exists():
+        detail = (res.stderr or res.stdout or "").strip()
+        raise TailscaleCertError(
+            f"`tailscale cert` failed for {dns_name}.\n{detail}\n"
+            "HTTPS certificates must be enabled for your tailnet in the admin "
+            "console (DNS -> HTTPS Certificates)."
+        )
+
+    os.chmod(key_path, 0o600)
+    return cert_path, key_path
+
+
 def get_lan_ip() -> str:
     """Get the LAN IPv4 address to advertise to mobile clients.
 
@@ -204,8 +283,20 @@ class RemoteConfig(BaseModel):
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
     tailscale_ip: str | None = Field(default_factory=get_tailscale_ip)
+    tailscale_dns_name: str | None = None
     lan_ip: str = Field(default_factory=get_lan_ip)
     hostname: str = Field(default_factory=get_hostname)
+    tls_cert: Path | None = None
+    tls_key: Path | None = None
+
+    @property
+    def tls_enabled(self) -> bool:
+        """True when the server can serve HTTPS, making Web Crypto available."""
+        return bool(self.tls_cert and self.tls_key)
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.tls_enabled else "http"
 
     def get_connect_urls(self) -> list[tuple[str, str]]:
         """Return list of (label, url) for mobile connection."""
@@ -213,7 +304,16 @@ class RemoteConfig(BaseModel):
         token_param = f"?token={self.auth_token}" if self.enable_auth else ""
         hash_fragment = f"#key={self.e2ee_key}" if self.e2ee_enabled else ""
 
-        if self.tailscale_ip:
+        # A TLS certificate is issued for the MagicDNS name, so the URL must
+        # use that name rather than the raw IP or the certificate will not match.
+        if self.tls_enabled and self.tailscale_dns_name:
+            urls.append(
+                (
+                    "Tailscale HTTPS (Preferred Mobile)",
+                    f"https://{self.tailscale_dns_name}:{self.port}/{token_param}{hash_fragment}",
+                )
+            )
+        elif self.tailscale_ip:
             urls.append(
                 (
                     "Tailscale (Preferred Mobile)",
@@ -225,14 +325,14 @@ class RemoteConfig(BaseModel):
             urls.append(
                 (
                     "Local Wi-Fi / LAN",
-                    f"http://{self.lan_ip}:{self.port}/{token_param}{hash_fragment}",
+                    f"{self.scheme}://{self.lan_ip}:{self.port}/{token_param}{hash_fragment}",
                 )
             )
 
         urls.append(
             (
                 "Localhost",
-                f"http://localhost:{self.port}/{token_param}{hash_fragment}",
+                f"{self.scheme}://localhost:{self.port}/{token_param}{hash_fragment}",
             )
         )
 
@@ -308,8 +408,19 @@ def write_runtime_state(cfg: RemoteConfig) -> Path:
     return RUNTIME_STATE_FILE
 
 
-def clear_runtime_state() -> None:
-    """Remove the published credentials when the server shuts down."""
+def clear_runtime_state(owner_pid: int | None = None) -> None:
+    """Remove the published credentials, but only if we published them.
+
+    On a quick restart the outgoing server can finish shutting down after the
+    incoming one has already written its file. Clearing unconditionally then
+    deletes the *new* server's credentials, leaving `qr` and the PreToolUse
+    hook with nothing to find.
+    """
+    if owner_pid is not None:
+        state = read_runtime_state()
+        if state is not None and state.get("pid") != owner_pid:
+            logger.debug("Runtime state belongs to pid %s; leaving it alone", state.get("pid"))
+            return
     try:
         RUNTIME_STATE_FILE.unlink(missing_ok=True)
     except OSError as e:

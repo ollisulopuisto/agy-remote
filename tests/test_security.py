@@ -496,3 +496,73 @@ def test_adopt_runtime_state_is_a_noop_without_a_running_server(tmp_path: Path, 
     monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", tmp_path / "absent.json")
     cfg = RemoteConfig(brain_dir=tmp_path, auth_token="local")
     assert config_mod.adopt_runtime_state(cfg).auth_token == "local"
+
+
+def test_shutdown_does_not_clear_another_servers_state(tmp_path: Path, monkeypatch):
+    """Regression: restarting the server left no published credentials.
+
+    A stopping server ran clear_runtime_state() unconditionally. When restarted
+    quickly, the outgoing process deleted the *incoming* one's file, so `qr`
+    and the PreToolUse hook found nothing.
+    """
+    import os
+
+    import agy_remote.config as config_mod
+
+    state_file = tmp_path / "runtime.json"
+    monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", state_file)
+
+    # The new server publishes its credentials under its own pid.
+    config_mod.write_runtime_state(_cfg(tmp_path, auth_token="new-server"))
+    assert config_mod.read_runtime_state()["auth_token"] == "new-server"
+
+    # The old server, shutting down late, must not delete them.
+    config_mod.clear_runtime_state(owner_pid=os.getpid() + 12345)
+    assert config_mod.read_runtime_state() is not None, "outgoing server clobbered the new state"
+
+    # The owning process still cleans up after itself.
+    config_mod.clear_runtime_state(owner_pid=os.getpid())
+    assert config_mod.read_runtime_state() is None
+
+
+# ---------------------------------------------------------------------------
+# HTTPS via Tailscale: Web Crypto only exists in a secure context, so plain
+# http:// on a LAN address cannot do E2EE at all.
+# ---------------------------------------------------------------------------
+
+TAILSCALE_STATUS_JSON = """
+{"Self": {"DNSName": "mac-studio.tail1a2b3.ts.net.", "TailscaleIPs": ["100.101.102.103"]}}
+"""
+
+
+def test_tailscale_dns_name_is_parsed():
+    from agy_remote.config import parse_tailscale_dns_name
+
+    assert parse_tailscale_dns_name(TAILSCALE_STATUS_JSON) == "mac-studio.tail1a2b3.ts.net"
+    assert parse_tailscale_dns_name("not json") is None
+    assert parse_tailscale_dns_name("{}") is None
+
+
+def test_connect_urls_use_https_and_dns_name_when_tls_is_on(tmp_path: Path):
+    """Web Crypto needs a secure context, so the pairing URL must be https."""
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert.write_text("x")
+    key.write_text("y")
+
+    cfg = _cfg(
+        tmp_path,
+        tailscale_ip="100.101.102.103",
+        tailscale_dns_name="mac-studio.tail1a2b3.ts.net",
+        tls_cert=cert,
+        tls_key=key,
+    )
+    label, url = cfg.get_connect_urls()[0]
+    assert url.startswith("https://mac-studio.tail1a2b3.ts.net:"), url
+    assert "Tailscale" in label
+    assert cfg.tls_enabled is True
+
+
+def test_connect_urls_stay_http_without_tls(tmp_path: Path):
+    cfg = _cfg(tmp_path, lan_ip="192.168.1.42")
+    assert cfg.tls_enabled is False
+    assert cfg.get_connect_urls()[0][1].startswith("http://192.168.1.42:")

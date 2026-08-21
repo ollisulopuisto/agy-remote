@@ -1,5 +1,40 @@
 # Changelog
 
+## v26.08.22.2 — HTTPS, working hooks, and honest failure
+
+### Web Crypto requires HTTPS
+
+Payload encryption never worked from a phone, in any prior version. Browsers
+expose `crypto.subtle` only in a **secure context** (HTTPS or localhost), so
+over `http://<lan-ip>` the API does not exist. v26.08.21.5 degraded silently:
+`initCrypto()` bailed out, `encryptData()` returned plaintext, and the server
+accepted it — the session ran fully in the clear while the UI implied otherwise.
+
+- Added `--tls`, which obtains a real Let's Encrypt certificate for this node's
+  MagicDNS name via `tailscale cert`. Phones trust it with no warning and
+  nothing to install, and pairing URLs switch to `https://` + the DNS name so
+  the certificate matches. Used automatically when Tailscale is available.
+- The client now detects an insecure context and explains it, instead of
+  silently downgrading (old behaviour) or reporting an opaque "Frame rejected"
+  (v26.08.22.1).
+- The CLI warns at startup when serving plain HTTP with E2EE enabled.
+
+### Remote tool approvals
+
+- The installed hook command is now an absolute path. `agy-remote` lives in a
+  project virtualenv that is not on `PATH`, so agy's `sh -c` could not launch
+  the bare name and no approval ever reached the phone.
+- The hook no longer falls back to `get_config()`, which shelled out to
+  `tailscale ip` and `ifconfig` — about 2 seconds of latency on every tool call,
+  to detect addresses a hook never uses.
+
+### Fixes
+
+- A restarting server no longer deletes the incoming server's runtime state.
+  Shutdown cleared the file unconditionally, so on a quick restart the outgoing
+  process wiped the new credentials and left `qr` and the hook with nothing.
+
+
 ## v26.08.22.1 — Security hardening
 
 Full security audit and remediation. Every fix below ships with a regression

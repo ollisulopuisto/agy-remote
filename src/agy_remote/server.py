@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import uuid
 from collections.abc import AsyncGenerator
@@ -51,7 +52,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 api_key_header = APIKeyHeader(name="X-Auth-Token", auto_error=False)
 
-VERSION = "26.08.22.1"
+VERSION = "26.08.22.2"
 
 #: Extensions accepted by /api/upload, mapped to their magic-byte signatures.
 #: SVG is deliberately absent: it is an active-content format that can carry
@@ -96,10 +97,11 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         await session_mgr.start()
         # Let the PreToolUse hook (a separate process) find our token and port.
         write_runtime_state(cfg)
+        owner_pid = os.getpid()
         try:
             yield
         finally:
-            clear_runtime_state()
+            clear_runtime_state(owner_pid=owner_pid)
             await session_mgr.stop()
 
     app = FastAPI(
