@@ -156,3 +156,76 @@ def test_hook_health_reports_config_without_our_entry(tmp_path: Path):
     (tmp_path / "hooks.json").write_text(json.dumps({"other-plugin": {}}))
     status, _detail = hook_health(config_dir=tmp_path)
     assert status == "missing"
+
+
+# ---------------------------------------------------------------------------
+# setup-hooks must not pin the hook to uv's ephemeral cache. Under `uvx
+# agy-remote`, argv[0] AND sys.executable live in ~/.cache/uv/environments-v2/,
+# which `uv cache clean` deletes -- quietly breaking approvals until the next
+# setup-hooks. (`python -m` is no escape: the interpreter is in the same env.)
+# ---------------------------------------------------------------------------
+
+
+def _fake_cache_argv(monkeypatch, tmp_path: Path) -> Path:
+    import sys
+
+    cache = tmp_path / "uv-cache"
+    ephemeral = cache / "environments-v2" / "agy-remote-abc123" / "bin" / "agy-remote"
+    ephemeral.parent.mkdir(parents=True)
+    ephemeral.write_text("#!/bin/sh\n")
+    ephemeral.chmod(0o755)
+    monkeypatch.setenv("UV_CACHE_DIR", str(cache))
+    monkeypatch.setattr(sys, "argv", [str(ephemeral)])
+    return tmp_path
+
+
+def test_a_stable_tool_install_beats_the_ephemeral_cache_binary(monkeypatch, tmp_path: Path):
+    from agy_remote.hooks import resolve_hook_command
+
+    _fake_cache_argv(monkeypatch, tmp_path)
+    tool_bin = tmp_path / "uv-tools" / "agy-remote" / "bin" / "agy-remote"
+    tool_bin.parent.mkdir(parents=True)
+    tool_bin.write_text("#!/bin/sh\n")
+    tool_bin.chmod(0o755)
+    monkeypatch.setenv("UV_TOOL_DIR", str(tmp_path / "uv-tools"))
+
+    command = resolve_hook_command()
+    assert command == f"{tool_bin} hook-pre-tool"
+
+
+def test_without_a_stable_install_the_hook_goes_through_uvx(monkeypatch, tmp_path: Path):
+    """uvx re-resolves per call, so the hook self-heals after `uv cache clean`
+    instead of pointing at a deleted directory."""
+
+    from agy_remote import hooks as hooks_mod
+    from agy_remote.hooks import resolve_hook_command
+
+    _fake_cache_argv(monkeypatch, tmp_path)
+    monkeypatch.setenv("UV_TOOL_DIR", str(tmp_path / "no-tools"))
+    uvx = tmp_path / "bin" / "uvx"
+    uvx.parent.mkdir(parents=True)
+    uvx.write_text("#!/bin/sh\n")
+    uvx.chmod(0o755)
+    monkeypatch.setattr(
+        hooks_mod.shutil,
+        "which",
+        lambda name: str(uvx) if name == "uvx" else None,
+    )
+
+    command = resolve_hook_command()
+    assert command == f"{uvx} agy-remote hook-pre-tool"
+
+
+def test_a_stable_argv0_is_used_directly_as_before(monkeypatch, tmp_path: Path):
+    import sys
+
+    from agy_remote.hooks import resolve_hook_command
+
+    stable = tmp_path / "project" / ".venv" / "bin" / "agy-remote"
+    stable.parent.mkdir(parents=True)
+    stable.write_text("#!/bin/sh\n")
+    stable.chmod(0o755)
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
+    monkeypatch.setattr(sys, "argv", [str(stable)])
+
+    assert resolve_hook_command() == f"{stable} hook-pre-tool"

@@ -2,6 +2,6 @@
 
 from .cli import cli, main
 
-__version__ = "v26.08.22.20"
+__version__ = "v26.08.22.21"
 
 __all__ = ["main", "cli", "__version__"]

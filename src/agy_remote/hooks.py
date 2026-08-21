@@ -40,19 +40,59 @@ def resolve_server_endpoint() -> tuple[str, str]:
     return f"http://127.0.0.1:{port}", os.environ.get("AGY_REMOTE_TOKEN", "")
 
 
+def _uv_cache_dir() -> Path:
+    """Where uv keeps its ephemeral environments."""
+    env = os.environ.get("UV_CACHE_DIR")
+    return Path(env) if env else Path.home() / ".cache" / "uv"
+
+
+def _is_ephemeral(path: Path) -> bool:
+    """Whether `path` lives in uv's cache, which `uv cache clean` deletes."""
+    try:
+        return path.resolve().is_relative_to(_uv_cache_dir().resolve())
+    except OSError:
+        return False
+
+
+def _uv_tool_binary() -> Path | None:
+    """The binary of a stable `uv tool install agy-remote`, if one exists."""
+    env = os.environ.get("UV_TOOL_DIR")
+    tool_dir = Path(env) if env else Path.home() / ".local" / "share" / "uv" / "tools"
+    binary = tool_dir / "agy-remote" / "bin" / "agy-remote"
+    if binary.is_file() and os.access(binary, os.X_OK):
+        return binary
+    return None
+
+
 def resolve_hook_command() -> str:
-    """Build an absolute command line agy's `sh -c` can actually execute.
+    """Build a command line agy's `sh -c` can execute, today and next month.
 
     `agy-remote` normally lives in a project virtualenv that is not on PATH,
-    so the bare name fails to launch and approvals never reach the phone.
+    so the bare name fails to launch and approvals never reach the phone --
+    hence an absolute path.
+
+    But not *any* absolute path: under `uvx agy-remote`, argv[0] and
+    sys.executable both live in uv's cache, which `uv cache clean` deletes --
+    quietly breaking approvals until the next setup-hooks. So an ephemeral
+    location is passed over in favor of a stable `uv tool` install, then
+    anything on PATH outside the cache, then `uvx` itself, which re-resolves
+    on every call and therefore self-heals after a cache clean.
     """
     candidate = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
-    if candidate and candidate.name.startswith("agy-remote") and candidate.exists():
+    if candidate and candidate.name.startswith("agy-remote") and candidate.exists() and not _is_ephemeral(candidate):
         return f"{shlex.quote(str(candidate))} hook-pre-tool"
 
+    tool_binary = _uv_tool_binary()
+    if tool_binary:
+        return f"{shlex.quote(str(tool_binary))} hook-pre-tool"
+
     found = shutil.which("agy-remote")
-    if found:
+    if found and not _is_ephemeral(Path(found)):
         return f"{shlex.quote(str(Path(found).resolve()))} hook-pre-tool"
+
+    uvx = shutil.which("uvx")
+    if uvx:
+        return f"{shlex.quote(uvx)} agy-remote hook-pre-tool"
 
     # Last resort: the interpreter running us can always reach the module.
     return f"{shlex.quote(sys.executable)} -m agy_remote.cli hook-pre-tool"

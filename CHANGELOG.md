@@ -1,5 +1,18 @@
 # Changelog
 
+## v26.08.22.21 — Hooks survive `uv cache clean`
+
+- **`setup-hooks` under `uvx` pinned approvals to uv's ephemeral cache.** The
+  hook command captures an absolute path, and under `uvx agy-remote` both
+  argv[0] and the interpreter live in `~/.cache/uv/environments-v2/…` — which
+  `uv cache clean` deletes, quietly breaking approvals until the next
+  setup-hooks. (`python -m` is no escape: the interpreter is in the same env.)
+  Resolution now passes over ephemeral locations in favor of a stable
+  `uv tool install agy-remote` binary, then anything on PATH outside the cache,
+  then `uvx agy-remote hook-pre-tool` itself — which re-resolves on every call
+  and therefore self-heals after a cache clean instead of pointing at a deleted
+  directory.
+
 ## v26.08.22.20 — PyPI release & global uv tool / uvx support
 
 - **Published to PyPI.** `agy-remote` is now available as a package on PyPI.
