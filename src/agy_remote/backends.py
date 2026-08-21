@@ -77,8 +77,14 @@ class AgentBackend(Protocol):
     def summary_of(self, mgr: SessionManager, conversation_id: str | None) -> dict[str, Any] | None:
         """One conversation's summary as clients need it to name a session."""
 
-    async def send_prompt(self, mgr: SessionManager, prompt: str) -> str:
-        """Deliver a prompt; returns how it was delivered."""
+    async def send_prompt(self, mgr: SessionManager, prompt: str, conversation_id: str | None = None) -> str:
+        """Deliver a prompt; returns how it was delivered.
+
+        `conversation_id` is the session the sender was looking at. The active
+        session moves on its own now (the phone follows the desktop), so a
+        prompt that does not say where it came from can land somewhere its
+        author will never see it.
+        """
 
     async def deliver_resolution(self, mgr: SessionManager, approval: dict[str, Any], payload: dict[str, Any]) -> None:
         """Carry the phone's decision to the agent (agy: nothing, the blocked
@@ -375,8 +381,12 @@ class AgyBackend:
 
     # -- interaction ---------------------------------------------------------
 
-    async def send_prompt(self, mgr: SessionManager, prompt: str) -> str:
-        """Type into whichever supervisor is live; fall back to a broadcast."""
+    async def send_prompt(self, mgr: SessionManager, prompt: str, conversation_id: str | None = None) -> str:
+        """Type into whichever supervisor is live; fall back to a broadcast.
+
+        agy drives one session per supervisor, so there is nowhere else the
+        typing could go and `conversation_id` is accepted but unused.
+        """
         from .pty_runner import get_pty_supervisor
         from .tmux_runner import get_tmux_supervisor
 

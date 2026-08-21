@@ -565,9 +565,13 @@ class OpencodeBackend:
 
     # -- interaction -----------------------------------------------------------------
 
-    async def send_prompt(self, mgr: SessionManager, prompt: str) -> str:
-        """Send via the API (immune to TUI focus state); fall back to typing."""
-        sid = mgr.active_conversation_id
+    async def send_prompt(self, mgr: SessionManager, prompt: str, conversation_id: str | None = None) -> str:
+        """Send via the API (immune to TUI focus state); fall back to typing.
+
+        Posted to the session the sender named, not to whatever is active by
+        the time this runs -- following the desktop moves that on its own.
+        """
+        sid = conversation_id or mgr.active_conversation_id
         if self._client and sid:
             try:
                 r = await self._client.post(

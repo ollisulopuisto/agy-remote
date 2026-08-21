@@ -110,7 +110,15 @@
     return { label: name, title: name + ' remote' };
   }
 
+  // Where a prompt should go. A socket that is connecting, closing, closed or
+  // gone used to mean the prompt was written nowhere and the input cleared
+  // anyway -- the text simply vanished. REST reaches the same server.
+  function promptRoute(readyState) {
+    return readyState === 1 ? 'socket' : 'rest';
+  }
+
   global.AgyFormat = {
+    promptRoute: promptRoute,
     agentIdentity: agentIdentity,
     sessionLabel: sessionLabel,
     toolSummary: toolSummary,

@@ -715,3 +715,40 @@ async def test_a_session_the_user_pinned_is_not_dragged_away(tmp_path: Path):
     )
 
     assert mgr.active_conversation_id == "ses_old"
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_goes_to_the_session_it_was_typed_in(tmp_path: Path):
+    """The phone names its session; the server's idea of "active" can move.
+
+    Following the desktop means the active session changes on its own, so a
+    prompt typed while looking at one session could be posted to another that
+    became active between the tap and the send -- landing where the sender
+    would never see it.
+    """
+    cfg = RemoteConfig(agent="opencode", opencode_port=4096, brain_dir=tmp_path)
+    backend = OpencodeBackend(cfg)
+    mgr = SessionManager(cfg, backend=backend)
+    mgr.broadcast = AsyncMock()
+    _seed(backend, "ses_typed_in", "What the phone was showing", 1740000000000)
+    _seed(backend, "ses_moved_on", "Where the desktop went", 1740000001000)
+    await mgr.switch_conversation("ses_moved_on")
+
+    posts: list[tuple[str, dict]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+    class FakeClient:
+        async def post(self, url, json):
+            posts.append((url, json))
+            return FakeResponse()
+
+    backend._client = FakeClient()
+
+    await backend.send_prompt(mgr, "only for the session I am looking at", conversation_id="ses_typed_in")
+
+    assert posts and "ses_typed_in" in posts[0][0], posts
+    # An unnamed session still means "wherever the view is".
+    await backend.send_prompt(mgr, "no session named")
+    assert "ses_moved_on" in posts[1][0], posts

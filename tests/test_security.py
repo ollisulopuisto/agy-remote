@@ -300,11 +300,11 @@ def test_unencrypted_frame_rejected_when_e2ee_enabled(tmp_path: Path):
         # Then a legitimate sealed ping, proving the socket is still alive.
         ws.send_json(encrypt_payload({"action": "ping"}, key))
 
-        reply = ws.receive_json()
+        # The rejection notice comes first; the pong proves the socket lived.
+        seen = [decrypt_payload(ws.receive_json(), key) for _ in range(2)]
 
-    assert reply.get("encrypted") is True
-    opened = decrypt_payload(reply, key)
-    assert opened == {"event": "pong"}, f"plaintext frame was acted on: {opened}"
+    assert all(f.get("event") != "prompt_sent" for f in seen), f"plaintext frame was acted on: {seen}"
+    assert seen[-1] == {"event": "pong"}, f"socket did not survive the rejection: {seen}"
 
 
 def test_full_websocket_roundtrip_is_sealed(tmp_path: Path):
@@ -566,3 +566,47 @@ def test_connect_urls_stay_http_without_tls(tmp_path: Path):
     cfg = _cfg(tmp_path, lan_ip="192.168.1.42")
     assert cfg.tls_enabled is False
     assert cfg.get_connect_urls()[0][1].startswith("http://192.168.1.42:")
+
+
+# ---------------------------------------------------------------------------
+# Finding: a dropped client frame was dropped in silence
+# ---------------------------------------------------------------------------
+
+
+def test_a_rejected_frame_is_reported_back_to_the_client(tmp_path: Path):
+    """A prompt the server threw away must not look like one it accepted.
+
+    Every rejection path -- unsealed frame, bad tag, replayed nonce, a clock
+    outside the freshness window -- logged a warning on the desktop and
+    `continue`d. The phone had sent into a socket that was open, got nothing
+    back, and cleared the input: the prompt was simply gone, with the last
+    transcript it had received still on screen.
+
+    Ordering makes this fail fast rather than block: a sealed ping follows each
+    bad frame, so the rejection has to arrive before that pong or not at all.
+    """
+    cfg = _cfg(tmp_path)
+    app = create_app(cfg)
+    key = decode_key(cfg.e2ee_key)
+    client = TestClient(app)
+
+    with client.websocket_connect(f"/ws?token={cfg.auth_token}") as ws:
+        ws.receive_json()  # sealed init snapshot
+
+        ws.send_json({"action": "send_prompt", "data": {"prompt": "INJECTED"}})
+        ws.send_json(encrypt_payload({"action": "ping"}, key))
+        unsealed = decrypt_payload(ws.receive_json(), key)
+        assert decrypt_payload(ws.receive_json(), key)["event"] == "pong"
+
+        # A sealed frame whose nonce the server has already accepted.
+        replay = encrypt_payload({"action": "ping"}, key)
+        ws.send_json(replay)
+        assert decrypt_payload(ws.receive_json(), key)["event"] == "pong"
+        ws.send_json(replay)
+        ws.send_json(encrypt_payload({"action": "ping"}, key))
+        replayed = decrypt_payload(ws.receive_json(), key)
+
+    assert unsealed["event"] == "frame_rejected", f"plaintext frame dropped in silence: {unsealed}"
+    assert unsealed["data"]["reason"]
+    assert replayed["event"] == "frame_rejected", f"replayed frame dropped in silence: {replayed}"
+    assert replayed["data"]["reason"]

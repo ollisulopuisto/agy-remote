@@ -2,6 +2,20 @@
  
 ## v26.08.21.42 — The phone follows the session you are working in
 
+- **A prompt from the phone could vanish without a word.** Every path that
+  dropped a client frame — an unsealed frame, a bad tag, a replayed nonce, a
+  clock outside the ±300s window — logged a warning on the desktop and moved
+  on, and the PWA discarded the prompt outright whenever the socket was not
+  `OPEN`, clearing the input either way. The send looked identical to a
+  delivered one. The server now answers a dropped frame with `frame_rejected`
+  and its reason, the phone falls back to `POST /api/prompt` when the socket
+  is not open, and text that could not be delivered stays in the box.
+- **A prompt could be posted to a session you were not looking at.** Now that
+  the phone follows the desktop, the active session moves on its own — between
+  the tap and the send it could have changed. Both `send_prompt` paths now
+  carry the session the sender was showing (`/api/prompt` had accepted a
+  `conversation_id`, echoed it in the broadcast, and then ignored it).
+
 - **The phone sat on an empty session while the desktop worked in another.**
   `opencode attach` opens a fresh session at launch, so a phone following the
   latest one landed there; going back to the session you were actually working

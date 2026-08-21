@@ -339,7 +339,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         verify_auth(request, token, token_header)
 
         mgr = get_mgr(request)
-        delivered_via = await mgr.backend.send_prompt(mgr, req.prompt)
+        delivered_via = await mgr.backend.send_prompt(mgr, req.prompt, req.conversation_id)
 
         await mgr.broadcast(
             {
@@ -496,20 +496,32 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             while True:
                 raw_msg = await websocket.receive_json()
 
+                async def reject(reason: str) -> None:
+                    """Say so, rather than dropping the frame in silence.
+
+                    A prompt the server threw away used to look exactly like
+                    one it accepted: the phone sent into an open socket, got
+                    nothing back and cleared the input. The reply is sealed
+                    like any other, so it tells an attacker nothing they could
+                    not already see from the connection staying open.
+                    """
+                    logger.warning("Rejected WS frame: %s", reason)
+                    await mgr.send_to(websocket, {"event": "frame_rejected", "data": {"reason": reason}})
+
                 if raw_key_bytes is not None:
                     # E2EE is on, so an unsealed frame is never legitimate:
                     # accepting one would let anyone holding only the token
                     # downgrade out of encryption and drive the agent.
                     if not raw_msg.get("encrypted"):
-                        logger.warning("Rejected unencrypted WS frame while E2EE is enabled")
+                        await reject("encrypted frame required while E2EE is enabled")
                         continue
                     try:
                         msg = decrypt_payload(raw_msg, raw_key_bytes, guard=mgr.replay_guard)
                     except EnvelopeError as e:
-                        logger.warning("Rejected WS envelope: %s", e)
+                        await reject(str(e))
                         continue
                     except Exception as e:
-                        logger.warning("Failed decrypting client WS payload: %s", e)
+                        await reject(f"could not decrypt: {e}")
                         continue
                 else:
                     msg = raw_msg
@@ -525,7 +537,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:
-                        await mgr.backend.send_prompt(mgr, prompt_text)
+                        await mgr.backend.send_prompt(mgr, prompt_text, data.get("conversation_id"))
                         await mgr.broadcast(
                             {
                                 "event": "prompt_sent",

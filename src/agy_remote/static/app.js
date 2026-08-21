@@ -425,6 +425,9 @@ function handleServerEvent(event) {
       renderApprovalBanner(data);
       scrollToBottom();
     }
+  } else if (type === 'frame_rejected') {
+    // The server threw our frame away. Without this the prompt just vanished.
+    reportUndelivered(`Server rejected the message: ${data && data.reason ? data.reason : 'unknown reason'}`);
   } else if (type === 'approval_resolved') {
     pendingApprovals = pendingApprovals.filter(a => a.id !== data.id);
     const elem = document.getElementById(`approval-${data.id}`);
@@ -743,19 +746,62 @@ async function sendPrompt(text) {
 
   triggerVibrate(25);
 
+  // Name the session on screen: the active one moves on its own now that the
+  // phone follows the desktop, so an unaddressed prompt can land in a session
+  // its author will never see.
   const payload = {
     action: 'send_prompt',
-    data: { prompt: prompt }
+    data: { prompt: prompt, conversation_id: currentConversationId }
   };
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    const msg = cryptoKey ? await encryptData(payload) : payload;
-    ws.send(JSON.stringify(msg));
+  let delivered = false;
+  if (window.AgyFormat.promptRoute(ws && ws.readyState) === 'socket') {
+    try {
+      const msg = cryptoKey ? await encryptData(payload) : payload;
+      ws.send(JSON.stringify(msg));
+      delivered = true;
+    } catch (e) {
+      delivered = false;
+    }
+  }
+
+  if (!delivered) {
+    delivered = await sendPromptOverRest(prompt);
+  }
+
+  if (!delivered) {
+    // Keep the text: losing it is worse than a stale draft in the box.
+    promptInput.value = prompt;
+    autoResizeInput();
+    reportUndelivered('Not sent — no connection to the server.');
+    return;
   }
 
   promptInput.value = '';
   autoResizeInput();
   scrollToBottom();
+}
+
+// The same server, over a request that reports its own failure. Used when the
+// socket is not open, and as the fallback when writing to it throws.
+async function sendPromptOverRest(prompt) {
+  try {
+    const res = await fetch(`/api/prompt?token=${encodeURIComponent(authToken)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: prompt, conversation_id: currentConversationId })
+    });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// A prompt the server refused, or one that never reached it, has to say so --
+// silence reads exactly like success.
+function reportUndelivered(reason) {
+  statusText.textContent = reason;
+  triggerVibrate([40, 60, 40]);
 }
 
 // The mirrored terminal. The server runs the emulator and sends a grid of

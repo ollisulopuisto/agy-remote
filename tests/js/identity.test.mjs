@@ -43,3 +43,13 @@ test('the header does not hardcode one agent name', () => {
     'the app title must not ship a literal agent name'
   );
 });
+
+test('a prompt is never dropped just because the socket is not open', () => {
+  const { promptRoute } = sandbox.window.AgyFormat;
+  // WebSocket.OPEN === 1. Everything else -- CONNECTING, CLOSING, CLOSED, or
+  // no socket at all -- used to mean the prompt was silently discarded.
+  assert.equal(promptRoute(1), 'socket');
+  for (const state of [0, 2, 3, undefined, null, -1]) {
+    assert.equal(promptRoute(state), 'rest');
+  }
+});
