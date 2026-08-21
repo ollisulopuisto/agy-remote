@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.08.22.8 — The phone can see the terminal
+
+- **Keys were being pressed at a screen nobody could see.** The PWA renders
+  `transcript.jsonl`; agy's pickers, confirmations, autocomplete and the
+  execution mode in its status bar are drawn on the terminal and never written
+  to the transcript. The supervisor had those bytes all along and threw them
+  away after echoing them to its own stdout.
+- The pty stream is now fed through a terminal emulator **on the server**
+  (`screen.py`, backed by `pyte`) and broadcast as a grid of plain text, so the
+  phone renders panels without an emulator of its own and the PWA stays free of
+  third-party scripts. Tap **Screen** to show it; the execution mode appears as
+  a badge beside the title, which is what makes Shift+Tab something other than a
+  blind toggle.
+- The screen is broadcast only when it changes, on the watcher's existing tick,
+  so a still terminal costs nothing. `GET /api/screen` returns the same snapshot,
+  and the `init` payload carries it so a client connecting mid-panel sees the
+  panel instead of waiting for a redraw that may never come.
+- Mirrors the PTY supervisor only. Under `--tmux` the terminal belongs to tmux,
+  which would need `capture-pane` polling instead.
+
 ## v26.08.22.7 — Keys the phone could not press
 
 - **The phone could only send a line of text ending in Enter.** agy's execution

@@ -31,6 +31,7 @@
         <div class="app-title">
           <span>agy</span>
           <span style="color: var(--primary);">remote</span>
+          <span class="mode-badge" id="modeBadge" title="agy execution mode" hidden></span>
         </div>
         <div class="session-subtitle" id="sessionSubtitle">Connecting...</div>
       </div>
@@ -70,8 +71,13 @@
   </main>
 
   <!-- Bottom Interactive Bar -->
+  <section class="terminal-panel" id="terminalPanel" hidden aria-label="Supervised terminal">
+    <pre id="terminalScreen"></pre>
+  </section>
+
   <footer class="bottom-bar">
     <div class="quick-actions">
+      <button class="chip-btn" data-toggle="screen" id="screenToggle" title="Show the terminal agy is drawing on">Screen</button>
       <button class="chip-btn" data-key="shift_tab" title="Cycle execution mode: default, accept-edits, plan">⇧⇥ Mode</button>
       <button class="chip-btn" data-key="escape" title="Close panel / stop the stream">Esc</button>
       <button class="chip-btn" data-key="up" title="Move selection up">↑</button>

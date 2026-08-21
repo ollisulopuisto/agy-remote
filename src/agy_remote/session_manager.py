@@ -19,6 +19,7 @@ from .models import (
     ConversationSummary,
     TranscriptStep,
 )
+from .screen import TerminalMirror
 
 logger = logging.getLogger("agy_remote.session")
 
@@ -38,6 +39,8 @@ class SessionManager:
         self._pending_approvals: dict[str, dict[str, Any]] = {}
         self._approval_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._watcher_task: asyncio.Task[None] | None = None
+        #: Mirror of the supervised terminal, when a session is supervised.
+        self.terminal: TerminalMirror | None = None
         self._running: bool = False
 
         # Key material for sealing every frame we put on the wire. Derived once
@@ -273,6 +276,9 @@ class SessionManager:
                 "steps": [step.model_dump() for step in self.active_steps],
                 "conversations": [c.model_dump(mode="json") for c in self.list_conversations()],
                 "pending_approvals": self.get_active_pending_approvals(),
+                # A client that connects mid-panel must see the panel, not wait
+                # for the next redraw that may never come.
+                "terminal": self.terminal.snapshot() if self.terminal else None,
             },
         }
         try:
@@ -340,6 +346,29 @@ class SessionManager:
 
         return new_steps
 
+    def attach_terminal(self, supervisor: Any) -> None:
+        """Mirror a supervised session's screen for clients that cannot see it.
+
+        agy draws its pickers, its confirmations and its execution mode on the
+        terminal and never writes them to the transcript, so a phone holding
+        only the transcript is pressing keys at a screen it cannot see.
+        """
+        mirror = TerminalMirror(rows=getattr(supervisor, "rows", 24), cols=getattr(supervisor, "cols", 80))
+        supervisor.add_output_listener(mirror.feed)
+        self.terminal = mirror
+
+    async def broadcast_terminal(self) -> bool:
+        """Push the screen to clients, but only when it actually changed."""
+        if self.terminal is None:
+            return False
+
+        snapshot = self.terminal.take_dirty_snapshot()
+        if snapshot is None:
+            return False
+
+        await self.broadcast({"event": "terminal_screen", "data": snapshot})
+        return True
+
     async def follow_latest_conversation(self) -> bool:
         """Move the view to the newest conversation, unless the user pinned one.
 
@@ -384,6 +413,9 @@ class SessionManager:
                                             },
                                         }
                                     )
+
+                # 3. Mirror the terminal, for the panels the transcript never sees
+                await self.broadcast_terminal()
 
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:

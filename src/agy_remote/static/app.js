@@ -390,6 +390,7 @@ function handleServerEvent(event) {
   const { event: type, data } = event;
 
   if (type === 'init') {
+    applyTerminal(data.terminal);
     currentConversationId = data.active_conversation_id;
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
@@ -408,6 +409,8 @@ function handleServerEvent(event) {
       appendStep(data.step);
       if (autoScroll) scrollToBottom();
     }
+  } else if (type === 'terminal_screen') {
+    applyTerminal(data);
   } else if (type === 'approval_request') {
     pendingApprovals.push(data);
     triggerVibrate([80, 40, 100]);
@@ -631,6 +634,56 @@ async function sendPrompt(text) {
   scrollToBottom();
 }
 
+// The mirrored terminal. The server runs the emulator and sends a grid of
+// plain text, so the panels agy draws -- pickers, confirmations, the mode in
+// the status bar -- are visible here without shipping an emulator to the phone.
+let terminalVisible = false;
+try {
+  terminalVisible = localStorage.getItem('agy-remote.screen') === '1';
+} catch (e) {
+  terminalVisible = false;
+}
+
+function applyTerminal(snapshot) {
+  if (!snapshot) return;
+
+  const badge = document.getElementById('modeBadge');
+  if (badge) {
+    badge.textContent = snapshot.mode || '';
+    badge.hidden = !snapshot.mode;
+  }
+
+  const panel = document.getElementById('terminalPanel');
+  const screen = document.getElementById('terminalScreen');
+  if (!panel || !screen) return;
+
+  panel.hidden = !terminalVisible;
+  if (terminalVisible) {
+    // textContent, never innerHTML: this is output from whatever agy just ran.
+    screen.textContent = (snapshot.lines || []).join('\n').replace(/\s+$/, '');
+  }
+}
+
+function toggleTerminal() {
+  terminalVisible = !terminalVisible;
+  try {
+    localStorage.setItem('agy-remote.screen', terminalVisible ? '1' : '0');
+  } catch (e) {
+    /* private browsing: the toggle just does not persist */
+  }
+  const panel = document.getElementById('terminalPanel');
+  if (panel) panel.hidden = !terminalVisible;
+  if (terminalVisible) refreshTerminal();
+}
+
+async function refreshTerminal() {
+  const payload = { action: 'request_screen', data: {} };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
+  }
+}
+
 // Press a single key in the supervised terminal. agy's execution mode
 // (Shift+Tab), its panels (Esc) and its selection lists (arrows, Enter) are
 // unreachable through a prompt line, which always ends in a submit.
@@ -787,6 +840,10 @@ drawerBackdrop.addEventListener('click', closeDrawer);
 // Quick Action Chips: either a named keypress or a literal slash command.
 document.querySelectorAll('.chip-btn').forEach(btn => {
   btn.addEventListener('click', () => {
+    if (btn.getAttribute('data-toggle') === 'screen') {
+      toggleTerminal();
+      return;
+    }
     const key = btn.getAttribute('data-key');
     if (key) {
       sendKey(key);

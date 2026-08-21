@@ -97,6 +97,11 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         """Start/stop the session manager and publish helper credentials."""
         await session_mgr.start()
+        # `agy-remote run` registers its supervisor before the server thread
+        # starts, so the screen is mirrored from the first byte agy writes.
+        supervisor = get_pty_supervisor()
+        if supervisor is not None:
+            session_mgr.attach_terminal(supervisor)
         # Let the PreToolUse hook (a separate process) find our token and port.
         write_runtime_state(cfg)
         owner_pid = os.getpid()
@@ -272,6 +277,17 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         if not success:
             raise HTTPException(status_code=404, detail="Could not switch conversation")
         return {"status": "ok", "active_conversation_id": conversation_id}
+
+    @app.get("/api/screen")
+    async def get_screen(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """The supervised terminal as plain text, or null in watcher mode."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        return {"terminal": mgr.terminal.snapshot() if mgr.terminal else None}
 
     def _press_key(key: str) -> str:
         """Deliver a key to whichever supervisor is live, if any."""
@@ -513,6 +529,11 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                                 "data": {"prompt": prompt_text},
                             }
                         )
+                elif action == "request_screen":
+                    # A client revealing the panel wants the screen now, not at
+                    # the next redraw -- a still terminal never sends one.
+                    if mgr.terminal is not None:
+                        await mgr.send_to(websocket, {"event": "terminal_screen", "data": mgr.terminal.snapshot()})
                 elif action == "send_key":
                     key = data.get("key")
                     if isinstance(key, str) and is_known_key(key):

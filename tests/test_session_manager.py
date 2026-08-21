@@ -225,3 +225,93 @@ async def test_selecting_the_newest_conversation_resumes_following(tmp_path: Pat
     await mgr.follow_latest_conversation()
 
     assert mgr.active_conversation_id == "newest-conv"
+
+
+# ---------------------------------------------------------------------------
+# The terminal mirror: agy's panels and its execution mode live only on the
+# screen, so without this the phone drives them blind.
+# ---------------------------------------------------------------------------
+
+
+class _FakeWebSocket:
+    def __init__(self):
+        self.sent = []
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+
+class _FakeSupervisor:
+    """A supervisor that hands out pty output the way PtySupervisor does."""
+
+    def __init__(self, rows=24, cols=80):
+        self.running = True
+        self.rows = rows
+        self.cols = cols
+        self._listeners = []
+
+    def add_output_listener(self, callback):
+        self._listeners.append(callback)
+
+    def emit(self, data: bytes):
+        for callback in self._listeners:
+            callback(data)
+
+
+@pytest.mark.asyncio
+async def test_terminal_output_is_mirrored_and_broadcast(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    supervisor = _FakeSupervisor(rows=4, cols=30)
+    mgr.attach_terminal(supervisor)
+
+    supervisor.emit(b"\x1b[2J\x1b[Hchoose a model\r\n")
+    await mgr.broadcast_terminal()
+
+    assert len(ws.sent) == 1
+    assert ws.sent[0]["event"] == "terminal_screen"
+    assert any("choose a model" in line for line in ws.sent[0]["data"]["lines"])
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_screen_is_not_rebroadcast(tmp_path: Path):
+    """The watcher ticks several times a second; a still screen must cost nothing."""
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    supervisor = _FakeSupervisor()
+    mgr.attach_terminal(supervisor)
+    supervisor.emit(b"hello")
+
+    await mgr.broadcast_terminal()
+    await mgr.broadcast_terminal()
+    await mgr.broadcast_terminal()
+
+    assert len(ws.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_terminal_attached_broadcasts_nothing(tmp_path: Path):
+    """Watcher mode supervises no session, so there is no screen to mirror."""
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    await mgr.broadcast_terminal()
+    assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_the_mirror_matches_the_pty_size(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    mgr.attach_terminal(_FakeSupervisor(rows=12, cols=45))
+    assert mgr.terminal is not None
+    assert (mgr.terminal.rows, mgr.terminal.cols) == (12, 45)

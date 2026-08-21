@@ -196,8 +196,21 @@ the tmux path calls `tmux send-keys`.
 | `PgUp` `PgDn` | `page_up` `page_down` | Scroll a panel |
 | `Backspace` | `backspace` | Delete a character |
 
-**What the phone cannot see.** The PWA renders `transcript.jsonl`, not the
-terminal screen. Anything agy draws as a transient panel — the `/model` picker,
+**Seeing the screen.** The PWA renders `transcript.jsonl`, which holds the
+conversation and nothing else — everything agy draws transiently (the `/model`
+picker, `/permissions`, autocomplete, the execution mode in the status bar)
+exists only on the terminal. The supervisor now feeds its pty output through a
+terminal emulator *on the server* (`screen.py`, `pyte`) and ships the resulting
+grid of plain text: tap **Screen** to see it, and the execution mode appears as
+a badge beside the title. Running the emulator server-side keeps the PWA free of
+third-party scripts, so it still works on an air-gapped tailnet.
+
+The mirror matches the pty, which inherits the size of the desktop terminal that
+launched it. One pty has one size, so the phone sees the desktop's geometry —
+scroll horizontally rather than expecting a reflow. In watcher mode there is no
+supervised session and no screen.
+
+**What the phone still cannot see.** Anything agy draws as a transient panel — the `/model` picker,
 the mode indicator in the status bar, autocomplete — never reaches the
 transcript, so keys aimed at those panels are sent blind. Slash commands that
 produce conversation output work normally; ones that open a panel need the

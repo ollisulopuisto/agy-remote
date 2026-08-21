@@ -22,10 +22,32 @@ class PtySupervisor:
         self.master_fd: int | None = None
         self.pid: int | None = None
         self.running: bool = False
-        self._input_listeners: list[Callable[[str], None]] = []
+        #: Size of the pty, copied from the desktop terminal at launch. The
+        #: mirror must match it or every wrapped line lands in the wrong place.
+        self.rows: int = 24
+        self.cols: int = 80
+        self._output_listeners: list[Callable[[bytes], None]] = []
+
+    def add_output_listener(self, callback: Callable[[bytes], None]) -> None:
+        """Receive every byte the CLI writes, as it is written.
+
+        The supervisor is the only place these bytes exist: they are pty output,
+        not transcript content, so anything that wants to know what is on the
+        screen has to be handed them here.
+        """
+        self._output_listeners.append(callback)
+
+    def _emit_output(self, data: bytes) -> None:
+        """Fan out pty output; a broken listener must never kill the session."""
+        for callback in self._output_listeners:
+            try:
+                callback(data)
+            except Exception as e:  # noqa: BLE001 - a listener is not worth a dropped session
+                logger.debug("Output listener failed: %s", e)
 
     def set_window_size(self, rows: int, cols: int) -> None:
         """Set terminal window size on the PTY."""
+        self.rows, self.cols = rows, cols
         if self.master_fd is not None:
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             try:
@@ -78,6 +100,7 @@ class PtySupervisor:
 
                 ws = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\x00" * 8)
                 fcntl.ioctl(master_fd, termios.TIOCSWINSZ, ws)
+                self.rows, self.cols = struct.unpack("HHHH", ws)[:2]
             except Exception:
                 pass
 
@@ -124,6 +147,7 @@ class PtySupervisor:
                         if not data:
                             break
                         os.write(1, data)
+                        self._emit_output(data)
                     except OSError:
                         break
 

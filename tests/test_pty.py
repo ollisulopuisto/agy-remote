@@ -46,3 +46,37 @@ def test_supervisor_registry_roundtrip():
     set_pty_supervisor(sup)
     assert get_pty_supervisor() is sup
     assert sup.cmd == ["agy", "--verbose"]
+
+
+def test_output_listeners_receive_what_the_cli_writes():
+    """The mirror can only exist if the supervisor hands out its pty output."""
+    sup = PtySupervisor()
+    seen: list[bytes] = []
+    sup.add_output_listener(seen.append)
+
+    sup._emit_output(b"\x1b[2Jchoose a model")
+
+    assert seen == [b"\x1b[2Jchoose a model"]
+
+
+def test_a_broken_listener_does_not_kill_the_session():
+    """The listener runs on the pty read loop; a raise there would drop agy."""
+    sup = PtySupervisor()
+    survivor: list[bytes] = []
+
+    def explode(_data: bytes) -> None:
+        raise RuntimeError("listener is broken")
+
+    sup.add_output_listener(explode)
+    sup.add_output_listener(survivor.append)
+
+    sup._emit_output(b"still fine")
+
+    assert survivor == [b"still fine"]
+
+
+def test_window_size_is_recorded_for_the_mirror():
+    """A mirror sized differently from the pty wraps every line wrongly."""
+    sup = PtySupervisor()
+    sup.set_window_size(30, 100)
+    assert (sup.rows, sup.cols) == (30, 100)

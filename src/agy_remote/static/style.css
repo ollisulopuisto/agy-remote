@@ -596,3 +596,33 @@ body {
   align-items: center;
   gap: 6px;
 }
+
+/* The supervised terminal, mirrored server-side and shipped as plain text.
+   agy's pickers and confirmations exist only here, never in the transcript. */
+.terminal-panel {
+  background-color: #05070c;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  max-height: 42vh;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.terminal-panel pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: #c8d0dc;
+  white-space: pre;
+}
+
+.mode-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  margin-left: 6px;
+  white-space: nowrap;
+}
