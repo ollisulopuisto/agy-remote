@@ -1,4 +1,14 @@
 # Changelog
+ 
+## v26.08.21.41 — Automated PyPI publishing & opencode docs
+
+- **Automated PyPI release pipeline.** Added GitHub Actions workflow using OpenID
+  Connect (OIDC) Trusted Publishing for automatic verification, build, and
+  publishing on tag push.
+- **CI test & lint pipeline.** Added GitHub Actions CI workflow running tests
+  and linters across pull requests and main pushes.
+- **Documentation & Examples.** Comprehensive guide and CLI examples for
+  Opencode (`opencode`) backend support, architecture comparison, and troubleshooting.
 
 ## v26.08.21.40 — opencode agent backend support
 
