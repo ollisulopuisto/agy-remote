@@ -410,6 +410,10 @@ class RemoteConfig(BaseModel):
     e2ee_enabled: bool = True
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
+    #: The tmux session this server drives when it adopted one it did not
+    #: start. Published in the runtime state so `qr` and a hand-started agy's
+    #: hook can tell which server belongs to which session.
+    tmux_session: str | None = None
     #: The agent CLI this server fronts. One value today, kept as a field
     #: because the PWA renders it: the header used to say "agy" whatever was
     #: behind it, which made a session look like something it was not.
@@ -763,6 +767,7 @@ def write_runtime_state(cfg: RemoteConfig) -> Path | None:
             "enable_auth": cfg.enable_auth,
             "port": cfg.port,
             "agent": cfg.agent,
+            "tmux_session": cfg.tmux_session,
             "pid": os.getpid(),
         },
         indent=2,
@@ -826,4 +831,6 @@ def adopt_runtime_state(cfg: RemoteConfig) -> RemoteConfig:
         cfg.enable_auth = bool(state["enable_auth"])
     if state.get("agent"):
         cfg.agent = state["agent"]
+    if state.get("tmux_session"):
+        cfg.tmux_session = state["tmux_session"]
     return cfg

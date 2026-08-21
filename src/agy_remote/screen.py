@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 import pyte
@@ -29,8 +31,11 @@ _MODE_FIELDS: dict[str, str] = {
     "plan mode": "plan",
 }
 
-#: Status-bar fields are separated by runs of spaces.
-_FIELD_SPLIT = re.compile(r"\s{2,}")
+#: Status-bar fields are separated by runs of spaces, and within a field agy
+#: packs several values together with a middle dot ("accept-edits · Gemini 3.7
+#: Flash · medium"). Splitting on both is what keeps the mode readable across
+#: the bar's changes of shape.
+_FIELD_SPLIT = re.compile(r"\s{2,}|\s·\s")
 
 
 class TerminalMirror:
@@ -113,3 +118,80 @@ def parse_mode(lines: list[str]) -> str | None:
         if mode:
             return mode
     return None
+
+
+class TmuxScreen:
+    """A screen mirror for a session this process did not start.
+
+    `TerminalMirror` needs a pty to listen on, and an adopted session has none:
+    the terminal belongs to whoever ran `tmux attach` in their own window. tmux
+    is already keeping that screen, so this reads it back with `capture-pane`
+    instead of emulating it, and presents the same snapshot shape.
+
+    Captures are two subprocess spawns, and the watch loop asks three times a
+    second, so a capture is taken at most every `min_interval` seconds and the
+    result is reused in between.
+    """
+
+    def __init__(
+        self,
+        session_name: str,
+        capture: Callable[[str], list[str] | None] | None = None,
+        geometry: Callable[[str], dict[str, int] | None] | None = None,
+        min_interval: float = 0.4,
+    ) -> None:
+        from .tmux_runner import capture_pane, pane_geometry
+
+        self.session_name = session_name
+        self._capture = capture or capture_pane
+        self._geometry = geometry or pane_geometry
+        self._min_interval = min_interval
+        self._lock = threading.Lock()
+        self._lines: list[str] = []
+        self._geom: dict[str, int] = {}
+        self._last_capture_at = 0.0
+        self._last_seen: str | None = None
+
+    def _refresh(self) -> None:
+        """Re-read the pane, at most every `min_interval` seconds."""
+        now = time.monotonic()
+        if self._last_capture_at and now - self._last_capture_at < self._min_interval:
+            return
+        self._last_capture_at = now
+
+        lines = self._capture(self.session_name)
+        geom = self._geometry(self.session_name) or {}
+        with self._lock:
+            self._lines = lines if lines is not None else []
+            self._geom = geom
+
+    def snapshot(self) -> dict[str, Any]:
+        """The pane as plain text, with the cursor and parsed mode."""
+        self._refresh()
+        with self._lock:
+            lines = list(self._lines)
+            geom = dict(self._geom)
+
+        return {
+            "lines": lines,
+            "cursor": {"x": geom.get("cursor_x", 0), "y": geom.get("cursor_y", 0)},
+            "rows": geom.get("rows", len(lines)),
+            "cols": geom.get("cols", max((len(line) for line in lines), default=0)),
+            "mode": parse_mode(lines),
+        }
+
+    def take_dirty_snapshot(self) -> dict[str, Any] | None:
+        """A snapshot only when the pane changed since the last one sent.
+
+        A session that has gone away reports nothing rather than an empty
+        screen: blanking the phone's mirror would read as agy clearing it.
+        """
+        snap = self.snapshot()
+        if not snap["lines"]:
+            return None
+
+        seen = "\n".join(snap["lines"])
+        if seen == self._last_seen:
+            return None
+        self._last_seen = seen
+        return snap

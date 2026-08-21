@@ -148,6 +148,11 @@ class AgyBackend:
 
         new_steps, self._last_file_pos = self._read_file(path, self._last_file_pos)
         for step in new_steps:
+            # Keep the view, not just the frame. A step that is only broadcast
+            # lives in the messages already sent: reconnect, reload the PWA or
+            # ask `/api/conversations/<active>` and the transcript stopped at
+            # the last switch, with the agent still working past it.
+            mgr.active_steps.append(step)
             await mgr.broadcast(
                 {
                     "event": "step_added",

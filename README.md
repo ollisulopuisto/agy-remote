@@ -16,8 +16,9 @@
 - [Quickstart: Antigravity (`agy`)](#-quickstart-antigravity-agy)
   - [1. PTY Supervisor Mode (Recommended)](#1-pty-supervisor-mode-recommended)
   - [2. tmux Persistence Mode](#2-tmux-persistence-mode)
-  - [3. Standalone Watcher Server Mode](#3-standalone-watcher-server-mode)
-  - [4. Two agy sessions at once](#4-two-agy-sessions-at-once)
+  - [3. Adopt an agy that is already running (`attach`)](#3-adopt-an-agy-that-is-already-running-attach)
+  - [4. Standalone Watcher Server Mode](#4-standalone-watcher-server-mode)
+  - [5. Two agy sessions at once](#5-two-agy-sessions-at-once)
 - [Using opencode instead](#-using-opencode-instead)
 - [Mobile PWA Setup](#-mobile-pwa-setup)
 - [Remote Tool Approvals](#-remote-tool-approvals)
@@ -194,9 +195,47 @@ scan it. `agy-remote qr` re-displays it at any time.
 
 ---
 
-### 3. Standalone Watcher Server Mode
+### 3. Adopt an agy that is already running (`attach`)
 
-If you already have `agy` running in a separate terminal. **Read-only plus approvals**: the phone sees the transcript and can approve tools, but there is no supervised session to type into:
+`run` owns the `agy` it starts and dies with it. `attach` takes over one that is
+already there — your terminal keeps the session, and the phone gets the same
+transcript, screen, keys and approvals:
+
+```bash
+# In your own terminal, however you like to work:
+tmux new-session -s agy-work agy
+
+# From anywhere else — another terminal, an ssh session, a cron job:
+agy-remote attach
+```
+
+With no `--session` it finds the tmux session running `agy` and adopts it. If
+there is more than one it lists them and asks, rather than guessing and driving
+the wrong agent:
+
+```bash
+agy-remote attach --session agy-work
+agy-remote attach --session agy-work -p 8766      # alongside another instance
+```
+
+**Why tmux is required.** A process's controlling terminal cannot be taken over
+after the fact — an `agy` in a plain shell owns a pty nothing else may write to.
+Inside tmux it is addressable by name from any process: `send-keys` types into
+the pane and `capture-pane` reads the screen back, which is exactly what the
+phone needs. Nothing is attached to, nothing is restarted, and killing
+`agy-remote` leaves `agy` untouched.
+
+If you would rather not use tmux, `agy-remote run -- --resume <session-id>`
+restarts the conversation under a supervisor that owns it.
+
+---
+
+### 4. Standalone Watcher Server Mode
+
+If `agy` is running outside tmux. **Read-only plus approvals**: the phone sees
+the transcript and can approve tools, because the transcript is on disk and the
+`PreToolUse` hook finds the server through the state file — but there is no pane
+to type into:
 
 ```bash
 agy-remote serve
@@ -204,7 +243,7 @@ agy-remote serve
 
 ---
 
-### 4. Two agy sessions at once
+### 5. Two agy sessions at once
 
 Run a second, fully independent instance on another port. Each server supervises
 its own `agy`, gets its own tmux session name, and hands its phone its own URL:
@@ -401,6 +440,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | :--- | :--- |
 | `agy-remote run [args...]` | Launch `agy` under a PTY with dual desktop & mobile control (recommended). |
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
+| `agy-remote attach` | Adopt an `agy` already running in tmux: full control, nothing restarted. |
 | `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
 | `agy-remote qr --port N` | Pairing QR for the instance on port `N` (a second instance does not own the shared runtime state). |
@@ -417,7 +457,8 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `--port`, `-p <port>` | All server commands | Web server port (default: `8765`). |
 | `--host`, `-h <host>` | All server commands | Web server host bind address (default: `0.0.0.0`). |
 | `--token`, `-t <token>` | All server commands | Custom authentication token. |
-| `--rotate-token` | `run`, `serve` | Mint fresh auth token and encryption key, invalidating existing mobile pairings. |
+| `--session <name>` | `attach` | tmux session to adopt (default: the one running `agy`, if there is exactly one). |
+| `--rotate-token` | `run`, `serve`, `attach` | Mint fresh auth token and encryption key, invalidating existing mobile pairings. |
 | `--no-auth` | All server commands | Disable token authentication (**refused on non-loopback binds**). |
 | `--no-e2ee` | All server commands | Disable payload encryption. |
 | `--tls / --no-tls` | All server commands | Force enable or disable Tailscale HTTPS certificate. |

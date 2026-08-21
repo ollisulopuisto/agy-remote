@@ -144,6 +144,75 @@ class TmuxSupervisor:
         return res.returncode == 0
 
 
+def sessions_running(command: str = "agy") -> list[str]:
+    """tmux sessions with a pane whose foreground command is `command`.
+
+    A session name proves nothing about what is inside it, so the pane's
+    running command is what identifies an agent worth adopting. `list-panes -a`
+    covers every session on the tmux server, including ones started long before
+    this process existed -- which is the entire point of adoption.
+
+    No tmux server at all exits non-zero; that is an empty list, not an error.
+    """
+    res = subprocess.run(
+        ["tmux", "list-panes", "-a", "-F", "#{session_name} #{pane_current_command}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return []
+
+    found: list[str] = []
+    for line in (res.stdout or "").splitlines():
+        name, _, running = line.strip().partition(" ")
+        if name and running == command and name not in found:
+            found.append(name)
+    return found
+
+
+def capture_pane(session_name: str) -> list[str] | None:
+    """The visible pane content as plain lines, or None if the session is gone.
+
+    Read rather than emulated: there is no pty to listen on for a session this
+    process did not start, and tmux is already keeping the screen for us.
+    """
+    res = subprocess.run(
+        ["tmux", "capture-pane", "-p", "-t", session_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return None
+    return (res.stdout or "").split("\n")
+
+
+def pane_geometry(session_name: str) -> dict[str, int] | None:
+    """Size and cursor of the session's active pane, or None if it is gone."""
+    res = subprocess.run(
+        [
+            "tmux",
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
+            "-F",
+            "#{pane_height} #{pane_width} #{cursor_y} #{cursor_x}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return None
+    try:
+        rows, cols, cy, cx = (int(v) for v in (res.stdout or "").split())
+    except ValueError:
+        return None
+    return {"rows": rows, "cols": cols, "cursor_y": cy, "cursor_x": cx}
+
+
 tmux_instance: TmuxSupervisor | None = None
 
 

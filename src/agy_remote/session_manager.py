@@ -219,6 +219,16 @@ class SessionManager:
         supervisor.add_output_listener(mirror.feed)
         self.terminal = mirror
 
+    def attach_screen(self, mirror: Any) -> None:
+        """Mirror a screen we cannot listen to, only read.
+
+        A supervisor we started hands us its bytes (`attach_terminal`). A
+        session adopted from tmux has no such stream -- its terminal belongs to
+        whoever attached to it -- so the mirror reads the pane back instead,
+        and is handed over ready-made.
+        """
+        self.terminal = mirror
+
     async def broadcast_terminal(self) -> bool:
         """Push the screen to clients, but only when it actually changed."""
         if self.terminal is None:

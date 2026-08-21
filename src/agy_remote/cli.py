@@ -36,8 +36,15 @@ from .config import (
 from .hooks import hook_health, install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
+from .screen import TmuxScreen
 from .server import create_app
-from .tmux_runner import TmuxSupervisor, session_name_for_port, set_tmux_supervisor
+from .tmux_runner import (
+    TmuxSupervisor,
+    is_tmux_available,
+    session_name_for_port,
+    sessions_running,
+    set_tmux_supervisor,
+)
 from .version import __version__
 
 console = Console()
@@ -180,6 +187,18 @@ def agy_child_env(cfg: RemoteConfig) -> dict[str, str]:
         "AGY_REMOTE_URL": cfg.local_base_url,
         "AGY_REMOTE_PORT": str(cfg.port),
     }
+
+
+def _serve_forever(cfg: RemoteConfig, app: object) -> None:
+    """Run the web server in the foreground until interrupted."""
+    uvicorn.run(
+        app,
+        host=cfg.host,
+        port=cfg.port,
+        log_level="warning",
+        ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
+        ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
+    )
 
 
 def _mirror_supervised_screen(app: object, supervisor: object) -> None:
@@ -367,14 +386,147 @@ def serve(
     _warn_if_hooks_unwired()
     _warn_if_second_instance(cfg)
 
-    uvicorn.run(
-        create_app(cfg),
-        host=cfg.host,
-        port=cfg.port,
-        log_level="warning",
-        ssl_certfile=str(cfg.tls_cert) if cfg.tls_enabled else None,
-        ssl_keyfile=str(cfg.tls_key) if cfg.tls_enabled else None,
-    )
+    _serve_forever(cfg, create_app(cfg))
+
+
+@cli.command("attach")
+@click.option(
+    "--session",
+    "-s",
+    "session",
+    default=None,
+    help="tmux session to adopt (default: the one running agy, if there is exactly one)",
+)
+@click.option("--port", "-p", default=8765, help="Port to listen on", show_default=True)
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind on", show_default=True)
+@click.option("--token", "-t", default=None, help="Custom auth token")
+@click.option("--no-auth", is_flag=True, help="Disable authentication requirement")
+@click.option("--no-e2ee", is_flag=True, help="Disable End-to-End Encryption")
+@click.option(
+    "--tls/--no-tls",
+    "tls",
+    default=None,
+    help="Serve HTTPS using a Tailscale certificate (default: use it if available)",
+)
+@click.option(
+    "--tailscale-path",
+    "--tailscale-bin",
+    "tailscale_bin",
+    default=None,
+    help="Custom path to Tailscale CLI executable",
+)
+@click.option(
+    "--brain-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Path to Antigravity brain directory",
+)
+@click.option(
+    "--rotate-token",
+    is_flag=True,
+    help="Issue a new token and encryption key, revoking every paired phone",
+)
+def attach(
+    session: str | None,
+    port: int,
+    host: str,
+    token: str | None,
+    no_auth: bool,
+    no_e2ee: bool,
+    tls: bool | None,
+    tailscale_bin: str | None,
+    brain_dir: Path | None,
+    rotate_token: bool,
+) -> None:
+    """Drive an agy already running in tmux, without restarting it.
+
+    `run` owns the agy it starts, and dies with it. This adopts one that is
+    already there: your terminal keeps the session, and the phone gets the same
+    transcript, screen, keys and approvals. Nothing is started and nothing is
+    taken over -- tmux is what makes it possible, since `send-keys` and
+    `capture-pane` address a pane by name from any process at all.
+    """
+    if not is_tmux_available():
+        console.print(
+            "[bold red]Refusing to start:[/bold red] tmux is not installed or not on PATH.\n"
+            "  Adopting a running session needs it: an agy in a plain terminal owns a pty\n"
+            "  no other process can write to.\n"
+        )
+        sys.exit(2)
+
+    session_name = _resolve_tmux_session_or_exit(session)
+
+    if rotate_token:
+        rotate_credentials()
+    cfg = get_config(tailscale_bin=tailscale_bin)
+    cfg.port = port
+    cfg.host = host
+    cfg.tmux_session = session_name
+    if token:
+        cfg.auth_token = token
+    if no_auth:
+        cfg.enable_auth = False
+    if no_e2ee:
+        cfg.e2ee_enabled = False
+    if brain_dir:
+        cfg.brain_dir = brain_dir
+
+    _guard_or_exit(cfg)
+    _preflight_port_or_exit(cfg)
+    _setup_tls(cfg, tls)
+    print_banner(cfg, mode=f"agy (adopted tmux session '{session_name}')")
+    _warn_if_hooks_unwired()
+    _warn_if_second_instance(cfg)
+
+    app = create_app(cfg)
+    set_tmux_supervisor(TmuxSupervisor(session_name=session_name))
+    mgr = getattr(getattr(app, "state", None), "session_manager", None)
+    if mgr is not None:
+        mgr.attach_screen(TmuxScreen(session_name))
+
+    _serve_forever(cfg, app)
+
+
+def _resolve_tmux_session_or_exit(session: str | None) -> str:
+    """Which session to adopt, or a readable exit explaining why none.
+
+    Guessing is the one thing not to do here: adopting the wrong session sends
+    the phone's prompts into somebody else's agent.
+    """
+    if session:
+        if not TmuxSupervisor(session_name=session).has_session():
+            console.print(
+                f"[bold red]Refusing to start:[/bold red] no tmux session named '{session}'.\n"
+                "  • See what is running:  [bold]tmux list-sessions[/bold]\n"
+            )
+            sys.exit(2)
+        return session
+
+    candidates = sessions_running("agy")
+    if not candidates:
+        console.print(
+            "[bold red]Refusing to start:[/bold red] no tmux session is running agy.\n"
+            "  Start one, then attach to it from another terminal:\n"
+            "    [bold]tmux new-session -s agy-work agy[/bold]\n"
+            "    [bold]agy-remote attach[/bold]\n"
+            "  An agy in a plain terminal cannot be adopted: its pty belongs to that\n"
+            "  terminal, and nothing else may write to it. `agy-remote run` instead\n"
+            "  starts an agy it owns -- `agy-remote run -- --resume <id>` keeps the\n"
+            "  conversation you were in.\n"
+        )
+        sys.exit(2)
+
+    if len(candidates) > 1:
+        listed = "\n".join(f"    [bold]{name}[/bold]" for name in candidates)
+        console.print(
+            "[bold red]Refusing to start:[/bold red] more than one tmux session is running agy:\n"
+            f"{listed}\n"
+            "  Name the one you mean, so the phone does not drive the wrong agent:\n"
+            f"    [bold]agy-remote attach --session {candidates[0]}[/bold]\n"
+        )
+        sys.exit(2)
+
+    return candidates[0]
 
 
 @cli.command("run", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))

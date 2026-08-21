@@ -1,5 +1,31 @@
 # Changelog
  
+## v26.08.22.25 — Adopt an agy that is already running
+
+- **`agy-remote attach`.** Takes over an `agy` already running in tmux instead of
+  starting one: your terminal keeps the session, and the phone gets the same
+  transcript, screen, keys and approvals. Nothing is restarted, and killing the
+  server leaves `agy` untouched. With no `--session` it finds the tmux session
+  running `agy`; with more than one it lists them and asks rather than driving
+  the wrong agent. A controlling terminal cannot be taken over after the fact —
+  an `agy` in a plain shell owns a pty nothing else may write to — so tmux is
+  what makes this possible at all: `send-keys` types into the pane and
+  `capture-pane` reads the screen back, both by name, from any process.
+- **A screen mirror for a session we did not start.** `TerminalMirror` needs a
+  pty to listen on; `TmuxScreen` reads the pane back instead and presents the
+  same snapshot shape, throttled so the 0.3s watch loop cannot spawn subprocesses
+  faster than the screen changes.
+- **The execution mode is readable again.** agy 2.1.238 packs the mode into the
+  same status-bar field as the model — `accept-edits · Gemini 3.7 Flash · medium`
+  — and the parser split on runs of spaces only, so every Shift+Tab left the
+  badge empty. It now splits on the middle dot too. Verified live against a real
+  agy: `accept-edits → plan → default`.
+- **Steps that arrive while watching stay in the view.** `tick` broadcast each
+  new step and left `active_steps` holding whatever was on disk at the last
+  switch, so everything after that lived only in frames already sent — reconnect,
+  reload the PWA, or ask `/api/conversations/<active>` and the transcript stopped
+  mid-conversation with the agent still working past it.
+
 ## v26.08.22.24 — agy only
 
 - **Removed the opencode backend.** opencode ships its own mobile-tuned web app —

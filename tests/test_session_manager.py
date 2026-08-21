@@ -5,6 +5,7 @@ import json
 import os
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -460,3 +461,43 @@ async def test_no_deadline_means_no_disconnects(tmp_path: Path):
 
     assert await mgr.disconnect_expired_clients() == 0
     assert ws in mgr._connected_clients
+
+
+@pytest.mark.asyncio
+async def test_steps_that_arrive_while_watching_stay_in_the_view(tmp_path: Path):
+    """A step broadcast once is not a step the next client can see.
+
+    `tick` tails the transcript and broadcasts each new step, but left
+    `active_steps` holding whatever was on disk at the last switch. Everything
+    after that lived only in the frames already sent: reconnect, reload the
+    PWA, or ask `/api/conversations/<active>` and the answer was a transcript
+    that stopped mid-conversation -- with the agent still working in it.
+    """
+    conv_id = "conv-live"
+    log_dir = tmp_path / conv_id / ".system_generated" / "logs"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "transcript.jsonl"
+
+    def append(**step) -> None:
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(step) + "\n")
+
+    append(step_index=0, type="USER_INPUT", source="USER_INPUT", content="say ATTACHED")
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    mgr.broadcast = AsyncMock()
+    await mgr.switch_conversation(conv_id)
+    assert len(mgr.active_steps) == 1
+
+    # The agent answers while the phone is connected.
+    append(step_index=1, type="PLANNER_RESPONSE", source="MODEL", content="ATTACHED")
+    await mgr.backend.tick(mgr)
+
+    assert [s.content for s in mgr.active_steps] == ["say ATTACHED", "ATTACHED"]
+    broadcast = [c.args[0] for c in mgr.broadcast.call_args_list if c.args[0].get("event") == "step_added"]
+    assert broadcast and broadcast[-1]["data"]["step"]["content"] == "ATTACHED"
+
+    # Tailing again with nothing new must not duplicate it.
+    await mgr.backend.tick(mgr)
+    assert len(mgr.active_steps) == 2

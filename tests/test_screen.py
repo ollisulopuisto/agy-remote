@@ -103,3 +103,22 @@ def test_resize_keeps_the_mirror_matching_the_pty():
     assert len(snapshot["lines"]) == 10
     assert snapshot["rows"] == 10
     assert snapshot["cols"] == 40
+
+
+def test_the_mode_is_read_when_the_bar_packs_it_next_to_the_model():
+    """Real status bars, captured from agy 2.1.238 while cycling Shift+Tab.
+
+    The bar is not an API and its shape moved: the mode used to sit in its own
+    space-separated column, and now shares one with the model, separated by a
+    middle dot. Splitting on spaces alone yields the field
+    "accept-edits · Gemini 3.7 Flash · medium", which matches nothing -- so the
+    phone's badge stayed empty through every press.
+    """
+    from agy_remote.screen import parse_mode
+
+    assert parse_mode(["? for shortcuts                         accept-edits · Gemini 3.7 Flash · medium"]) == (
+        "accept-edits"
+    )
+    assert parse_mode(["? for shortcuts                   \t        plan · Gemini 3.7 Flash · medium"]) == "plan"
+    # Default mode prints no field at all, and must not be guessed from the rest.
+    assert parse_mode(["? for shortcuts                   \t               Gemini 3.7 Flash · medium"]) is None
