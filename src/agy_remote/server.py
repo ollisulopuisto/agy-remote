@@ -60,7 +60,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Antigravity Remote",
         description="Mobile Remote Web PWA with E2EE & Web Push for Antigravity CLI",
-        version="26.08.21.4",
+        version="26.08.21.5",
         lifespan=lifespan,
     )
     app.state.session_manager = session_mgr
@@ -108,7 +108,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             return {
                 "auth_required": True,
                 "authenticated": False,
-                "version": "v26.08.21.4",
+                "version": "v26.08.21.5",
                 "e2ee_enabled": cfg.e2ee_enabled,
             }
 
@@ -118,7 +118,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         return {
             "auth_required": cfg.enable_auth,
             "authenticated": True,
-            "version": "v26.08.21.4",
+            "version": "v26.08.21.5",
             "e2ee_enabled": cfg.e2ee_enabled,
             "active_conversation_id": mgr.active_conversation_id,
             "supervisor_running": (pty is not None and pty.running) or (tmux is not None and tmux.has_session()),

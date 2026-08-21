@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning (CalVer)](https://calver.org/) in the format `vYY.MM.DD.N`.
 
+## [v26.08.21.5] - 2026-08-21
+
+### Documentation
+- Expanded [README.md](README.md) with comprehensive architecture diagrams (Mermaid), mobile PWA installation guides for iOS Safari and Android Chrome, CLI reference tables, environment variable options, and security threat models.
+- Added step-by-step troubleshooting guides for Tailscale networking and iOS Web Push prerequisites.
+
 ## [v26.08.21.4] - 2026-08-21
 
 ### Security
