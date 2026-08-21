@@ -187,7 +187,29 @@ class OpencodeBackend:
             await self._refresh_sessions()
         elif etype in ("session.created", "session.updated"):
             info = props.get("info") or props
+            before = self._sessions.get((info.get("info") or info).get("id") or "")
+            previous_title = before.title if before else None
             self._upsert_session(info)
+            sid_now = (info.get("info") or info).get("id")
+            if (
+                etype == "session.updated"
+                and sid_now
+                and sid_now == mgr.active_conversation_id
+                and self._sessions[sid_now].title != previous_title
+            ):
+                # opencode titles a session from its first exchange. The header
+                # read a title only at `init` or on a switch, so the phone went
+                # on showing `New session - <timestamp>` long after the desktop
+                # had renamed it -- which reads as being in a different session.
+                await mgr.broadcast(
+                    {
+                        "event": "session_renamed",
+                        "data": {
+                            "conversation_id": sid_now,
+                            "conversation": self.summary_of(mgr, sid_now),
+                        },
+                    }
+                )
             if (
                 etype == "session.created"
                 and info.get("id")

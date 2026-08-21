@@ -90,3 +90,16 @@ test('a revised step replaces the one already on screen', () => {
   assert.equal(anon.index, 2);
   assert.equal(anon.steps.length, 3);
 });
+
+test('the phone adopts a session id when it has none', () => {
+  const { adoptConversationId } = sandbox.window.AgyFormat;
+  // A phone that connected before any session existed had `null` and never
+  // recovered, so its prompts went unaddressed and the server's own idea of
+  // "active" decided where they landed -- possibly a session not on screen.
+  assert.equal(adoptConversationId(null, 'ses_from_event'), 'ses_from_event');
+  assert.equal(adoptConversationId(undefined, 'ses_from_event'), 'ses_from_event');
+  assert.equal(adoptConversationId('', 'ses_from_event'), 'ses_from_event');
+  // One it already knows is never overwritten by traffic from elsewhere.
+  assert.equal(adoptConversationId('ses_mine', 'ses_other'), 'ses_mine');
+  assert.equal(adoptConversationId(null, null), null);
+});

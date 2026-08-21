@@ -148,7 +148,16 @@
     return { steps: next, index: index };
   }
 
+  // The session a client should call its own. A phone that connected before
+  // any session existed held `null` and never recovered: its prompts went out
+  // unaddressed, leaving the server's own idea of "active" to decide where
+  // they landed. One it already knows is never overwritten from outside.
+  function adoptConversationId(current, fromEvent) {
+    return current ? current : (fromEvent || null);
+  }
+
   global.AgyFormat = {
+    adoptConversationId: adoptConversationId,
     applyStepUpdate: applyStepUpdate,
     socketIsStale: socketIsStale,
     promptRoute: promptRoute,

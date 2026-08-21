@@ -752,3 +752,52 @@ async def test_a_prompt_goes_to_the_session_it_was_typed_in(tmp_path: Path):
     # An unnamed session still means "wherever the view is".
     await backend.send_prompt(mgr, "no session named")
     assert "ses_moved_on" in posts[1][0], posts
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_session_is_announced(tmp_path: Path):
+    """opencode titles a session from its first exchange; the phone kept the old name.
+
+    A session starts as `New session - <timestamp>` and is renamed once there
+    is something to name it after. The header only ever read a title at `init`
+    or on a switch, so the phone went on calling the session by a placeholder
+    the desktop had long since replaced -- which reads as the two being in
+    different sessions entirely.
+    """
+    cfg = RemoteConfig(agent="opencode", opencode_port=4096, brain_dir=tmp_path)
+    backend = OpencodeBackend(cfg)
+    mgr = SessionManager(cfg, backend=backend)
+    mgr.broadcast = AsyncMock()
+    _seed(backend, "ses_1", "New session - 2026-08-21T21:26:00.000Z", 1740000000000)
+    await mgr.switch_conversation("ses_1")
+    mgr.broadcast.reset_mock()
+
+    await backend._handle_event(
+        mgr,
+        {
+            "type": "session.updated",
+            "properties": {
+                "info": {
+                    "id": "ses_1",
+                    "title": "Computer check-in",
+                    "time": {"created": 1740000000000, "updated": 1740000009000},
+                }
+            },
+        },
+    )
+
+    renames = [
+        c.args[0] for c in mgr.broadcast.call_args_list if c.args and c.args[0].get("event") == "session_renamed"
+    ]
+    assert len(renames) == 1, mgr.broadcast.call_args_list
+    assert renames[0]["data"]["conversation_id"] == "ses_1"
+    assert renames[0]["data"]["conversation"]["title"] == "Computer check-in"
+
+    # A session nobody is looking at does not redraw the header.
+    mgr.broadcast.reset_mock()
+    _seed(backend, "ses_2", "Something else", 1740000000000)
+    await backend._handle_event(
+        mgr,
+        {"type": "session.updated", "properties": {"info": {"id": "ses_2", "title": "Renamed elsewhere"}}},
+    )
+    assert not [c for c in mgr.broadcast.call_args_list if c.args and c.args[0].get("event") == "session_renamed"]

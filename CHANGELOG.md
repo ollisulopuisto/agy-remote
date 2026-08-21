@@ -2,6 +2,17 @@
  
 ## v26.08.22.23 — The phone follows the session you are working in
 
+- **The phone sent prompts with no session attached.** A client that connected
+  before any session existed held `null` and never recovered it, so its prompts
+  went out unaddressed and the server's own idea of "active" decided where they
+  landed — fine while the two agreed, invisible when they did not. The phone now
+  adopts the session id from the traffic it is already rendering.
+- **A renamed session kept its placeholder name on the phone.** opencode titles
+  a session from its first exchange, but the header read a title only at `init`
+  or on a switch, so the phone showed `New session - <timestamp>` while the
+  desktop showed the real name — which reads as the two being in different
+  sessions. A rename of the session on screen is now broadcast.
+
 - **The answer never appeared until you switched sessions.** opencode creates
   an assistant message empty and fills it in, so the backend emits one
   `step_added` and then a stream of `step_updated` revisions as the thinking,

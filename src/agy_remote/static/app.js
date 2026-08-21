@@ -467,7 +467,15 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
+  } else if (type === 'session_renamed') {
+    // opencode names a session after its first exchange. Without this the
+    // header keeps the `New session - <timestamp>` placeholder for good.
+    if (data.conversation_id === currentConversationId) {
+      currentConversation = data.conversation || currentConversation;
+      updateHeader();
+    }
   } else if (type === 'step_added' || type === 'step_updated') {
+    currentConversationId = window.AgyFormat.adoptConversationId(currentConversationId, data.conversation_id);
     // `step_updated` used to fall through to nothing. opencode revises a step
     // as its text, tools and thinking arrive, so dropping the revisions left
     // an empty card until a session switch reloaded the transcript.
