@@ -37,9 +37,11 @@ from .config import (
     write_runtime_state,
 )
 from .crypto import EnvelopeError, decode_key, decrypt_payload
+from .keys import is_known_key
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
+    KeyPressRequest,
     UserPromptRequest,
 )
 from .pty_runner import get_pty_supervisor
@@ -271,6 +273,33 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Could not switch conversation")
         return {"status": "ok", "active_conversation_id": conversation_id}
 
+    def _press_key(key: str) -> str:
+        """Deliver a key to whichever supervisor is live, if any."""
+        tmux = get_tmux_supervisor()
+        if tmux and tmux.has_session():
+            return "ok" if tmux.send_key(key) else "refused"
+
+        pty = get_pty_supervisor()
+        if pty and pty.running:
+            return "ok" if pty.send_key(key) else "refused"
+
+        return "no_session"
+
+    @app.post("/api/key")
+    async def send_key(
+        req: KeyPressRequest,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Press a named key -- Shift+Tab, Esc, an arrow -- in the live session.
+
+        agy's execution mode, its panels and its selection lists are reachable
+        only by keystroke; a prompt line cannot express any of them.
+        """
+        verify_auth(request, token, token_header)
+        return {"status": _press_key(req.key)}
+
     @app.post("/api/prompt")
     async def send_prompt(
         req: UserPromptRequest,
@@ -484,6 +513,12 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                                 "data": {"prompt": prompt_text},
                             }
                         )
+                elif action == "send_key":
+                    key = data.get("key")
+                    if isinstance(key, str) and is_known_key(key):
+                        _press_key(key)
+                    else:
+                        logger.warning("Refused unknown key press: %r", key)
                 elif action == "approve_tool":
                     approval_id = data.get("approval_id")
                     decision = data.get("decision", "deny")

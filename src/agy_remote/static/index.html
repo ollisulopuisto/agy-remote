@@ -72,10 +72,13 @@
   <!-- Bottom Interactive Bar -->
   <footer class="bottom-bar">
     <div class="quick-actions">
-      <button class="chip-btn" data-action="plan">/plan</button>
-      <button class="chip-btn" data-action="goal">/goal</button>
-      <button class="chip-btn" data-action="schedule">/schedule</button>
-      <button class="chip-btn" data-action="stop">Stop</button>
+      <button class="chip-btn" data-key="shift_tab" title="Cycle execution mode: default, accept-edits, plan">⇧⇥ Mode</button>
+      <button class="chip-btn" data-key="escape" title="Close panel / stop the stream">Esc</button>
+      <button class="chip-btn" data-key="up" title="Move selection up">↑</button>
+      <button class="chip-btn" data-key="down" title="Move selection down">↓</button>
+      <button class="chip-btn" data-key="enter" title="Confirm the highlighted choice">⏎</button>
+      <button class="chip-btn" data-cmd="/help" title="List agy's slash commands">/help</button>
+      <button class="chip-btn" data-cmd="/planning" title="Planning mode">/planning</button>
     </div>
     <div class="attachments-preview" id="attachmentsPreview"></div>
     <div class="input-row">

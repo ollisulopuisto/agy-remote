@@ -631,6 +631,19 @@ async function sendPrompt(text) {
   scrollToBottom();
 }
 
+// Press a single key in the supervised terminal. agy's execution mode
+// (Shift+Tab), its panels (Esc) and its selection lists (arrows, Enter) are
+// unreachable through a prompt line, which always ends in a submit.
+async function sendKey(key) {
+  triggerVibrate(15);
+
+  const payload = { action: 'send_key', data: { key: key } };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
+  }
+}
+
 // Auto Resize Input Area
 function autoResizeInput() {
   promptInput.style.height = 'auto';
@@ -771,14 +784,16 @@ menuBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
 drawerBackdrop.addEventListener('click', closeDrawer);
 
-// Quick Action Chips
+// Quick Action Chips: either a named keypress or a literal slash command.
 document.querySelectorAll('.chip-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const action = btn.getAttribute('data-action');
-    if (action === 'plan') sendPrompt('/plan');
-    else if (action === 'goal') sendPrompt('/goal');
-    else if (action === 'schedule') sendPrompt('/schedule');
-    else if (action === 'stop') sendPrompt('/exit');
+    const key = btn.getAttribute('data-key');
+    if (key) {
+      sendKey(key);
+      return;
+    }
+    const cmd = btn.getAttribute('data-cmd');
+    if (cmd) sendPrompt(cmd);
   });
 });
 

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from agy_remote.config import RemoteConfig
@@ -90,3 +91,77 @@ def test_upload_security(tmp_path: Path):
     )
     assert resp.status_code == 200
     assert "mobile_" in resp.json()["filename"]
+
+
+# ---------------------------------------------------------------------------
+# Key presses: text plus Enter cannot reach Shift+Tab, Esc, or a selection list.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSupervisor:
+    """Stands in for a live PTY session and records what was pressed."""
+
+    def __init__(self):
+        self.running = True
+        self.pressed = []
+
+    def send_key(self, key: str) -> bool:
+        from agy_remote.keys import is_known_key
+
+        if not is_known_key(key):
+            return False
+        self.pressed.append(key)
+        return True
+
+
+@pytest.fixture
+def live_session(monkeypatch):
+    """Register a fake supervisor the way `agy-remote run` registers a real one."""
+    import agy_remote.pty_runner as pty_runner
+    import agy_remote.tmux_runner as tmux_runner
+
+    supervisor = _RecordingSupervisor()
+    monkeypatch.setattr(pty_runner, "pty_instance", supervisor)
+    monkeypatch.setattr(tmux_runner, "tmux_instance", None)
+    return supervisor
+
+
+@pytest.fixture
+def no_session(monkeypatch):
+    """Watcher mode: nothing to type into."""
+    import agy_remote.pty_runner as pty_runner
+    import agy_remote.tmux_runner as tmux_runner
+
+    monkeypatch.setattr(pty_runner, "pty_instance", None)
+    monkeypatch.setattr(tmux_runner, "tmux_instance", None)
+
+
+def _client(tmp_path: Path) -> TestClient:
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    return TestClient(create_app(cfg))
+
+
+def test_key_press_reaches_the_supervised_session(tmp_path: Path, live_session):
+    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "shift_tab"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert live_session.pressed == ["shift_tab"]
+
+
+def test_key_press_rejects_names_outside_the_allowlist(tmp_path: Path, live_session):
+    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "\x1b]0;pwn\x07"})
+    assert resp.status_code == 422
+    assert live_session.pressed == []
+
+
+def test_key_press_requires_a_token(tmp_path: Path, live_session):
+    resp = _client(tmp_path).post("/api/key", json={"key": "shift_tab"})
+    assert resp.status_code in (401, 403)
+    assert live_session.pressed == []
+
+
+def test_key_press_without_a_supervisor_says_so(tmp_path: Path, no_session):
+    """Watcher mode has no session to type into; that must not look like success."""
+    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "escape"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "no_session"

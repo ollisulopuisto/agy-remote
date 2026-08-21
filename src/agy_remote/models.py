@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ToolCall(BaseModel):
@@ -64,6 +64,21 @@ class UserPromptRequest(BaseModel):
 
     prompt: str
     conversation_id: str | None = None
+
+
+class KeyPressRequest(BaseModel):
+    """A single named key the phone wants pressed in the supervised session."""
+
+    key: str
+
+    @field_validator("key")
+    @classmethod
+    def _known_key(cls, value: str) -> str:
+        from .keys import is_known_key
+
+        if not is_known_key(value):
+            raise ValueError(f"unknown key: {value!r}")
+        return value
 
 
 class ApprovalResponseRequest(BaseModel):

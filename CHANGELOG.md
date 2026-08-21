@@ -1,5 +1,20 @@
 # Changelog
 
+## v26.08.22.7 — Keys the phone could not press
+
+- **The phone could only send a line of text ending in Enter.** agy's execution
+  mode is cycled with `Shift+Tab`, its panels close with `Esc`, and every
+  selection list it draws is driven by the arrow keys; none of that is
+  expressible as a prompt. Named keys now travel over the same sealed WebSocket,
+  or `POST /api/key`, and both supervisors implement them: the PTY path writes
+  the escape sequence, the tmux path calls `tmux send-keys`. Only names from the
+  allowlist in `keys.py` are accepted — the pty is wired to a live agent session,
+  so accepting raw bytes off the network would be accepting arbitrary keystrokes.
+- **The quick-action chips fired commands agy does not have.** `/goal` and
+  `/schedule` are not agy slash commands, and "Stop" sent `/exit`, which quits
+  the session rather than halting the stream. The row is now the keys that
+  actually control the TUI, plus `/help` and `/planning`.
+
 ## v26.08.22.6 — The phone follows the session you are actually in
 
 - **Starting agy left the phone on an hours-old conversation.** The watcher

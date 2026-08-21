@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 
+from .keys import TMUX_KEY_NAMES
+
 logger = __import__("logging").getLogger("agy_remote.tmux")
 
 
@@ -63,6 +65,19 @@ class TmuxSupervisor:
         )
         res = subprocess.run(
             ["tmux", "send-keys", "-t", self.session_name, "Enter"],
+            capture_output=True,
+            check=False,
+        )
+        return res.returncode == 0
+
+    def send_key(self, key: str) -> bool:
+        """Press a single named key inside the tmux session."""
+        name = TMUX_KEY_NAMES.get(key)
+        if name is None or not self.has_session():
+            return False
+
+        res = subprocess.run(
+            ["tmux", "send-keys", "-t", self.session_name, name],
             capture_output=True,
             check=False,
         )

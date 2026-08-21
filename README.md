@@ -171,6 +171,40 @@ When `agy` triggers a `PreToolUse` lifecycle event, `agy-remote` pauses executio
 
 ---
 
+## ⌨️ Terminal Key Controls
+
+A prompt from the phone is text plus Enter, which cannot express the keys agy's
+TUI actually needs: `Shift+Tab` cycles the execution mode (`default` →
+`accept-edits` → `plan`), `Esc` closes a panel or halts a stream, and the arrow
+keys drive the selection lists behind `/model`, `/permissions` and `/resume`.
+
+The PWA sends those as named keys, over the same sealed WebSocket as prompts, or
+via `POST /api/key` with `{"key": "shift_tab"}`. Only names from the allowlist in
+`keys.py` are accepted — never raw bytes, since the pty is wired to a live agent
+session. Both supervisors implement it: the PTY path writes the escape sequence,
+the tmux path calls `tmux send-keys`.
+
+| Key | Name | Use |
+| :--- | :--- | :--- |
+| `Shift+Tab` | `shift_tab` | Cycle execution mode |
+| `Esc` | `escape` | Close panel / halt stream |
+| `↑` `↓` `←` `→` | `up` `down` `left` `right` | Move through a selection list |
+| `Enter` | `enter` | Confirm the highlighted choice |
+| `Tab` | `tab` | Confirm slash-command autocomplete |
+| `y` / `n` | `yes` / `no` | Answer a tool confirmation |
+| `Ctrl+C` | `interrupt` | Interrupt |
+| `PgUp` `PgDn` | `page_up` `page_down` | Scroll a panel |
+| `Backspace` | `backspace` | Delete a character |
+
+**What the phone cannot see.** The PWA renders `transcript.jsonl`, not the
+terminal screen. Anything agy draws as a transient panel — the `/model` picker,
+the mode indicator in the status bar, autocomplete — never reaches the
+transcript, so keys aimed at those panels are sent blind. Slash commands that
+produce conversation output work normally; ones that open a panel need the
+desktop terminal in view.
+
+---
+
 ## 🔔 Web Push Notifications
 
 `agy-remote` features a fully self-contained **VAPID Web Push** server:

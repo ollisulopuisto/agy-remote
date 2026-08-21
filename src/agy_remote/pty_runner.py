@@ -9,6 +9,8 @@ import struct
 import tty
 from collections.abc import Callable
 
+from .keys import KEY_SEQUENCES
+
 logger = __import__("logging").getLogger("agy_remote.pty")
 
 
@@ -49,6 +51,19 @@ class PtySupervisor:
         if body:
             os.write(self.master_fd, body.encode("utf-8"))
         os.write(self.master_fd, b"\r")
+
+    def send_key(self, key: str) -> bool:
+        """Press a single named key, for what text plus Enter cannot express.
+
+        Returns False for an unknown name or a session that is not running, so
+        the caller can tell "refused" from "delivered".
+        """
+        sequence = KEY_SEQUENCES.get(key)
+        if sequence is None or self.master_fd is None:
+            return False
+
+        os.write(self.master_fd, sequence)
+        return True
 
     def start_sync(self) -> int:
         """Run the supervisor synchronously, capturing stdin/stdout of the active terminal."""
