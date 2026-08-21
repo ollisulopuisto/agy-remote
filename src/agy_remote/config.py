@@ -10,7 +10,7 @@ import re
 import secrets
 import socket
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -432,7 +432,7 @@ def load_or_create_credentials() -> dict[str, str]:
             if "created_at" not in data:
                 # A store from before expiry existed: keep the pairing alive
                 # and start its clock now.
-                data["created_at"] = datetime.now(timezone.utc).isoformat()
+                data["created_at"] = datetime.now(UTC).isoformat()
                 _write_credentials(data)
 
             if not _credentials_expired(data.get("created_at")):
@@ -444,7 +444,7 @@ def load_or_create_credentials() -> dict[str, str]:
     credentials = {
         "auth_token": secrets.token_urlsafe(16),
         "e2ee_key": generate_e2ee_key(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     _write_credentials(credentials)
     return {"auth_token": credentials["auth_token"], "e2ee_key": credentials["e2ee_key"]}
@@ -463,8 +463,8 @@ def _credentials_expired(created_at: str | None) -> bool:
         return True
 
     if born.tzinfo is None:
-        born = born.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - born > timedelta(days=ttl_days)
+        born = born.replace(tzinfo=UTC)
+    return datetime.now(UTC) - born > timedelta(days=ttl_days)
 
 
 def _write_credentials(credentials: dict[str, str]) -> None:
