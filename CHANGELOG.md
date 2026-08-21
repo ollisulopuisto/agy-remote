@@ -1,5 +1,13 @@
 # Changelog
 
+## v26.08.22.17 — Expiry also ends live connections
+
+- Closes the edge left in v26.08.22.16: a WebSocket authenticated before the
+  pairing deadline kept its socket — streaming the transcript and accepting
+  prompts on a credential no longer valid. The watcher now sweeps expired
+  connections closed (code 1008) on its existing tick; the reconnect is then
+  refused at the door by `token_ok`.
+
 ## v26.08.22.16 — Pairing expiry holds while the server runs
 
 - **The 30-day TTL was only checked at startup**, so a server left running

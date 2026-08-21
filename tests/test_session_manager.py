@@ -398,3 +398,65 @@ async def test_a_switch_carries_the_conversation_it_switched_to(tmp_path: Path):
     assert conversation["id"] == conv_id
     assert conversation["title"] == "hello"
     assert conversation["created_at"]
+
+
+# ---------------------------------------------------------------------------
+# Expiry must also end sessions that were connected before the deadline.
+# ---------------------------------------------------------------------------
+
+
+class _ClosableWebSocket:
+    def __init__(self):
+        self.sent = []
+        self.closed_with = None
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+    async def close(self, code=1000):
+        self.closed_with = code
+
+
+@pytest.mark.asyncio
+async def test_live_connections_are_closed_when_the_pairing_expires(tmp_path: Path):
+    """token_ok only refuses *new* connections; a socket opened before the
+    deadline would otherwise stream transcripts and accept prompts forever."""
+    from datetime import UTC, datetime, timedelta
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    cfg.credentials_expire_at = datetime.now(UTC) - timedelta(seconds=1)
+    mgr = SessionManager(cfg)
+    ws = _ClosableWebSocket()
+    mgr._connected_clients.add(ws)
+
+    closed = await mgr.disconnect_expired_clients()
+
+    assert closed == 1
+    assert ws.closed_with == 1008  # policy violation
+    assert ws not in mgr._connected_clients
+
+
+@pytest.mark.asyncio
+async def test_live_connections_survive_while_the_pairing_is_valid(tmp_path: Path):
+    from datetime import UTC, datetime, timedelta
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    cfg.credentials_expire_at = datetime.now(UTC) + timedelta(days=5)
+    mgr = SessionManager(cfg)
+    ws = _ClosableWebSocket()
+    mgr._connected_clients.add(ws)
+
+    assert await mgr.disconnect_expired_clients() == 0
+    assert ws.closed_with is None
+    assert ws in mgr._connected_clients
+
+
+@pytest.mark.asyncio
+async def test_no_deadline_means_no_disconnects(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _ClosableWebSocket()
+    mgr._connected_clients.add(ws)
+
+    assert await mgr.disconnect_expired_clients() == 0
+    assert ws in mgr._connected_clients

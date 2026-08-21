@@ -417,6 +417,29 @@ class SessionManager:
         await self.switch_conversation(latest_id)
         return True
 
+    async def disconnect_expired_clients(self) -> int:
+        """Close live connections once the pairing deadline passes.
+
+        `token_ok` refuses new connections after expiry, but a WebSocket
+        authenticated before the deadline holds its socket open -- streaming
+        the transcript and accepting prompts on a credential that is no longer
+        valid. The watcher sweeps them out; the client's reconnect is then
+        refused at the door.
+        """
+        if not self.config.pairing_expired() or not self._connected_clients:
+            return 0
+
+        expired = list(self._connected_clients)
+        self._connected_clients.clear()
+        for websocket in expired:
+            try:
+                await websocket.close(code=1008)  # policy violation
+            except Exception as e:  # noqa: BLE001 - a dead socket is already what we wanted
+                logger.debug("Closing expired client failed: %s", e)
+
+        logger.info("Closed %d connection(s): pairing expired", len(expired))
+        return len(expired)
+
     async def _watch_loop(self) -> None:
         """Continuous polling/tailing loop for the active conversation log."""
         while self._running:
@@ -445,6 +468,9 @@ class SessionManager:
 
                 # 3. Mirror the terminal, for the panels the transcript never sees
                 await self.broadcast_terminal()
+
+                # 4. End sessions whose pairing has expired mid-connection
+                await self.disconnect_expired_clients()
 
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
