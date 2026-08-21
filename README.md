@@ -3,7 +3,7 @@
 > **Self-Hosted, Encrypted Mobile Web Remote & PWA for Google Antigravity CLI (`agy`)**  
 > Access, monitor, and direct your locally running `agy` sessions from your phone over Tailscale or Local Wi-Fi — with zero cloud lock-in, AES-256-GCM encrypted payloads, a live mirrored terminal view, self-hosted Web Push alerts, one-tap tool approvals, and voice dictation.
 
-![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue) ![CalVer](https://img.shields.io/badge/versioning-CalVer-lightgrey) ![Self-hosted](https://img.shields.io/badge/cloud-none-orange)
+[![PyPI](https://img.shields.io/pypi/v/agy-remote)](https://pypi.org/project/agy-remote/) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue) ![CalVer](https://img.shields.io/badge/versioning-CalVer-lightgrey) ![Self-hosted](https://img.shields.io/badge/cloud-none-orange)
 
 ---
 
@@ -102,7 +102,35 @@ flowchart TD
 
 ## 📦 Installation
 
-`agy-remote` is built with Python 3.13+ and managed with [`uv`](https://docs.astral.sh/uv/).
+`agy-remote` is published on [PyPI](https://pypi.org/project/agy-remote/) and requires Python 3.13+.
+
+### Option 1: Run on-demand with `uvx` (Fastest, zero install)
+
+Run directly from any project folder without a permanent installation:
+
+```bash
+uvx agy-remote run
+```
+
+### Option 2: Install globally with `uv tool` (Recommended)
+
+Install `agy-remote` globally so you can use the CLI anywhere on your system:
+
+```bash
+uv tool install agy-remote
+```
+
+Once installed, run it directly:
+```bash
+agy-remote run
+```
+
+To update to the latest release in the future:
+```bash
+uv tool upgrade agy-remote
+```
+
+### Option 3: From Source (Development)
 
 ```bash
 # Clone the repository
