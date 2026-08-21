@@ -33,6 +33,8 @@
 
 When running autonomous coding agents like Antigravity CLI (`agy`), tasks frequently involve multi-step file edits, automated tests, and tool permission gates that take minutes to complete. Staying tethered to your desk or using awkward mobile SSH clients (where monospace terminals break text wrapping on narrow phone screens and soft keyboards make tool approvals painful) is suboptimal.
 
+The workflow is inspired by [Claude Code](https://claude.com/claude-code) and its remote-control and mobile-approval experience — `agy-remote` brings that same "step away from the desk while the agent works" loop to Google's Antigravity CLI, self-hosted and without a cloud relay. If you're coming from Claude Code, Gemini CLI, or another terminal coding agent, the concepts (transcript streaming, tool-permission gates, execution modes) map directly.
+
 **`agy-remote`** bridges your local desktop session to a rich, responsive **Progressive Web App (PWA)** on your phone:
 - **Zero Cloud Dependence**: 100% self-hosted, and the PWA loads no third-party scripts — it works on an air-gapped tailnet.
 - **Encrypted Payloads**: AES-256-GCM on every WebSocket frame with replay protection, keyed by a secret shared via the URL hash (`#key=...`). See [Security](#-security--cryptography) for what this does and does not protect.
