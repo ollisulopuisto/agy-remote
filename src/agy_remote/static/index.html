@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f19">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Antigravity Remote</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- Marked.js for fast mobile Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Highlight.js for Code Highlighting -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+</head>
+<body>
+
+  <!-- Top App Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <button class="icon-btn" id="menuBtn" title="Conversations">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <div class="header-title-container">
+        <div class="app-title">
+          <span>agy</span>
+          <span style="color: var(--primary);">remote</span>
+        </div>
+        <div class="session-subtitle" id="sessionSubtitle">Connecting...</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="status-badge disconnected" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">Connecting</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Side Drawer (Conversation Switcher) -->
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <div class="drawer" id="drawer">
+    <div class="drawer-header">
+      <span style="font-size: 14px; font-weight: 700; color: #fff;">Sessions</span>
+      <button class="icon-btn" id="closeDrawerBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="drawer-list" id="drawerList">
+      <!-- Session items will be dynamically injected -->
+    </div>
+  </div>
+
+  <!-- Chat Canvas -->
+  <main class="chat-container" id="chatContainer">
+    <!-- Messages and Tool cards injected via app.js -->
+  </main>
+
+  <!-- Bottom Interactive Bar -->
+  <footer class="bottom-bar">
+    <div class="quick-actions">
+      <button class="chip-btn" data-action="plan">/plan</button>
+      <button class="chip-btn" data-action="goal">/goal</button>
+      <button class="chip-btn" data-action="schedule">/schedule</button>
+      <button class="chip-btn" data-action="stop">Stop</button>
+    </div>
+    <div class="input-row">
+      <button class="btn-mic" id="micBtn" title="Voice Input">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </button>
+      <textarea 
+        id="promptInput" 
+        class="prompt-input" 
+        placeholder="Send instruction or tap mic..." 
+        rows="1"
+      ></textarea>
+      <button class="btn-send" id="sendBtn" title="Send Prompt">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
