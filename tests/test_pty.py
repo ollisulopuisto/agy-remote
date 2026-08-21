@@ -198,4 +198,3 @@ def test_pty_mode_respects_qr_timeout(monkeypatch):
     assert res.exit_code == 0, res.output
     assert "timeout_20.0" in calls
     mock_sup.start_sync.assert_called_once()
-
