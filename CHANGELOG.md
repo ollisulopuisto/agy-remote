@@ -1,5 +1,15 @@
 # Changelog
 
+## v26.08.22.4 — Enter, not a line break
+
+- **A prompt sent from the phone typed itself into `agy` and stopped there.**
+  `PtySupervisor.inject_input` terminated the injected text with LF (`\n`).
+  agy runs the tty in raw mode, where Enter is carriage return (`\r`) and LF is
+  Ctrl-J — an "insert a line break" keystroke. The prompt appeared in agy's
+  input box and was never submitted. The supervisor now strips any trailing
+  newline and sends a single `\r`. The tmux path was already correct: it sends
+  `Enter` through `tmux send-keys`, which is CR.
+
 ## v26.08.22.3 — Working approvals over HTTPS, and a fixed watcher
 
 - **The PreToolUse hook posted `http://` to an HTTPS port.** The connection was

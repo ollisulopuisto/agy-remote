@@ -35,11 +35,20 @@ class PtySupervisor:
                 pass
 
     def inject_input(self, text: str) -> None:
-        """Inject a prompt or keystrokes into the running CLI session from mobile."""
-        if self.master_fd is not None:
-            if not text.endswith("\n"):
-                text += "\n"
-            os.write(self.master_fd, text.encode("utf-8"))
+        """Inject a prompt or keystrokes into the running CLI session from mobile.
+
+        The submit key must be CR, not LF. agy puts the tty in raw mode, where
+        Enter is carriage return (0x0D); LF (0x0A) is Ctrl-J, which the input
+        widget treats as "insert a line break". Sending LF therefore typed the
+        prompt into agy's box and left it sitting there unsent.
+        """
+        if self.master_fd is None:
+            return
+
+        body = text.rstrip("\r\n")
+        if body:
+            os.write(self.master_fd, body.encode("utf-8"))
+        os.write(self.master_fd, b"\r")
 
     def start_sync(self) -> int:
         """Run the supervisor synchronously, capturing stdin/stdout of the active terminal."""
