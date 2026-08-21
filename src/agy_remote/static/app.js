@@ -391,6 +391,7 @@ function handleServerEvent(event) {
 
   if (type === 'init') {
     applyTerminal(data.terminal);
+    currentConversation = data.conversation || null;
     currentConversationId = data.active_conversation_id;
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
@@ -398,6 +399,7 @@ function handleServerEvent(event) {
     renderAllMessages();
     renderConversations(data.conversations || []);
   } else if (type === 'session_switched') {
+    currentConversation = data.conversation || null;
     currentConversationId = data.conversation_id;
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
@@ -437,6 +439,7 @@ function renderAllMessages() {
     return;
   }
 
+  chatContainer.appendChild(sessionDivider());
   currentSteps.forEach(step => appendStep(step));
   pendingApprovals.forEach(app => renderApprovalBanner(app));
   scrollToBottom();
@@ -531,7 +534,13 @@ function appendStep(step) {
   const content = (step.content || '').trim();
   if (!content) return;
 
-  const label = `${stepType.toLowerCase().replace(/_/g, ' ')}: ${AgyFormat.firstLine(content)}`;
+  const kind = stepType.toLowerCase().replace(/_/g, ' ');
+  // agy's checkpoints announce "earlier parts of this conversation have been
+  // truncated" at the start of a brand new session. Saying whose words these
+  // are stops a fresh session from reading as a continuation of the last.
+  const label = step.scaffolding
+    ? `agy scaffolding · ${kind}`
+    : `${kind}: ${AgyFormat.firstLine(content)}`;
   const body = document.createElement('div');
   body.className = 'system-body';
   body.textContent = content;
@@ -545,6 +554,20 @@ function appendStep(step) {
   systemDiv.className = 'message-system';
   systemDiv.textContent = label;
   chatContainer.appendChild(systemDiv);
+}
+
+// Which session you are looking at, and when it began.
+function sessionDivider() {
+  const div = document.createElement('div');
+  div.className = 'session-divider';
+
+  const started = currentConversation && currentConversation.created_at
+    ? new Date(currentConversation.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  div.textContent = AgyFormat.sessionLabel(currentConversation, started) ||
+    (currentConversationId ? `Session ${currentConversationId.slice(0, 8)}` : 'No active session');
+  return div;
 }
 
 // A <details> block: summary line visible, everything else one tap away. Native
@@ -695,6 +718,8 @@ async function sendPrompt(text) {
 // The mirrored terminal. The server runs the emulator and sends a grid of
 // plain text, so the panels agy draws -- pickers, confirmations, the mode in
 // the status bar -- are visible here without shipping an emulator to the phone.
+let currentConversation = null;
+
 let terminalVisible = false;
 try {
   terminalVisible = localStorage.getItem('agy-remote.screen') === '1';

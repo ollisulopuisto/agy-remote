@@ -86,7 +86,23 @@
     return value.split('\n').length > 1 || value.length > LINE_LIMIT;
   }
 
+  // agy opens every session with a checkpoint that reads like prior history, so
+  // a session has to say plainly which one it is and when it began.
+  function sessionLabel(conversation, timeText) {
+    if (!conversation || !conversation.id) return '';
+
+    var parts = ['Session ' + String(conversation.id).slice(0, 8)];
+    if (timeText) parts.push('started ' + timeText);
+
+    var steps = conversation.step_count;
+    if (typeof steps === 'number' && steps > 0) {
+      parts.push(steps + (steps === 1 ? ' step' : ' steps'));
+    }
+    return parts.join(' · ');
+  }
+
   global.AgyFormat = {
+    sessionLabel: sessionLabel,
     toolSummary: toolSummary,
     outputSummary: outputSummary,
     isCollapsible: isCollapsible,

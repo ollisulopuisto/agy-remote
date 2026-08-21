@@ -56,3 +56,21 @@ def test_tool_arguments_that_are_not_encoded_are_untouched():
 def test_normalizing_never_drops_a_call_it_does_not_understand():
     calls = [{"function": {"name": "x", "arguments": "{}"}}, {"weird": True}]
     assert normalize_tool_calls(calls) == calls
+
+
+def test_checkpoints_and_system_messages_are_marked_as_scaffolding():
+    """agy opens every session with a CHECKPOINT that reads like prior history.
+
+    It claims "the earlier parts of this conversation have been truncated", but
+    its own user-request list holds only this session's first prompt and the log
+    it points at is this session's own transcript. It is scaffolding for the
+    model -- it even says DO NOT ACKNOWLEDGE -- so presenting it as conversation
+    made every fresh session look like a continuation of the last one.
+    """
+    from agy_remote.transcript import is_scaffolding
+
+    assert is_scaffolding("CHECKPOINT", "SYSTEM") is True
+    assert is_scaffolding("SYSTEM_MESSAGE", "SYSTEM") is True
+    assert is_scaffolding("USER_INPUT", "USER_EXPLICIT") is False
+    assert is_scaffolding("PLANNER_RESPONSE", "MODEL") is False
+    assert is_scaffolding("GENERIC", "MODEL") is False

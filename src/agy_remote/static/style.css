@@ -721,3 +721,14 @@ details.message-system > summary {
   max-height: 40vh;
   overflow-y: auto;
 }
+
+/* Where one session ends and the next begins. */
+.session-divider {
+  margin: 10px 12px 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  text-align: center;
+}

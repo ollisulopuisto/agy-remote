@@ -52,3 +52,15 @@ test('firstLine trims and truncates without breaking on empty input', () => {
   assert.equal(firstLine(''), '');
   assert.equal(firstLine('y'.repeat(300)).length, 80);
 });
+
+test('a session announces itself, so a new one is not read as more of the last', () => {
+  const { sessionLabel } = sandbox.window.AgyFormat;
+
+  assert.equal(
+    sessionLabel({ id: '8511476a-e89e-4ff4-8275-663cbab32678', step_count: 12 }, '17:35'),
+    'Session 8511476a · started 17:35 · 12 steps'
+  );
+  assert.equal(sessionLabel({ id: 'abcdef12', step_count: 1 }, '09:04'), 'Session abcdef12 · started 09:04 · 1 step');
+  assert.equal(sessionLabel({ id: 'abcdef12' }, ''), 'Session abcdef12');
+  assert.equal(sessionLabel(null, '17:35'), '');
+});

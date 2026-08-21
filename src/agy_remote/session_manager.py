@@ -20,7 +20,7 @@ from .models import (
     TranscriptStep,
 )
 from .screen import TerminalMirror
-from .transcript import clean_user_content, normalize_tool_calls
+from .transcript import clean_user_content, is_scaffolding, normalize_tool_calls
 
 logger = logging.getLogger("agy_remote.session")
 
@@ -252,12 +252,27 @@ class SessionManager:
                 "event": "session_switched",
                 "data": {
                     "conversation_id": conversation_id,
+                    # Which session this is, so a client can say so rather than
+                    # letting a new one look like more of the last one.
+                    "conversation": self._summary_of(conversation_id),
                     "steps": [step.model_dump() for step in self.active_steps],
                     "pending_approvals": self.get_active_pending_approvals(),
                 },
             }
         )
         return True
+
+    def _summary_of(self, conversation_id: str | None) -> dict[str, Any] | None:
+        """The summary for one conversation, as clients need it to name a session."""
+        if not conversation_id:
+            return None
+
+        log_path = self.get_transcript_path(conversation_id)
+        if not log_path or not log_path.exists():
+            return None
+
+        summary = self._summarize(conversation_id, log_path)
+        return summary.model_dump(mode="json") if summary else None
 
     def get_active_pending_approvals(self) -> list[dict[str, Any]]:
         """Return pending approvals for current active conversation."""
@@ -280,6 +295,7 @@ class SessionManager:
                 "steps": [step.model_dump() for step in self.active_steps],
                 "conversations": [c.model_dump(mode="json") for c in self.list_conversations()],
                 "pending_approvals": self.get_active_pending_approvals(),
+                "conversation": self._summary_of(self.active_conversation_id),
                 # A client that connects mid-panel must see the panel, not wait
                 # for the next redraw that may never come.
                 "terminal": self.terminal.snapshot() if self.terminal else None,
@@ -344,6 +360,7 @@ class SessionManager:
                             thinking=data.get("thinking"),
                             tool_calls=normalize_tool_calls(data.get("tool_calls") or []),
                             truncated_fields=data.get("truncated_fields") or [],
+                            scaffolding=is_scaffolding(step_type, source),
                         )
                         new_steps.append(step)
                     except Exception as err:

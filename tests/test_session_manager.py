@@ -355,3 +355,46 @@ async def test_the_envelope_is_stripped_before_it_reaches_a_client(tmp_path: Pat
     assert mgr.active_steps[0].content == "Clean up my disk"
     assert mgr.active_steps[1].tool_calls[0]["args"]["CommandLine"] == "df -h"
     assert mgr.list_conversations()[0].title == "Clean up my disk"
+
+
+@pytest.mark.asyncio
+async def test_steps_carry_whether_they_are_scaffolding(tmp_path: Path):
+    conv_id = "with-checkpoint"
+    log = tmp_path / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_EXPLICIT", "content": "hi"})
+        + "\n"
+        + json.dumps({"step_index": 1, "type": "CHECKPOINT", "source": "SYSTEM", "content": "{{ CHECKPOINT 0 }}"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mgr = SessionManager(RemoteConfig(brain_dir=tmp_path, auth_token="token"))
+    await mgr.switch_conversation(conv_id)
+
+    assert mgr.active_steps[0].scaffolding is False
+    assert mgr.active_steps[1].scaffolding is True
+
+
+@pytest.mark.asyncio
+async def test_a_switch_carries_the_conversation_it_switched_to(tmp_path: Path):
+    """The phone cannot tell a new session from the old one without its identity."""
+    conv_id = "fresh-session"
+    log = tmp_path / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_EXPLICIT", "content": "hello"}) + "\n",
+        encoding="utf-8",
+    )
+
+    mgr = SessionManager(RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False))
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    await mgr.switch_conversation(conv_id)
+
+    conversation = ws.sent[0]["data"]["conversation"]
+    assert conversation["id"] == conv_id
+    assert conversation["title"] == "hello"
+    assert conversation["created_at"]

@@ -1,5 +1,21 @@
 # Changelog
 
+## v26.08.22.12 — A new session looks like a new session
+
+- **Every fresh session read as a continuation of the last one.** agy opens each
+  new conversation with a `SYSTEM/CHECKPOINT` step announcing that "the earlier
+  parts of this conversation have been truncated" — boilerplate whose own
+  request list holds only that session's first prompt, whose log reference
+  points at that session's own transcript, and which ends by telling the model
+  not to acknowledge it. It is scaffolding for the model, and v26.08.22.9 (which
+  stopped dropping unrecognised steps) put it on screen as conversation.
+- Checkpoints and `SYSTEM_MESSAGE` steps are now marked as scaffolding
+  server-side and labelled as agy's own on the phone, instead of appearing to be
+  history.
+- Every conversation now opens with a divider naming it: `Session 8511476a ·
+  started 17:35 · 12 steps`. `init` and `session_switched` carry the summary,
+  so a session the client has never seen still announces itself.
+
 ## v26.08.22.11 — One line per tool call
 
 - **The transcript was a wall of plumbing.** The desktop shows a tool call as

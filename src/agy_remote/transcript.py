@@ -69,3 +69,16 @@ def _decode(value: Any) -> Any:
         return value
 
     return decoded if isinstance(decoded, str) else value
+
+
+#: Steps agy writes for the model's benefit, not the user's. Every session opens
+#: with a CHECKPOINT announcing that "earlier parts of this conversation have
+#: been truncated" -- boilerplate whose request list holds only this session's
+#: own first prompt, and which instructs the model not to acknowledge it. Shown
+#: as conversation, it made every fresh session look like a continuation.
+_SCAFFOLDING_TYPES = frozenset({"CHECKPOINT", "SYSTEM_MESSAGE"})
+
+
+def is_scaffolding(step_type: str | None, source: str | None = None) -> bool:
+    """Whether a step is agy talking to itself rather than to the user."""
+    return (step_type or "") in _SCAFFOLDING_TYPES

@@ -31,6 +31,9 @@ class TranscriptStep(BaseModel):
     thinking: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     truncated_fields: list[str] = Field(default_factory=list)
+    #: agy talking to itself: checkpoints and system messages, which read like
+    #: conversation but are not addressed to the user.
+    scaffolding: bool = False
 
 
 class ConversationSummary(BaseModel):
