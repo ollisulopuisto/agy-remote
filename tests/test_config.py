@@ -276,6 +276,12 @@ def test_get_tailscale_ip_and_dns_with_custom_bin(monkeypatch, tmp_path: Path):
         if "status" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout='{"Self":{"DNSName":"my-node.ts.net."}}', stderr="")
         if "cert" in cmd:
+            if "-" in cmd:
+                stdout_content = (
+                    "-----BEGIN CERTIFICATE-----\nMIIFakeCert\n-----END CERTIFICATE-----\n"
+                    "-----BEGIN PRIVATE KEY-----\nMIIFakeKey\n-----END PRIVATE KEY-----\n"
+                )
+                return subprocess.CompletedProcess(cmd, 0, stdout=stdout_content, stderr="")
             cert_file = Path(cmd[cmd.index("--cert-file") + 1])
             key_file = Path(cmd[cmd.index("--key-file") + 1])
             cert_file.write_text("CERT")
@@ -295,6 +301,8 @@ def test_get_tailscale_ip_and_dns_with_custom_bin(monkeypatch, tmp_path: Path):
 
     cert, key = ensure_tailscale_cert("my-node.ts.net", cert_dir=tmp_path, tailscale_bin=str(fake_ts))
     assert cert.exists() and key.exists()
+    assert "MIIFakeCert" in cert.read_text()
+    assert "MIIFakeKey" in key.read_text()
     assert called_cmds[-1][0] == str(fake_ts)
 
 

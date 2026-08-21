@@ -246,6 +246,49 @@ def ensure_tailscale_cert(
     cert_path = cert_dir / f"{dns_name}.crt"
     key_path = cert_dir / f"{dns_name}.key"
 
+    # Try streaming cert and key to stdout first. This bypasses sandbox write
+    # restrictions on macOS (where Tailscale.app cannot write directly to ~/.gemini/...)
+    try:
+        res = subprocess.run(
+            [
+                binary,
+                "cert",
+                "--cert-file",
+                "-",
+                "--key-file",
+                "-",
+                dns_name,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if res.returncode == 0 and "-----BEGIN CERTIFICATE-----" in (res.stdout or ""):
+            stdout = res.stdout
+            key_markers = (
+                "-----BEGIN PRIVATE KEY-----",
+                "-----BEGIN EC PRIVATE KEY-----",
+                "-----BEGIN RSA PRIVATE KEY-----",
+            )
+            key_idx = -1
+            for marker in key_markers:
+                idx = stdout.find(marker)
+                if idx != -1:
+                    key_idx = idx
+                    break
+
+            if key_idx != -1:
+                cert_data = stdout[:key_idx].strip() + "\n"
+                key_data = stdout[key_idx:].strip() + "\n"
+                cert_path.write_text(cert_data, encoding="utf-8")
+                key_path.write_text(key_data, encoding="utf-8")
+                os.chmod(key_path, 0o600)
+                return cert_path, key_path
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # Fallback to direct file output
     try:
         res = subprocess.run(
             [
