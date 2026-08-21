@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.08.22.19 — Approvals fail loudly, plus fixes for the streamed certificate
+
+- **Remote approvals could be silently unwired.** The whole approval flow hangs
+  on `~/.gemini/config/hooks.json` pointing at a working `agy-remote` binary on
+  *this* machine. A machine where `setup-hooks` was never run — or where the
+  installed absolute path went stale (moved checkout, recreated venv, config
+  copied from another machine) — fell back to agy asking in its own TUI, and
+  the phone never saw the permission dialog, with nothing to say why. `run` and
+  `serve` now check the hook wiring at startup and print exactly what is wrong
+  and the command that fixes it.
+- **The streamed TLS private key existed world-readable for a moment.** The
+  stdout-streaming path (below) wrote the key with `write_text` and chmod'd it
+  afterwards; under a permissive umask that is a window where the key is open.
+  It is now created 0600 from the first byte, like every other key file here.
+- Covers the features pulled in from the parallel session: Tailscale
+  certificate obtained by streaming to stdout (`--cert-file - --key-file -`),
+  bypassing the macOS sandbox that blocks Tailscale.app from writing into
+  `~/.gemini`; and the tmux QR pause now auto-attaches after a countdown
+  (`--qr-timeout`, default 30s, 0 = attach immediately), keypress still skips.
+
 ## v26.08.22.18 — Tailscale found wherever it lives
 
 - **HTTPS silently degraded when `tailscale` was not on PATH.** The macOS app

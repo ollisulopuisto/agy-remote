@@ -30,7 +30,7 @@ from .config import (
     read_runtime_state,
     rotate_credentials,
 )
-from .hooks import install_hooks_config, run_pre_tool_hook
+from .hooks import hook_health, install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
 from .server import create_app
@@ -227,6 +227,7 @@ def serve(
     _guard_or_exit(cfg)
     _setup_tls(cfg, tls)
     print_banner(cfg, mode="Watcher Server")
+    _warn_if_hooks_unwired()
 
     app = create_app(cfg)
     uvicorn.run(
@@ -306,6 +307,7 @@ def run(
     agy_args = ["agy"] + ctx.args
     mode_label = "tmux Persistence" if tmux else "PTY Supervisor"
     print_banner(cfg, mode=mode_label)
+    _warn_if_hooks_unwired()
 
     # Start FastAPI server in a background thread
     app = create_app(cfg)
@@ -396,6 +398,27 @@ def wait_for_keypress_or_timeout(
     finally:
         with contextlib.suppress(Exception):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _warn_if_hooks_unwired() -> None:
+    """Remote approvals fail silently when hooks.json is absent or stale."""
+    status, detail = hook_health()
+    if status == "ok":
+        return
+    if status == "missing":
+        console.print(
+            "[bold yellow]Remote approvals are NOT wired on this machine:[/bold yellow] "
+            "no PreToolUse hook installed.\n"
+            "  Tool permissions will appear in the terminal only, never on the phone.\n"
+            "  Fix:  [bold]agy-remote setup-hooks[/bold]\n"
+        )
+    else:
+        console.print(
+            f"[bold yellow]Remote approvals are NOT wired:[/bold yellow] the installed hook points at "
+            f"[red]{detail}[/red], which does not exist or is not executable\n"
+            "  (moved checkout, recreated venv, or config from another machine).\n"
+            "  Fix:  [bold]agy-remote setup-hooks[/bold]\n"
+        )
 
 
 def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None, timeout: float = 30) -> int:

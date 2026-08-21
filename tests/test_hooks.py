@@ -104,3 +104,55 @@ def test_config_local_base_url_tracks_tls(tmp_path):
         tailscale_dns_name="mac-studio.example.ts.net",
     )
     assert secure.local_base_url == "https://mac-studio.example.ts.net:8766"
+
+
+# ---------------------------------------------------------------------------
+# Approvals must not fail silently: `run` should be able to tell whether the
+# hook is actually wired on THIS machine before promising remote approvals.
+# ---------------------------------------------------------------------------
+
+
+def _write_hooks_file(tmp_path: Path, command: str) -> Path:
+    hooks_file = tmp_path / "hooks.json"
+    hooks_file.write_text(
+        json.dumps(
+            {"remote-approval": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]}}
+        )
+    )
+    return hooks_file
+
+
+def test_hook_health_reports_missing_config(tmp_path: Path):
+    from agy_remote.hooks import hook_health
+
+    status, _detail = hook_health(config_dir=tmp_path)
+    assert status == "missing"
+
+
+def test_hook_health_reports_a_stale_binary_path(tmp_path: Path):
+    """hooks.json carries an absolute path from install time; a moved checkout,
+    a recreated venv, or a config synced from another machine leaves it
+    pointing at nothing. agy then quietly falls back to asking in the TUI and
+    the phone never sees the approval."""
+    from agy_remote.hooks import hook_health
+
+    _write_hooks_file(tmp_path, "/nonexistent/venv/bin/agy-remote hook-pre-tool")
+    status, detail = hook_health(config_dir=tmp_path)
+    assert status == "broken"
+    assert "/nonexistent/venv/bin/agy-remote" in detail
+
+
+def test_hook_health_accepts_a_working_install(tmp_path: Path):
+    from agy_remote.hooks import hook_health
+
+    install_hooks_config(tmp_path)
+    status, _detail = hook_health(config_dir=tmp_path)
+    assert status == "ok"
+
+
+def test_hook_health_reports_config_without_our_entry(tmp_path: Path):
+    from agy_remote.hooks import hook_health
+
+    (tmp_path / "hooks.json").write_text(json.dumps({"other-plugin": {}}))
+    status, _detail = hook_health(config_dir=tmp_path)
+    assert status == "missing"

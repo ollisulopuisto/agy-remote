@@ -329,3 +329,36 @@ def test_cli_options_accept_tailscale_path(monkeypatch, tmp_path: Path):
     assert "--tailscale-path" in res_run.output
     assert "--tailscale-bin" in res_run.output
 
+
+def test_streamed_private_key_is_owner_only_from_creation(monkeypatch, tmp_path: Path):
+    """write_text-then-chmod left the TLS key world-readable for a moment."""
+    import os
+    import stat
+    import subprocess as sp
+
+    from agy_remote.config import ensure_tailscale_cert
+
+    def fake_run(cmd, **kwargs):
+        return sp.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                "-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n"
+                "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("agy_remote.config.subprocess.run", fake_run)
+    fake_ts = tmp_path / "tailscale"
+    fake_ts.write_text("#!/bin/sh\n")
+    fake_ts.chmod(0o755)
+
+    # A permissive umask is exactly the condition under which the window bites.
+    old_umask = os.umask(0o000)
+    try:
+        _cert, key = ensure_tailscale_cert("node.ts.net", cert_dir=tmp_path, tailscale_bin=str(fake_ts))
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(key.stat().st_mode) == 0o600

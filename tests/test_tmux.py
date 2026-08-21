@@ -115,4 +115,3 @@ def test_cli_run_help_has_qr_timeout():
     res = runner.invoke(cli, ["run", "--help"])
     assert "--qr-timeout" in res.output
     assert "--pairing-timeout" in res.output
-

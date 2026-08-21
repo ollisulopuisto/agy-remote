@@ -100,6 +100,44 @@ def run_pre_tool_hook() -> None:
         print(json.dumps({"decision": "ask", "reason": f"Hook error: {e}"}))
 
 
+def hook_health(config_dir: Path | None = None) -> tuple[str, str | None]:
+    """Whether remote approvals are actually wired on this machine.
+
+    The hook command in hooks.json carries an absolute path captured at install
+    time. A moved checkout, a recreated venv, or a config copied from another
+    machine leaves it pointing at nothing -- agy then quietly falls back to
+    asking in its own TUI, and the phone never sees the approval. `run` checks
+    this at startup so the failure is loud instead of silent.
+
+    Returns ("ok" | "missing" | "broken", detail).
+    """
+    if config_dir is None:
+        config_dir = Path.home() / ".gemini" / "config"
+    hooks_file = config_dir / "hooks.json"
+
+    try:
+        with open(hooks_file, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return "missing", None
+
+    entries = data.get("remote-approval", {}).get("PreToolUse") or []
+    for entry in entries:
+        for hook in entry.get("hooks", []):
+            command = hook.get("command", "")
+            if "hook-pre-tool" not in command:
+                continue
+            try:
+                binary = shlex.split(command)[0]
+            except ValueError:
+                return "broken", command
+            if Path(binary).is_file() and os.access(binary, os.X_OK):
+                return "ok", command
+            return "broken", binary
+
+    return "missing", None
+
+
 def install_hooks_config(target_dir: Path | None = None) -> Path:
     """Install or update hooks.json in the target directory or global config."""
     if target_dir is None:

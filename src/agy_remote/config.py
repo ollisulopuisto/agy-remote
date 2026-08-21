@@ -282,7 +282,11 @@ def ensure_tailscale_cert(
                 cert_data = stdout[:key_idx].strip() + "\n"
                 key_data = stdout[key_idx:].strip() + "\n"
                 cert_path.write_text(cert_data, encoding="utf-8")
-                key_path.write_text(key_data, encoding="utf-8")
+                # 0600 from creation: write_text-then-chmod leaves the private
+                # key world-readable for a moment under the default umask.
+                key_fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(key_fd, "w", encoding="utf-8") as key_file:
+                    key_file.write(key_data)
                 os.chmod(key_path, 0o600)
                 return cert_path, key_path
     except (OSError, subprocess.SubprocessError):
