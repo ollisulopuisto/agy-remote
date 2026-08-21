@@ -290,7 +290,17 @@ def write_runtime_state(cfg: RemoteConfig) -> Path:
     Written owner-only: the token is equivalent to shell access on this machine.
     """
     RUNTIME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps({"auth_token": cfg.auth_token, "port": cfg.port, "pid": os.getpid()}, indent=2)
+    payload = json.dumps(
+        {
+            "auth_token": cfg.auth_token,
+            "e2ee_key": cfg.e2ee_key,
+            "e2ee_enabled": cfg.e2ee_enabled,
+            "enable_auth": cfg.enable_auth,
+            "port": cfg.port,
+            "pid": os.getpid(),
+        },
+        indent=2,
+    )
     fd = os.open(RUNTIME_STATE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(payload)
@@ -316,3 +326,25 @@ def read_runtime_state() -> dict | None:
     except (OSError, json.JSONDecodeError) as e:
         logger.debug("Could not read runtime state: %s", e)
     return None
+
+
+def adopt_runtime_state(cfg: RemoteConfig) -> RemoteConfig:
+    """Point `cfg` at the credentials of an already-running server, if any.
+
+    Commands like `qr` run in their own process, where a default-constructed
+    RemoteConfig invents a fresh token and key. Pairing against those would
+    hand the phone credentials the live server has never heard of.
+    """
+    state = read_runtime_state()
+    if not state:
+        return cfg
+
+    cfg.auth_token = state.get("auth_token", cfg.auth_token)
+    cfg.port = state.get("port", cfg.port)
+    if state.get("e2ee_key"):
+        cfg.e2ee_key = state["e2ee_key"]
+    if "e2ee_enabled" in state:
+        cfg.e2ee_enabled = bool(state["e2ee_enabled"])
+    if "enable_auth" in state:
+        cfg.enable_auth = bool(state["enable_auth"])
+    return cfg

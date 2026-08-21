@@ -14,7 +14,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import InsecureConfigError, RemoteConfig, get_config, is_loopback_host
+from .config import (
+    InsecureConfigError,
+    RemoteConfig,
+    adopt_runtime_state,
+    get_config,
+    is_loopback_host,
+    read_runtime_state,
+)
 from .hooks import install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
@@ -193,7 +200,13 @@ def run(
 @cli.command("qr")
 def show_qr() -> None:
     """Display connection QR code and active URLs."""
-    cfg = get_config()
+    cfg = adopt_runtime_state(get_config())
+    if read_runtime_state() is None:
+        console.print(
+            "[yellow]No agy-remote server appears to be running.[/yellow] "
+            "Showing a preview; start one with [bold]agy-remote run[/bold] "
+            "and re-run this command to get a scannable code.\n"
+        )
     print_banner(cfg)
 
 

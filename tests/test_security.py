@@ -464,3 +464,35 @@ def test_importing_server_does_not_build_an_app(monkeypatch):
 
     module = importlib.import_module("agy_remote.server")  # must not raise
     assert hasattr(module, "create_app")
+
+
+def test_qr_command_shows_the_running_servers_credentials(tmp_path: Path, monkeypatch):
+    """Regression: `agy-remote qr` minted a fresh token, so the QR never worked.
+
+    Same root cause as the PreToolUse hook: a separate process calling
+    get_config() gets new random credentials rather than the live server's.
+    """
+    import agy_remote.config as config_mod
+
+    state_file = tmp_path / "runtime.json"
+    monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", state_file)
+
+    running = _cfg(tmp_path, auth_token="live-token", port=9191)
+    config_mod.write_runtime_state(running)
+
+    # A fresh process: different random token until it adopts the published one.
+    fresh = RemoteConfig(brain_dir=tmp_path)
+    assert fresh.auth_token != "live-token"
+
+    adopted = config_mod.adopt_runtime_state(fresh)
+    assert adopted.auth_token == "live-token"
+    assert adopted.port == 9191
+    assert adopted.e2ee_key == running.e2ee_key, "QR would carry the wrong E2EE key"
+
+
+def test_adopt_runtime_state_is_a_noop_without_a_running_server(tmp_path: Path, monkeypatch):
+    import agy_remote.config as config_mod
+
+    monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", tmp_path / "absent.json")
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="local")
+    assert config_mod.adopt_runtime_state(cfg).auth_token == "local"
