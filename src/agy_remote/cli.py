@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import RemoteConfig, get_config
+from .config import InsecureConfigError, RemoteConfig, get_config, is_loopback_host
 from .hooks import install_hooks_config, run_pre_tool_hook
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
@@ -50,6 +50,15 @@ def print_banner(cfg: RemoteConfig, mode: str = "Standalone") -> None:
     if cfg.e2ee_enabled:
         table.add_row("E2EE Status:", "[bold green]Active (AES-256-GCM via URL Hash)[/]")
     table.add_row("Brain Dir:", f"[dim]{cfg.brain_dir}[/]")
+    if not cfg.enable_auth:
+        table.add_row("Auth:", "[bold red]DISABLED (loopback only)[/]")
+    if not cfg.e2ee_enabled:
+        table.add_row("E2EE Status:", "[bold red]DISABLED - payloads are cleartext[/]")
+    if not is_loopback_host(cfg.host):
+        table.add_row(
+            "Exposure:",
+            f"[yellow]Reachable from the network on {cfg.host}:{cfg.port}. Prompts execute inside your agy session.[/]",
+        )
 
     panel = Panel(
         table,
@@ -66,8 +75,19 @@ def print_banner(cfg: RemoteConfig, mode: str = "Standalone") -> None:
     console.print()
 
 
+def _guard_or_exit(cfg: RemoteConfig) -> None:
+    """Abort with a readable message rather than a traceback on unsafe config."""
+    from .config import validate_bind_security
+
+    try:
+        validate_bind_security(cfg)
+    except InsecureConfigError as e:
+        console.print(f"[bold red]Refusing to start:[/bold red] {e}")
+        sys.exit(2)
+
+
 @click.group()
-@click.version_option(version="v26.08.21.5", message="agy-remote %(version)s")
+@click.version_option(version="v26.08.22.1", message="agy-remote %(version)s")
 def cli() -> None:
     """Antigravity CLI (agy) Mobile Remote Controller with E2EE & Web Push."""
     pass
@@ -106,6 +126,7 @@ def serve(
     if brain_dir:
         cfg.brain_dir = brain_dir
 
+    _guard_or_exit(cfg)
     print_banner(cfg, mode="Watcher Server")
 
     app = create_app(cfg)
@@ -114,21 +135,33 @@ def serve(
 
 @cli.command("run", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))
 @click.option("--port", "-p", default=8765, help="Port for web server", show_default=True)
+@click.option("--host", "-h", default="0.0.0.0", help="Host to bind on", show_default=True)
 @click.option("--token", "-t", default=None, help="Custom auth token")
 @click.option("--tmux", is_flag=True, help="Run inside a persistent tmux session")
 @click.option("--no-auth", is_flag=True, help="Disable authentication")
 @click.option("--no-e2ee", is_flag=True, help="Disable End-to-End Encryption")
 @click.pass_context
-def run(ctx: click.Context, port: int, token: str | None, tmux: bool, no_auth: bool, no_e2ee: bool) -> None:
+def run(
+    ctx: click.Context,
+    port: int,
+    host: str,
+    token: str | None,
+    tmux: bool,
+    no_auth: bool,
+    no_e2ee: bool,
+) -> None:
     """Launch agy CLI inside supervisor with simultaneous desktop & mobile control."""
     cfg = get_config()
     cfg.port = port
+    cfg.host = host
     if token:
         cfg.auth_token = token
     if no_auth:
         cfg.enable_auth = False
     if no_e2ee:
         cfg.e2ee_enabled = False
+
+    _guard_or_exit(cfg)
 
     agy_args = ["agy"] + ctx.args
     mode_label = "tmux Persistence" if tmux else "PTY Supervisor"

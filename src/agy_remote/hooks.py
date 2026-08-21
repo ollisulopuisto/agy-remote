@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import get_config
+from .config import get_config, read_runtime_state
 
 
 def run_pre_tool_hook() -> None:
@@ -21,17 +21,26 @@ def run_pre_tool_hook() -> None:
             return
 
         payload = json.loads(raw_input)
-        config = get_config()
 
-        # Post to local agy-remote server
-        url = f"http://127.0.0.1:{config.port}/api/hook/pre-tool"
+        # Use the running server's published credentials. get_config() would
+        # mint a *fresh* random token in this separate process, which never
+        # matches the server's and so 401s on every approval request.
+        state = read_runtime_state()
+        if state:
+            port = state.get("port", get_config().port)
+            auth_token = state["auth_token"]
+        else:
+            config = get_config()
+            port, auth_token = config.port, config.auth_token
+
+        url = f"http://127.0.0.1:{port}/api/hook/pre-tool"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,
             data=data,
             headers={
                 "Content-Type": "application/json",
-                "X-Auth-Token": config.auth_token,
+                "X-Auth-Token": auth_token,
             },
             method="POST",
         )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import secrets
 import socket
@@ -11,6 +13,14 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .crypto import generate_e2ee_key
+
+logger = logging.getLogger("agy_remote.config")
+
+#: Where a running server publishes the credentials its own helper processes
+#: need. The PreToolUse hook is spawned by the agy CLI as a separate process,
+#: so it cannot inherit the in-memory config; without this it would mint a
+#: fresh random token and fail authentication on every approval request.
+RUNTIME_STATE_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-session.json"
 
 
 def get_default_brain_dir() -> Path:
@@ -64,6 +74,38 @@ def get_lan_ip() -> str:
 def get_hostname() -> str:
     """Get local hostname."""
     return socket.gethostname()
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", ""})
+
+
+class InsecureConfigError(RuntimeError):
+    """Raised when a requested configuration would expose the host unsafely."""
+
+
+def is_loopback_host(host: str) -> bool:
+    """True if binding to `host` only accepts connections from this machine."""
+    return host.strip().strip("[]").lower() in LOOPBACK_HOSTS
+
+
+def validate_bind_security(cfg: RemoteConfig) -> None:
+    """Refuse configurations that expose an unauthenticated agent to the network.
+
+    Sending a prompt to agy-remote injects it straight into the running `agy`
+    CLI, which is arbitrary code execution on this machine. Without a token
+    that must never be reachable beyond loopback.
+
+    Raises:
+        InsecureConfigError: auth disabled on a non-loopback bind.
+    """
+    if not cfg.enable_auth and not is_loopback_host(cfg.host):
+        raise InsecureConfigError(
+            f"Refusing to disable authentication while bound to {cfg.host!r}.\n"
+            "Prompts sent to agy-remote execute inside your agy session, so an "
+            "unauthenticated listener on a LAN or tailnet address is remote code "
+            "execution for anyone who can reach it.\n"
+            "Either keep authentication enabled, or bind to 127.0.0.1 as well."
+        )
 
 
 class RemoteConfig(BaseModel):
@@ -155,3 +197,37 @@ def get_config() -> RemoteConfig:
 
         config_instance = RemoteConfig(**kwargs)
     return config_instance
+
+
+def write_runtime_state(cfg: RemoteConfig) -> Path:
+    """Publish the live token and port for helper processes to pick up.
+
+    Written owner-only: the token is equivalent to shell access on this machine.
+    """
+    RUNTIME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"auth_token": cfg.auth_token, "port": cfg.port, "pid": os.getpid()}, indent=2)
+    fd = os.open(RUNTIME_STATE_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.chmod(RUNTIME_STATE_FILE, 0o600)
+    return RUNTIME_STATE_FILE
+
+
+def clear_runtime_state() -> None:
+    """Remove the published credentials when the server shuts down."""
+    try:
+        RUNTIME_STATE_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        logger.debug("Could not clear runtime state: %s", e)
+
+
+def read_runtime_state() -> dict | None:
+    """Read the running server's token and port, or None if none is published."""
+    try:
+        with open(RUNTIME_STATE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "auth_token" in data:
+            return data
+    except (OSError, json.JSONDecodeError) as e:
+        logger.debug("Could not read runtime state: %s", e)
+    return None
