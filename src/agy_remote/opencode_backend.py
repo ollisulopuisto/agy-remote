@@ -384,9 +384,16 @@ class OpencodeBackend:
 
         from .push import get_push_manager
 
+        body = str(p.get("title") or p.get("pattern") or p.get("command") or "Action requested")
+        if sid != mgr.active_conversation_id:
+            # No banner is drawn for a session the phone is not showing, so the
+            # notification has to say where to look.
+            summary = self._sessions.get(sid)
+            body = f"{body}\nin session: {summary.title if summary else sid}"
+
         get_push_manager().send_notification(
             title=f"Permission Required: {tool_name}",
-            body=str(p.get("title") or p.get("pattern") or p.get("command") or "Action requested"),
+            body=body,
             data={"approval_id": approval_id, "type": "approval_request"},
         )
 

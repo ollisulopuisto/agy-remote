@@ -416,10 +416,14 @@ function handleServerEvent(event) {
   } else if (type === 'terminal_screen') {
     applyTerminal(data);
   } else if (type === 'approval_request') {
-    pendingApprovals.push(data);
-    triggerVibrate([80, 40, 100]);
-    renderApprovalBanner(data);
-    scrollToBottom();
+    // A banner is drawn into the transcript on screen, so it may only ever be
+    // one this session asked for -- never another session's, racing in mid-switch.
+    if (data.conversation_id === currentConversationId) {
+      pendingApprovals.push(data);
+      triggerVibrate([80, 40, 100]);
+      renderApprovalBanner(data);
+      scrollToBottom();
+    }
   } else if (type === 'approval_resolved') {
     pendingApprovals = pendingApprovals.filter(a => a.id !== data.id);
     const elem = document.getElementById(`approval-${data.id}`);

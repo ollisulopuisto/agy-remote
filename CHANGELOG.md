@@ -1,5 +1,18 @@
 # Changelog
  
+## v26.08.21.42 — Approval banners stay in their own session
+
+- **An approval banner could belong to a session you were not looking at.** One
+  `opencode serve` streams every session's permission events down one `/event`
+  connection, and each one was broadcast to the phone and drawn into whatever
+  transcript was on screen — with no attribution, so another session's `bash`
+  request read as belonging to the work in front of you. This contradicted the
+  snapshot path (`get_active_pending_approvals`), which had always filtered by
+  active session, so the stray banner also vanished on the next switch.
+  `register_approval` now broadcasts only for the active conversation, the PWA
+  drops any `approval_request` for another session, and the push notification
+  names the session when it is not the one on screen.
+
 ## v26.08.21.41 — Automated PyPI publishing & opencode docs
 
 - **Automated PyPI release pipeline.** Added GitHub Actions workflow using OpenID

@@ -311,6 +311,13 @@ class SessionManager:
         Non-blocking: agy's hook endpoint awaits the answer separately
         (`await_approval`), while opencode's permission arrives as an event
         whose answer travels back as a REST call (`deliver_resolution`).
+
+        Only the active conversation's approvals are broadcast. One `opencode
+        serve` streams every session's permissions down one connection, and the
+        phone renders a banner into the transcript it is showing -- a banner
+        from another session would read as belonging to the work on screen.
+        The approval stays registered either way, so switching to that session
+        surfaces it through `get_active_pending_approvals`.
         """
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
@@ -327,12 +334,13 @@ class SessionManager:
         self._pending_approvals[approval_id] = approval_data
 
         # Broadcast approval request to phone
-        await self.broadcast(
-            {
-                "event": "approval_request",
-                "data": approval_data,
-            }
-        )
+        if conversation_id == self.active_conversation_id:
+            await self.broadcast(
+                {
+                    "event": "approval_request",
+                    "data": approval_data,
+                }
+            )
         return approval_data
 
     async def await_approval(self, approval_id: str, timeout: float = 300.0) -> dict[str, Any]:
