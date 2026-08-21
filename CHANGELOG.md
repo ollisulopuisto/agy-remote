@@ -1,6 +1,14 @@
 # Changelog
  
-## v26.08.21.42 — Approval banners stay in their own session
+## v26.08.21.42 — Approval banners stay in their own session, honest port conflicts
+
+- **A port conflict blamed agy-remote for someone else's port.** Any program can
+  hold 8765; a stray `python -m http.server` was reported as "An agy-remote is
+  already running on this host", pointing at `tmux attach -t agy-remote` and
+  `agy-remote qr` — a session that does not exist and a QR nobody published.
+  The agy-remote wording is now used only when a live server's runtime state
+  claims that exact port; otherwise the message says another program holds it
+  and prints the `lsof` line that names which.
 
 - **An approval banner could belong to a session you were not looking at.** One
   `opencode serve` streams every session's permission events down one `/event`

@@ -194,14 +194,25 @@ def _preflight_port_or_exit(cfg: RemoteConfig) -> None:
     if port_is_free(cfg.host, cfg.port):
         return
 
+    # Only a live server that published *this* port may be named an agy-remote.
+    # Any process can hold the port -- a stray `python -m http.server 8765` was
+    # reported as an agy-remote and sent the user to a tmux session that did
+    # not exist, while the one useful fact (something else owns it) went unsaid.
     owner = runtime_state_owner()
-    detail = f" (pid {owner['pid']})" if owner and owner.get("pid") else ""
-    console.print(
-        f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use{detail}.\n"
-        "  An agy-remote is already running on this host.\n"
-        f"  • Reach its session:   [bold]tmux attach -t {session_name_for_port(cfg.port)}[/bold]\n"
-        f"  • Re-show its QR:      [bold]agy-remote qr[/bold]\n"
-    )
+    if owner and owner.get("port") == cfg.port:
+        detail = f" (pid {owner['pid']})" if owner.get("pid") else ""
+        console.print(
+            f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use{detail}.\n"
+            "  An agy-remote is already running on this host.\n"
+            f"  • Reach its session:   [bold]tmux attach -t {session_name_for_port(cfg.port)}[/bold]\n"
+            f"  • Re-show its QR:      [bold]agy-remote qr[/bold]\n"
+        )
+    else:
+        console.print(
+            f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use.\n"
+            "  Another program holds it -- no agy-remote on this host claims it.\n"
+            f"  • See what does:       [bold]lsof -nP -iTCP:{cfg.port} -sTCP:LISTEN[/bold]\n"
+        )
 
     try:
         new_port = cfg.port + 1

@@ -172,3 +172,45 @@ def test_runtime_state_is_not_stolen_from_a_live_server(monkeypatch, tmp_path: P
     written = json.loads(state_file.read_text())
     assert written["auth_token"] == "second"
     assert written["pid"] == os.getpid()
+
+
+def test_a_foreign_listener_is_not_reported_as_an_agy_remote(monkeypatch, tmp_path: Path, busy_port: int):
+    """Any process can hold the port; only a live agy-remote may be named one.
+
+    A stray `python -m http.server 8765` produced "An agy-remote is already
+    running on this host" and sent the user to `tmux attach -t agy-remote`,
+    which does not exist -- so the one useful fact, that something *else* owns
+    the port, was the one thing the message did not say.
+    """
+    seen = _stub_launch(monkeypatch, tmp_path, busy_port)  # no runtime state -> no live owner
+    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(busy_port)], input="n\n")
+
+    assert res.exit_code == 2, res.output
+    out = res.output.lower()
+    assert "already in use" in out
+    assert "an agy-remote is already running" not in out
+    assert "tmux attach" not in out
+    assert "agy-remote qr" not in out
+    # Name the way to find the actual holder.
+    assert "lsof" in out
+    assert seen["banner"] == []
+    assert seen["supervisor"] == []
+
+
+def test_a_live_agy_remote_on_the_port_still_gets_its_guidance(monkeypatch, tmp_path: Path, busy_port: int):
+    """The check must not throw away the message that is right when it is right."""
+    import json
+
+    seen = _stub_launch(monkeypatch, tmp_path, busy_port)
+    state_file = tmp_path / "runtime.json"
+    state_file.write_text(json.dumps({"auth_token": "first", "port": busy_port, "pid": 424242}))
+    monkeypatch.setattr(config_mod, "_pid_alive", lambda pid: pid == 424242)
+
+    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(busy_port)], input="n\n")
+
+    assert res.exit_code == 2, res.output
+    out = res.output.lower()
+    assert "an agy-remote is already running" in out
+    assert "tmux attach" in out
+    assert "424242" in out
+    assert seen["supervisor"] == []
