@@ -20,6 +20,7 @@ from .models import (
     TranscriptStep,
 )
 from .screen import TerminalMirror
+from .transcript import clean_user_content, normalize_tool_calls
 
 logger = logging.getLogger("agy_remote.session")
 
@@ -157,6 +158,9 @@ class SessionManager:
                 step_type = obj.get("type", "")
                 content = obj.get("content") or ""
                 if step_type == "USER_INPUT":
+                    # The drawer titles every conversation from this; unwrapped,
+                    # every one of them reads "<USER_REQUEST>".
+                    content = clean_user_content(content)
                     if not first_prompt:
                         first_prompt = content[:100]
                     last_prompt = content[:100]
@@ -322,15 +326,23 @@ class SessionManager:
                         continue
                     try:
                         data = json.loads(line)
+                        source = data.get("source", "UNKNOWN")
+                        step_type = data.get("type", "UNKNOWN")
+                        content = data.get("content")
+                        # Only a user's own words carry agy's envelope; model
+                        # output must reach the phone exactly as written.
+                        if step_type == "USER_INPUT" or source in ("USER_INPUT", "USER_EXPLICIT"):
+                            content = clean_user_content(content)
+
                         step = TranscriptStep(
                             step_index=data.get("step_index", len(self.active_steps) + len(new_steps)),
-                            source=data.get("source", "UNKNOWN"),
-                            type=data.get("type", "UNKNOWN"),
+                            source=source,
+                            type=step_type,
                             status=data.get("status", "DONE"),
                             created_at=data.get("created_at"),
-                            content=data.get("content"),
+                            content=content,
                             thinking=data.get("thinking"),
-                            tool_calls=data.get("tool_calls") or [],
+                            tool_calls=normalize_tool_calls(data.get("tool_calls") or []),
                             truncated_fields=data.get("truncated_fields") or [],
                         )
                         new_steps.append(step)

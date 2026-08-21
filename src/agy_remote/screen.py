@@ -20,12 +20,17 @@ from typing import Any
 
 import pyte
 
-#: How agy spells each execution mode in its status bar. Best effort: the bar is
-#: not an API, so an unrecognised bar reports no mode rather than a wrong one.
-_MODE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("accept-edits", re.compile(r"accept[\s-]?edits", re.IGNORECASE)),
-    ("plan", re.compile(r"\bplan(?:ning)?\s+mode\b|\bplan\s+on\b", re.IGNORECASE)),
-)
+#: How agy spells each execution mode in the status bar. The bar is not an API,
+#: so an unrecognised one reports no mode rather than a wrong one.
+_MODE_FIELDS: dict[str, str] = {
+    "accept-edits": "accept-edits",
+    "accept edits": "accept-edits",
+    "plan": "plan",
+    "plan mode": "plan",
+}
+
+#: Status-bar fields are separated by runs of spaces.
+_FIELD_SPLIT = re.compile(r"\s{2,}")
 
 
 class TerminalMirror:
@@ -90,15 +95,21 @@ class TerminalMirror:
 
 
 def parse_mode(lines: list[str]) -> str | None:
-    """Read agy's execution mode off the status bar, or None if it is not there.
+    """Read agy's execution mode out of the status bar, or None if absent.
 
-    Shift+Tab cycles `default` -> `accept-edits` -> `plan`, and the only report
-    of the result is the status bar, so without this the phone toggles blind.
-    `default` is indistinguishable from a bar that says nothing, and is reported
-    as no mode rather than guessed at.
+    Shift+Tab cycles `default` -> `accept-edits` -> `plan`, and the status bar
+    is the only report of the result, so without this the phone toggles blind.
+
+    Only the bar is read, never the conversation above it. agy announces a mode
+    change as a line of text -- "Accept-edits mode: file edits auto-approved" --
+    and that line stays on screen after you have cycled past that mode, so
+    anything scanning the whole screen keeps reporting a mode you already left.
+    `default` prints no field at all and is reported as no mode.
     """
-    text = "\n".join(lines[-4:])
-    for name, pattern in _MODE_PATTERNS:
-        if pattern.search(text):
-            return name
+    status_bar = next((line for line in reversed(lines) if line.strip()), "")
+
+    for field in _FIELD_SPLIT.split(status_bar.strip()):
+        mode = _MODE_FIELDS.get(field.strip().lower())
+        if mode:
+            return mode
     return None

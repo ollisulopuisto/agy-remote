@@ -1,5 +1,27 @@
 # Changelog
 
+## v26.08.22.9 — Reading agy's records instead of dumping them
+
+- **Every prompt arrived on the phone wrapped in agy's plumbing.** agy stores a
+  prompt as `<USER_REQUEST>` plus `<ADDITIONAL_METADATA>` and
+  `<USER_SETTINGS_CHANGE>` blocks it feeds back to the model, and the PWA
+  rendered the lot: a one-line question filled the screen, and every conversation
+  in the drawer was titled `<USER_REQUEST>`. The envelope is now unwrapped
+  server-side. Only all-caps tag blocks are touched, so `a < b` and `<div>`
+  survive, and model output is never rewritten.
+- **Tool arguments were double-escaped.** agy stores each argument as a JSON
+  string inside a JSON object, so `JSON.stringify` showed `"\"df -h\""`. Values
+  are decoded server-side (strings only -- `"5000"` stays text) and rendered one
+  per row instead of as a brace-wrapped blob.
+- **Steps the client did not recognise vanished.** `appendStep` handled user and
+  model steps and silently dropped everything else, so `SYSTEM/CHECKPOINT` never
+  appeared and the phone quietly showed less than the desktop. Unknown steps now
+  render as a plain system line.
+- **The execution-mode badge read the wrong thing.** It scanned the whole screen,
+  and agy announces a mode change as a line of text that stays in the scrollback
+  after you cycle past it, so the announcement kept beating the status bar. Only
+  the bar is read now, matched field by field against the real layout.
+
 ## v26.08.22.8 — The phone can see the terminal
 
 - **Keys were being pressed at a screen nobody could see.** The PWA renders

@@ -315,3 +315,43 @@ async def test_the_mirror_matches_the_pty_size(tmp_path: Path):
     mgr.attach_terminal(_FakeSupervisor(rows=12, cols=45))
     assert mgr.terminal is not None
     assert (mgr.terminal.rows, mgr.terminal.cols) == (12, 45)
+
+
+@pytest.mark.asyncio
+async def test_the_envelope_is_stripped_before_it_reaches_a_client(tmp_path: Path):
+    """agy wraps a prompt in <USER_REQUEST> plus metadata; the phone showed it all."""
+    conv_id = "enveloped"
+    log = tmp_path / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        json.dumps(
+            {
+                "step_index": 0,
+                "type": "USER_INPUT",
+                "source": "USER_EXPLICIT",
+                "content": (
+                    "<USER_REQUEST>\nClean up my disk\n</USER_REQUEST>\n"
+                    "<ADDITIONAL_METADATA>\nThe current local time is: now.\n</ADDITIONAL_METADATA>"
+                ),
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "step_index": 1,
+                "type": "PLANNER_RESPONSE",
+                "source": "MODEL",
+                "tool_calls": [{"name": "run_command", "args": {"CommandLine": '"df -h"'}}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    await mgr.switch_conversation(conv_id)
+
+    assert mgr.active_steps[0].content == "Clean up my disk"
+    assert mgr.active_steps[1].tool_calls[0]["args"]["CommandLine"] == "df -h"
+    assert mgr.list_conversations()[0].title == "Clean up my disk"

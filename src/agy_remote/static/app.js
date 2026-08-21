@@ -497,7 +497,7 @@ function appendStep(step) {
           // Render visual diff for replace_file_content
           bodyContent = renderDiff(toolArgs.TargetContent, toolArgs.ReplacementContent, toolArgs.TargetFile);
         } else {
-          bodyContent = `<div class="tool-body">${escapeHtml(JSON.stringify(toolArgs, null, 2))}</div>`;
+          bodyContent = `<div class="tool-body">${renderToolArgs(toolArgs)}</div>`;
         }
 
         toolCard.innerHTML = `
@@ -514,7 +514,33 @@ function appendStep(step) {
     }
 
     chatContainer.appendChild(modelDiv);
+    return;
   }
+
+  // Anything else -- SYSTEM/CHECKPOINT today, whatever agy adds tomorrow -- was
+  // being dropped without a trace, so the phone quietly showed less than the
+  // desktop. Show it plainly rather than pretending it does not exist.
+  const content = (step.content || '').trim();
+  if (!content) return;
+
+  const systemDiv = document.createElement('div');
+  systemDiv.className = 'message-system';
+  systemDiv.textContent = `${stepType.toLowerCase().replace(/_/g, ' ')}: ${content}`;
+  chatContainer.appendChild(systemDiv);
+}
+
+// Tool arguments, one per line. JSON.stringify of the whole object buried the
+// command under braces and escaped quotes; the server has already decoded the
+// values agy stored as JSON strings.
+function renderToolArgs(args) {
+  const entries = Object.entries(args || {});
+  if (entries.length === 0) return '<span class="arg-empty">no arguments</span>';
+
+  return entries.map(([key, value]) => {
+    const shown = typeof value === 'string' ? value : JSON.stringify(value);
+    return `<div class="arg-row"><span class="arg-key">${escapeHtml(key)}</span>` +
+           `<span class="arg-value">${escapeHtml(shown)}</span></div>`;
+  }).join('');
 }
 
 // Render Visual Diff

@@ -50,16 +50,48 @@ def test_take_dirty_snapshot_only_returns_changes():
     assert mirror.take_dirty_snapshot() is None
 
 
+# agy's real status bar, as it appears at the bottom of the pty: a left hint,
+# then right-aligned fields separated by runs of spaces.
+STATUS_BAR = "? for shortcuts{gap}{mode}Gemini 3.7 Flash   medium   1 task(s)  /tasks"
+
+
+def _bar(mode: str = "") -> bytes:
+    field = f"{mode}   " if mode else ""
+    return STATUS_BAR.format(gap=" " * 20, mode=field).encode()
+
+
 def test_execution_mode_is_read_off_the_status_bar():
-    """Shift+Tab is otherwise fired blind: nothing reports the resulting mode."""
-    mirror = TerminalMirror(rows=4, cols=40)
-    mirror.feed(b"? for shortcuts        accept-edits on\r\n")
+    """Shift+Tab is otherwise fired blind: nothing else reports the result."""
+    mirror = TerminalMirror(rows=3, cols=120)
+    mirror.feed(b"\x1b[3;1H" + _bar("accept-edits"))
     assert mirror.snapshot()["mode"] == "accept-edits"
 
-    mirror.feed(b"\x1b[2J\x1b[H? for shortcuts        plan mode on\r\n")
+    mirror.feed(b"\x1b[2J\x1b[3;1H" + _bar("plan"))
     assert mirror.snapshot()["mode"] == "plan"
 
-    mirror.feed(b"\x1b[2J\x1b[H? for shortcuts\r\n")
+
+def test_default_mode_shows_no_field_and_is_reported_as_none():
+    mirror = TerminalMirror(rows=3, cols=120)
+    mirror.feed(b"\x1b[3;1H" + _bar())
+    assert mirror.snapshot()["mode"] is None
+
+
+def test_scrollback_does_not_override_the_status_bar():
+    """agy announces a mode change in the conversation, and that line stays put.
+
+    Reading the mode from anywhere but the bar means the announcement of a mode
+    you have since left keeps winning.
+    """
+    mirror = TerminalMirror(rows=3, cols=120)
+    mirror.feed(b"\x1b[1;1HAccept-edits mode: file edits auto-approved (shift+tab to cycle)\r\n")
+    mirror.feed(b"\x1b[3;1H" + _bar("plan"))
+
+    assert mirror.snapshot()["mode"] == "plan"
+
+
+def test_prose_mentioning_a_mode_is_not_a_mode():
+    mirror = TerminalMirror(rows=3, cols=120)
+    mirror.feed(b"\x1b[3;1Hlet me plan the accept-edits rollout before we continue")
     assert mirror.snapshot()["mode"] is None
 
 
