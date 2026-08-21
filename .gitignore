@@ -45,3 +45,7 @@ config.yaml
 *.swp
 *.swo
 .DS_Store
+
+# App uploads & local keys
+.agents/uploads/
+vapid.json

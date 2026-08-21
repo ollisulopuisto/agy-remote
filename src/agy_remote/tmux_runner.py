@@ -34,7 +34,9 @@ class TmuxSupervisor:
         if not is_tmux_available():
             raise RuntimeError("tmux is not installed or not in PATH")
 
-        cmd_str = " ".join(self.cmd)
+        import shlex
+
+        cmd_str = shlex.join(self.cmd)
         if not self.has_session():
             # Create detached session first
             subprocess.run(
@@ -49,13 +51,18 @@ class TmuxSupervisor:
         ).returncode
 
     def inject_input(self, text: str) -> bool:
-        """Send keystrokes or prompts into the running tmux session."""
+        """Send keystrokes or prompts into the running tmux session literals safely."""
         if not self.has_session():
             return False
 
-        # Use tmux send-keys
+        # Send text as raw literal characters first (-l) then Enter
+        subprocess.run(
+            ["tmux", "send-keys", "-t", self.session_name, "-l", text],
+            capture_output=True,
+            check=False,
+        )
         res = subprocess.run(
-            ["tmux", "send-keys", "-t", self.session_name, text, "Enter"],
+            ["tmux", "send-keys", "-t", self.session_name, "Enter"],
             capture_output=True,
             check=False,
         )

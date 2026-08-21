@@ -61,3 +61,32 @@ def test_conversations_api(tmp_path: Path):
     assert resp.status_code == 200
     assert resp.json()["id"] == conv_id
     assert len(resp.json()["steps"]) == 1
+
+    # Traversal attack on conversation_id should return 404
+    resp = client.get("/api/conversations/../../etc/passwd?token=secret123")
+    assert resp.status_code == 404
+
+
+def test_upload_security(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    app = create_app(cfg)
+    client = TestClient(app)
+
+    # Reject unauthenticated upload
+    resp = client.post("/api/upload", files={"file": ("test.jpg", b"dummy", "image/jpeg")})
+    assert resp.status_code == 401
+
+    # Reject non-image extension
+    resp = client.post(
+        "/api/upload?token=secret123",
+        files={"file": ("malicious.exe", b"malicious binary", "application/octet-stream")},
+    )
+    assert resp.status_code == 400
+
+    # Accept valid image upload
+    resp = client.post(
+        "/api/upload?token=secret123",
+        files={"file": ("screenshot.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+    )
+    assert resp.status_code == 200
+    assert "mobile_" in resp.json()["filename"]

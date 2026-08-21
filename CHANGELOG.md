@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning (CalVer)](https://calver.org/) in the format `vYY.MM.DD.N`.
 
+## [v26.08.21.4] - 2026-08-21
+
+### Security
+- Added path traversal defenses in `get_transcript_path` for `conversation_id` validation and boundary enforcement.
+- Hardened `/api/upload` with filename sanitization, image-only MIME/extension validation, path traversal verification, and a 25MB file size limit.
+- Replaced token comparisons with `secrets.compare_digest` to eliminate timing side-channel attacks.
+- Hardened CORS configuration to prevent unauthenticated cross-origin credential exposure.
+- Enforced literal key escaping (`send-keys -l`) and safe shell joining in `TmuxSupervisor` to prevent keystroke injection.
+
 ## [v26.08.21.3] - 2026-08-21
 
 ### Added

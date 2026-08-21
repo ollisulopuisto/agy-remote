@@ -141,13 +141,27 @@ class SessionManager:
         return convs[0].id if convs else None
 
     def get_transcript_path(self, conversation_id: str) -> Path | None:
-        """Resolve the path to transcript.jsonl for a conversation."""
-        primary = self.brain_dir / conversation_id / ".system_generated" / "logs" / "transcript.jsonl"
+        """Resolve the path to transcript.jsonl for a conversation with traversal protection."""
+        if not conversation_id or not all(c.isalnum() or c in "-_" for c in conversation_id):
+            return None
+
+        primary = (self.brain_dir / conversation_id / ".system_generated" / "logs" / "transcript.jsonl").resolve()
+        try:
+            if not primary.is_relative_to(self.brain_dir.resolve()):
+                return None
+        except (ValueError, RuntimeError):
+            return None
+
         if primary.exists():
             return primary
-        fallback = self.brain_dir / conversation_id / "transcript.jsonl"
-        if fallback.exists():
-            return fallback
+
+        fallback = (self.brain_dir / conversation_id / "transcript.jsonl").resolve()
+        try:
+            if fallback.is_relative_to(self.brain_dir.resolve()) and fallback.exists():
+                return fallback
+        except (ValueError, RuntimeError):
+            return None
+
         return None
 
     async def switch_conversation(self, conversation_id: str) -> bool:

@@ -60,7 +60,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Antigravity Remote",
         description="Mobile Remote Web PWA with E2EE & Web Push for Antigravity CLI",
-        version="26.08.21.3",
+        version="26.08.21.4",
         lifespan=lifespan,
     )
     app.state.session_manager = session_mgr
@@ -69,7 +69,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -84,8 +84,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     ) -> bool:
         if not cfg.enable_auth:
             return True
-        provided = token_header or token_query
-        if provided != cfg.auth_token:
+        import secrets
+
+        provided = token_header or token_query or ""
+        if not secrets.compare_digest(provided, cfg.auth_token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing authentication token",
@@ -99,11 +101,14 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     @app.get("/api/status")
     async def get_status(request: Request, token: str | None = Query(None)) -> dict[str, Any]:
         """Return server status, encryption info, and connection links."""
-        if cfg.enable_auth and token != cfg.auth_token:
+        import secrets
+
+        is_auth = (not cfg.enable_auth) or (token is not None and secrets.compare_digest(token, cfg.auth_token))
+        if not is_auth:
             return {
                 "auth_required": True,
                 "authenticated": False,
-                "version": "v26.08.21.3",
+                "version": "v26.08.21.4",
                 "e2ee_enabled": cfg.e2ee_enabled,
             }
 
@@ -113,7 +118,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         return {
             "auth_required": cfg.enable_auth,
             "authenticated": True,
-            "version": "v26.08.21.3",
+            "version": "v26.08.21.4",
             "e2ee_enabled": cfg.e2ee_enabled,
             "active_conversation_id": mgr.active_conversation_id,
             "supervisor_running": (pty is not None and pty.running) or (tmux is not None and tmux.has_session()),
@@ -220,14 +225,26 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Upload image/screenshot from mobile camera or gallery into workspace."""
+        """Upload image/screenshot from mobile camera or gallery into workspace with strict sanitization."""
         verify_auth(request, token, token_header)
-        upload_dir = Path.cwd() / ".agents" / "uploads"
+        upload_dir = (Path.cwd() / ".agents" / "uploads").resolve()
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        filename = f"mobile_{uuid.uuid4().hex[:8]}_{file.filename or 'image.jpg'}"
-        dest = upload_dir / filename
-        content = await file.read()
+        raw_filename = Path(file.filename or "image.jpg").name
+        ext = Path(raw_filename).suffix.lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"):
+            raise HTTPException(status_code=400, detail="Invalid file type. Only image uploads are allowed.")
+
+        # Limit file size to 25MB
+        content = await file.read(25 * 1024 * 1024 + 1)
+        if len(content) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large (max 25MB).")
+
+        filename = f"mobile_{uuid.uuid4().hex[:8]}_{raw_filename}"
+        dest = (upload_dir / filename).resolve()
+        if not dest.is_relative_to(upload_dir):
+            raise HTTPException(status_code=400, detail="Invalid target filename.")
+
         with open(dest, "wb") as f:
             f.write(content)
 
