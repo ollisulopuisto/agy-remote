@@ -1,5 +1,12 @@
 # Changelog
 
+## v26.08.22.20 — PyPI release & global uv tool / uvx support
+
+- **Published to PyPI.** `agy-remote` is now available as a package on PyPI.
+- **Added zero-install and global tool support.** Documented instant execution
+  via `uvx agy-remote` and system-wide installation via `uv tool install agy-remote`.
+- **Added PyPI version badge** to README.
+
 ## v26.08.22.19 — Approvals fail loudly, plus fixes for the streamed certificate
 
 - **Remote approvals could be silently unwired.** The whole approval flow hangs
