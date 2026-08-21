@@ -172,7 +172,18 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         return getattr(req.app.state, "session_manager", session_mgr)
 
     def token_ok(provided: str | None) -> bool:
-        """Constant-time token check, used by every authenticated entry point."""
+        """Constant-time token check, used by every authenticated entry point.
+
+        The pairing deadline is enforced here, per check, not at startup: a
+        boot-time verdict alone would let a long-running server honor an
+        expired pairing until its next restart, which is exactly the window
+        the TTL exists to close. (A WebSocket authenticated before the
+        deadline keeps its connection; new connections are refused.)
+        """
+        if cfg.pairing_expired():
+            logger.info("Refusing expired pairing; restart agy-remote to mint a new QR")
+            return False
+
         return secrets.compare_digest(
             (provided or "").encode("utf-8"),
             cfg.auth_token.encode("utf-8"),

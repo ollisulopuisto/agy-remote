@@ -280,6 +280,16 @@ class RemoteConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8765
     auth_token: str = Field(default_factory=lambda: secrets.token_urlsafe(16))
+    #: When the stored pairing stops being honored, or None for no deadline
+    #: (an explicit --token / env token, or TTL 0). Enforced per auth check:
+    #: a boot-time verdict alone would let a long-running server honor an
+    #: expired pairing until its next restart.
+    credentials_expire_at: datetime | None = None
+
+    def pairing_expired(self) -> bool:
+        """Whether the stored pairing has outlived its TTL as of right now."""
+        return self.credentials_expire_at is not None and datetime.now(UTC) > self.credentials_expire_at
+
     e2ee_key: str = Field(default_factory=generate_e2ee_key)
     e2ee_enabled: bool = True
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
@@ -393,6 +403,9 @@ def get_config() -> RemoteConfig:
         stored = load_or_create_credentials()
         kwargs["auth_token"] = token or stored["auth_token"]
         kwargs["e2ee_key"] = e2ee_key or stored["e2ee_key"]
+        if not token:
+            # An explicit token is the operator's own; only stored pairings age.
+            kwargs["credentials_expire_at"] = stored["expires_at"]
 
         config_instance = RemoteConfig(**kwargs)
     return config_instance
@@ -436,7 +449,11 @@ def load_or_create_credentials() -> dict[str, str]:
                 _write_credentials(data)
 
             if not _credentials_expired(data.get("created_at")):
-                return {"auth_token": str(data["auth_token"]), "e2ee_key": str(data["e2ee_key"])}
+                return {
+                    "auth_token": str(data["auth_token"]),
+                    "e2ee_key": str(data["e2ee_key"]),
+                    "expires_at": _deadline_for(data.get("created_at")),
+                }
             logger.info("Stored credentials are older than %s days; issuing new ones", credential_ttl_days())
     except (OSError, json.JSONDecodeError) as e:
         logger.debug("Could not read stored credentials: %s", e)
@@ -447,7 +464,27 @@ def load_or_create_credentials() -> dict[str, str]:
         "created_at": datetime.now(UTC).isoformat(),
     }
     _write_credentials(credentials)
-    return {"auth_token": credentials["auth_token"], "e2ee_key": credentials["e2ee_key"]}
+    return {
+        "auth_token": credentials["auth_token"],
+        "e2ee_key": credentials["e2ee_key"],
+        "expires_at": _deadline_for(credentials["created_at"]),
+    }
+
+
+def _deadline_for(created_at: str | None) -> datetime | None:
+    """When a pairing minted at `created_at` expires, or None if it never does."""
+    ttl_days = credential_ttl_days()
+    if ttl_days <= 0:
+        return None
+
+    try:
+        born = datetime.fromisoformat(str(created_at))
+    except (ValueError, TypeError):
+        return datetime.now(UTC)  # unreadable birthdate: already expired
+
+    if born.tzinfo is None:
+        born = born.replace(tzinfo=UTC)
+    return born + timedelta(days=ttl_days)
 
 
 def _credentials_expired(created_at: str | None) -> bool:

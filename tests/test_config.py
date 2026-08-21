@@ -192,3 +192,29 @@ def test_rotate_credentials_issues_new_ones(monkeypatch, tmp_path: Path):
 
     assert after.auth_token != before.auth_token
     assert after.e2ee_key != before.e2ee_key
+
+
+def test_stored_credentials_carry_their_deadline_into_the_config(monkeypatch, tmp_path: Path):
+    """The server needs the deadline at request time, not just a boot-time verdict."""
+    from datetime import UTC, datetime, timedelta
+
+    cfg = _fresh_config(monkeypatch, tmp_path)
+    assert cfg.credentials_expire_at is not None
+    remaining = cfg.credentials_expire_at - datetime.now(UTC)
+    assert timedelta(days=29) < remaining <= timedelta(days=30)
+
+
+def test_an_explicit_env_token_has_no_deadline(monkeypatch, tmp_path: Path):
+    from agy_remote import config as config_mod
+
+    monkeypatch.setattr(config_mod, "CREDENTIALS_FILE", tmp_path / "credentials.json")
+    monkeypatch.setattr(config_mod, "config_instance", None)
+    monkeypatch.setenv("AGY_REMOTE_TOKEN", "explicit-token")
+    monkeypatch.delenv("AGY_REMOTE_E2EE_KEY", raising=False)
+
+    assert config_mod.get_config().credentials_expire_at is None
+
+
+def test_ttl_zero_produces_no_deadline(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("AGY_REMOTE_CREDENTIAL_TTL_DAYS", "0")
+    assert _fresh_config(monkeypatch, tmp_path).credentials_expire_at is None

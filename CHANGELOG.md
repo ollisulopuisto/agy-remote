@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.22.16 — Pairing expiry holds while the server runs
+
+- **The 30-day TTL was only checked at startup**, so a server left running
+  honored an expired pairing until its next restart — exactly the window the
+  TTL exists to close (surfaced by the post-publication security review). The
+  deadline now travels into the config and is enforced inside `token_ok`, per
+  auth check, across every entry point: REST, WebSocket connects, and the hook.
+- An explicit `--token`/`AGY_REMOTE_TOKEN` carries no deadline (it is the
+  operator's own), and `AGY_REMOTE_CREDENTIAL_TTL_DAYS=0` still disables expiry.
+- Known edge: a WebSocket authenticated before the deadline keeps its existing
+  connection; new connections are refused.
+
 ## v26.08.22.15 — The QR survives until scanned under --tmux
 
 - **`--tmux` hid the QR code the moment agy appeared.** `tmux attach-session`

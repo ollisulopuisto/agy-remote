@@ -165,3 +165,45 @@ def test_key_press_without_a_supervisor_says_so(tmp_path: Path, no_session):
     resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "escape"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "no_session"
+
+
+# ---------------------------------------------------------------------------
+# Pairing expiry must hold while the server runs, not only at the next restart.
+# ---------------------------------------------------------------------------
+
+
+def test_an_expired_pairing_is_refused_by_a_running_server(tmp_path: Path):
+    """The TTL's contract is that a leaked QR heals in 30 days.
+
+    Checking expiry only at startup let a long-running server honor an expired
+    token forever; the deadline must be compared per auth check.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    cfg.credentials_expire_at = datetime.now(UTC) - timedelta(seconds=1)
+    client = TestClient(create_app(cfg))
+
+    resp = client.get("/api/status?token=secret123")
+    assert resp.json()["authenticated"] is False
+
+
+def test_a_pairing_inside_its_ttl_keeps_working(tmp_path: Path):
+    from datetime import UTC, datetime, timedelta
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    cfg.credentials_expire_at = datetime.now(UTC) + timedelta(days=5)
+    client = TestClient(create_app(cfg))
+
+    resp = client.get("/api/status?token=secret123")
+    assert resp.json()["authenticated"] is True
+
+
+def test_a_pairing_without_a_deadline_never_expires(tmp_path: Path):
+    """An explicit --token or a TTL of 0 has no deadline to enforce."""
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    assert cfg.credentials_expire_at is None
+    client = TestClient(create_app(cfg))
+
+    resp = client.get("/api/status?token=secret123")
+    assert resp.json()["authenticated"] is True
