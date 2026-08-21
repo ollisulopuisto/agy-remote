@@ -139,6 +139,10 @@ Keeps the session alive across laptop sleep, closed terminals, and SSH drops by 
 uv run agy-remote run --tmux
 ```
 
+The QR pauses on screen until you press a key — attaching to tmux replaces the
+whole terminal, so the code would otherwise vanish behind agy before you can
+scan it. `agy-remote qr` re-displays it at any time.
+
 ---
 
 ### 3. Standalone Watcher Server Mode

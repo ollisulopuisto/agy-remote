@@ -296,7 +296,7 @@ def run(
         supervisor = TmuxSupervisor(session_name="agy-remote", cmd=agy_args)
         set_tmux_supervisor(supervisor)
         console.print("[dim]Starting persistent tmux session 'agy-remote'...[/dim]\n")
-        exit_code = supervisor.start_or_attach()
+        exit_code = attach_tmux_after_pairing(supervisor)
         sys.exit(exit_code)
     else:
         supervisor = PtySupervisor(cmd=agy_args)
@@ -307,6 +307,24 @@ def run(
             sys.exit(exit_code)
         except KeyboardInterrupt:
             sys.exit(0)
+
+
+def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None) -> int:
+    """Hold the QR on screen until acknowledged, then attach.
+
+    `tmux attach-session` replaces the entire terminal with tmux's own screen,
+    so the banner and QR printed a moment earlier vanish behind agy before a
+    phone can scan them. PTY mode is unaffected -- its output scrolls beneath
+    the QR rather than replacing it. `agy-remote qr` re-displays the code at
+    any time.
+    """
+    if pause is None:
+
+        def pause() -> None:
+            click.pause("Scan the QR code above, then press any key to attach (detach later with Ctrl+B D)...")
+
+    pause()
+    return supervisor.start_or_attach()
 
 
 @cli.command("qr")

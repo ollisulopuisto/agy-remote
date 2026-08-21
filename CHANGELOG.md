@@ -1,5 +1,14 @@
 # Changelog
 
+## v26.08.22.15 — The QR survives until scanned under --tmux
+
+- **`--tmux` hid the QR code the moment agy appeared.** `tmux attach-session`
+  replaces the entire terminal with tmux's own screen, so the banner and QR
+  printed just before the attach vanished behind agy before a phone could scan
+  them. PTY mode was never affected: its output scrolls beneath the QR instead
+  of replacing it. The launch now pauses on the QR until a key is pressed, then
+  attaches; `agy-remote qr` still re-displays the code at any time.
+
 ## v26.08.22.14 — Docs for the public
 
 - README brought up to date for publication: PTY mode is now the recommended
