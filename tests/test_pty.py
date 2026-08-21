@@ -80,3 +80,44 @@ def test_window_size_is_recorded_for_the_mirror():
     sup = PtySupervisor()
     sup.set_window_size(30, 100)
     assert (sup.rows, sup.cols) == (30, 100)
+
+
+def test_the_child_gets_a_controlling_terminal():
+    """Without one, Ctrl+C and Ctrl+Z do nothing at all.
+
+    The interrupt and suspend characters are not forwarded as bytes: the pty's
+    line discipline turns them into SIGINT and SIGTSTP and sends them to the
+    foreground process group *of that terminal*. A child that called setsid()
+    without claiming the pty as its controlling terminal has no such group, so
+    the keystrokes are swallowed and the session cannot be interrupted.
+    """
+    import pty as pty_mod
+
+    master_fd, slave_fd = pty_mod.openpty()
+    read_fd, write_fd = os.pipe()
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.close(master_fd)
+            os.close(read_fd)
+            PtySupervisor()._become_session_leader(slave_fd)
+            # A controlling terminal is exactly what /dev/tty resolves to.
+            fd = os.open("/dev/tty", os.O_RDWR)
+            has_foreground_group = os.tcgetpgrp(fd) == os.getpgrp()
+            os.write(write_fd, b"ok" if has_foreground_group else b"no-foreground-group")
+        except Exception as e:  # noqa: BLE001 - reported to the parent, not raised
+            os.write(write_fd, f"failed: {e}".encode())
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    os.close(slave_fd)
+    try:
+        result = os.read(read_fd, 256)
+        os.waitpid(pid, 0)
+    finally:
+        os.close(read_fd)
+        os.close(master_fd)
+
+    assert result == b"ok", result.decode()

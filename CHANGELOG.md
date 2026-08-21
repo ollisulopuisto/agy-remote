@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.22.10 — Ctrl+C works again
+
+- **Ctrl+C and Ctrl+Z did nothing in the supervised terminal.** They are not
+  bytes a program reads: the pty's line discipline turns them into SIGINT and
+  SIGTSTP for the foreground process group *of that terminal*. The child called
+  `setsid()` and then dup'd the pty onto its standard descriptors without ever
+  claiming it as its controlling terminal, so the session had no foreground
+  group and both keystrokes were swallowed. The child now issues `TIOCSCTTY`.
+- Note that a suspended agy cannot be resumed from the supervising terminal:
+  it lives in its own session, so there is no job control over it. Ctrl+C is the
+  one to reach for.
+
 ## v26.08.22.9 — Reading agy's records instead of dumping them
 
 - **Every prompt arrived on the phone wrapped in agy's plumbing.** agy stores a

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import pty
 import select
 import struct
+import termios
 import tty
 from collections.abc import Callable
 
@@ -50,13 +53,8 @@ class PtySupervisor:
         self.rows, self.cols = rows, cols
         if self.master_fd is not None:
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
-            try:
-                import fcntl
-                import termios
-
+            with contextlib.suppress(OSError):
                 fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
-            except Exception:
-                pass
 
     def inject_input(self, text: str) -> None:
         """Inject a prompt or keystrokes into the running CLI session from mobile.
@@ -87,6 +85,22 @@ class PtySupervisor:
         os.write(self.master_fd, sequence)
         return True
 
+    @staticmethod
+    def _become_session_leader(slave_fd: int) -> None:
+        """Run in the child: take the pty as its controlling terminal.
+
+        setsid() alone leaves the child in a session with no controlling
+        terminal, and the interrupt and suspend characters are not bytes the
+        program reads -- the line discipline turns them into SIGINT and SIGTSTP
+        for the terminal's foreground process group. With no such group, Ctrl+C
+        and Ctrl+Z were swallowed and the session could not be interrupted.
+        """
+        os.setsid()
+        try:
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+        except OSError as e:
+            logger.debug("Could not claim controlling terminal: %s", e)
+
     def start_sync(self) -> int:
         """Run the supervisor synchronously, capturing stdin/stdout of the active terminal."""
         master_fd, slave_fd = pty.openpty()
@@ -95,9 +109,6 @@ class PtySupervisor:
         # Match initial window size if running inside a real TTY
         if os.isatty(0):
             try:
-                import fcntl
-                import termios
-
                 ws = fcntl.ioctl(0, termios.TIOCGWINSZ, b"\x00" * 8)
                 fcntl.ioctl(master_fd, termios.TIOCSWINSZ, ws)
                 self.rows, self.cols = struct.unpack("HHHH", ws)[:2]
@@ -108,7 +119,7 @@ class PtySupervisor:
         if pid == 0:
             # Child process
             os.close(master_fd)
-            os.setsid()
+            self._become_session_leader(slave_fd)
             os.dup2(slave_fd, 0)
             os.dup2(slave_fd, 1)
             os.dup2(slave_fd, 2)
@@ -160,9 +171,7 @@ class PtySupervisor:
             if old_tty_attrs and os.isatty(0):
                 termios.tcsetattr(0, termios.TCSADRAIN, old_tty_attrs)
             if self.master_fd:
-                import contextlib
-
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(OSError):
                     os.close(self.master_fd)
             self.running = False
 
