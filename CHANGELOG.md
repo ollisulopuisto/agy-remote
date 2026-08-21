@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Calendar Versioning (CalVer)](https://calver.org/) in the format `vYY.MM.DD.N`.
 
+## [v26.08.21.2] - 2026-08-21
+
+### Improved
+- Comprehensive docstrings and type annotations across all core and server modules.
+- Refined lint rules and test automation adhering to Ruff standards and CalVer versioning.
+
 ## [v26.08.21.1] - 2026-08-21
 
 ### Added

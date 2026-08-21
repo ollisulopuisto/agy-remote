@@ -62,7 +62,7 @@ def print_banner(cfg: RemoteConfig) -> None:
 
 
 @click.group()
-@click.version_option(version="v26.08.21.1", message="agy-remote %(version)s")
+@click.version_option(version="v26.08.21.2", message="agy-remote %(version)s")
 def cli() -> None:
     """Antigravity CLI (agy) Mobile Remote Controller."""
     pass

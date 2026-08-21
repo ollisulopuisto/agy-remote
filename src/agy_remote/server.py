@@ -54,7 +54,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     app = FastAPI(
         title="Antigravity Remote",
         description="Mobile Remote Web PWA for Antigravity CLI",
-        version="26.08.21.1",
+        version="26.08.21.2",
         lifespan=lifespan,
     )
     app.state.session_manager = session_mgr
@@ -97,7 +97,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             return {
                 "auth_required": True,
                 "authenticated": False,
-                "version": "v26.08.21.1",
+                "version": "v26.08.21.2",
             }
 
         mgr = get_mgr(request)
@@ -105,7 +105,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         return {
             "auth_required": cfg.enable_auth,
             "authenticated": True,
-            "version": "v26.08.21.1",
+            "version": "v26.08.21.2",
             "active_conversation_id": mgr.active_conversation_id,
             "supervisor_running": pty is not None and pty.running,
             "primary_mobile_url": cfg.get_primary_mobile_url(),
