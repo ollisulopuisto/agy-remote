@@ -246,6 +246,13 @@ icon**. The QR code is a one-time pairing, not a login — the token and E2EE ke
 live in the PWA's `localStorage` and the address bar is scrubbed on first load,
 so there is nothing to scan or type again.
 
+To get that icon, open the pairing URL in **Safari** (not Chrome — iOS only
+installs web apps and delivers Web Push from Safari), then **Share → Add to
+Home Screen**. The installed app has its own storage, separate from the Safari
+tab, so it is paired through the manifest's `start_url` rather than by
+inheriting anything: launch it once from the home screen and tap the bell to
+enable approval notifications.
+
 For a login service, [`contrib/net.agy-remote.plist`](contrib/net.agy-remote.plist)
 is a ready launchd agent:
 

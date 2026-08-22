@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -11,6 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import (
     FastAPI,
@@ -24,7 +26,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -607,8 +609,28 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
         @app.get("/manifest.json")
-        async def manifest() -> FileResponse:
-            return FileResponse(STATIC_DIR / "manifest.json", media_type="application/manifest+json")
+        async def manifest(token: str | None = Query(None)) -> Response:
+            """The PWA manifest, carrying credentials only to a paired caller.
+
+            An installed iOS web app gets its own storage container -- nothing
+            the Safari tab saved comes with it -- and launches at `start_url`.
+            Fixed at "/", the home-screen icon opened to "no encryption key in
+            this link", so the install that was meant to end the QR code
+            required one. Putting the credentials in `start_url` fixes that,
+            and means this response hands out secrets: it is authenticated like
+            every other one, and an anonymous fetch still gets a usable
+            manifest with a bare start_url.
+            """
+            with open(STATIC_DIR / "manifest.json", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if not cfg.enable_auth or token_ok(token):
+                start = f"/?token={quote(cfg.auth_token)}"
+                if cfg.e2ee_enabled:
+                    start += f"#key={cfg.e2ee_key}"
+                data["start_url"] = start
+
+            return Response(content=json.dumps(data), media_type="application/manifest+json")
 
         @app.get("/sw.js")
         async def service_worker() -> FileResponse:

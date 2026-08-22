@@ -29,6 +29,17 @@ if (e2eeKeyBase64) {
   localStorage.setItem('agy_e2ee_key', e2eeKeyBase64);
 }
 
+// Point the manifest at our token before anyone can install the app. An
+// installed iOS web app gets its own storage container -- nothing this tab
+// saved comes with it -- and launches at the manifest's start_url, so without
+// this "Add to Home Screen" produces an icon that opens unpaired.
+if (authToken) {
+  const manifestLink = document.querySelector('link[rel="manifest"]');
+  if (manifestLink) {
+    manifestLink.href = `/manifest.json?token=${encodeURIComponent(authToken)}`;
+  }
+}
+
 // Both credentials are now in localStorage, so scrub them out of the visible
 // URL: the token would otherwise sit in browser history, in the address bar
 // over someone's shoulder, and in any Referer this page emits.

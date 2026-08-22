@@ -1,5 +1,18 @@
 # Changelog
  
+## v26.08.22.29 — Add to Home Screen produces a paired app
+
+- **The installed app opened unpaired.** An installed iOS web app gets its own
+  storage container — nothing the Safari tab saved comes with it — and launches
+  at the manifest's `start_url`, which was fixed at `/`. So "Add to Home Screen"
+  produced an icon that opened straight to *"no encryption key in this link.
+  Re-scan the QR code"*: the install meant to end the QR code required one.
+  `start_url` now carries the credentials, which makes the manifest something
+  that hands out secrets — so it is authenticated like everything else, and an
+  anonymous fetch still gets a usable manifest with a bare `start_url`. The PWA
+  points its `<link rel="manifest">` at its own token before anyone can install
+  it.
+
 ## v26.08.22.28 — Always ready for the phone
 
 - **`agy-remote attach --wait`.** Serves from login with no `agy` running at

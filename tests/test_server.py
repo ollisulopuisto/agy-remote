@@ -252,3 +252,35 @@ def test_a_prompt_nothing_received_says_so(tmp_path: Path):
     assert announced["event"] == "prompt_sent"
     # No supervisor in this config, so nothing could have typed it.
     assert announced["data"]["delivered_via"] == "broadcast"
+
+
+def test_the_installed_app_launches_paired(tmp_path: Path):
+    """Add to Home Screen must not produce an icon that opens unpaired.
+
+    An installed iOS web app gets its own storage container -- nothing the
+    Safari tab saved comes with it -- and launches at the manifest's
+    `start_url`. With that fixed at "/", the icon opened to "no encryption key
+    in this link", and the only way back was the QR code the install was
+    supposed to make unnecessary.
+
+    The credentials therefore have to be in `start_url`, which means the
+    manifest carrying them has to be authenticated like anything else that
+    hands them out.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    client = TestClient(create_app(cfg))
+
+    anonymous = client.get("/manifest.json")
+    assert anonymous.status_code == 200, "the browser fetches this before it has anything"
+    assert cfg.auth_token not in anonymous.text
+    assert cfg.e2ee_key not in anonymous.text
+    assert anonymous.json()["start_url"] == "/"
+
+    paired = client.get(f"/manifest.json?token={cfg.auth_token}")
+    assert paired.status_code == 200
+    start_url = paired.json()["start_url"]
+    assert cfg.auth_token in start_url, start_url
+    assert f"#key={cfg.e2ee_key}" in start_url, start_url
+
+    # A wrong token gets the anonymous manifest, never the credentials.
+    assert cfg.auth_token not in client.get("/manifest.json?token=nope").text
