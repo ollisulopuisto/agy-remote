@@ -26,6 +26,7 @@ from .config import (
     adopt_runtime_state,
     ensure_tailscale_cert,
     find_free_port,
+    find_server_on_port,
     get_config,
     get_tailscale_dns_name,
     is_loopback_host,
@@ -43,9 +44,9 @@ from .server import create_app
 from .tmux_runner import (
     TmuxSupervisor,
     is_tmux_available,
+    panes_running,
     session_id_of,
     session_name_for_port,
-    sessions_running,
     set_tmux_supervisor,
 )
 from .version import __version__
@@ -234,15 +235,21 @@ def _preflight_port_or_exit(cfg: RemoteConfig) -> None:
     # Any process can hold the port -- a stray `python -m http.server 8765` was
     # reported as an agy-remote and sent the user to a tmux session that did
     # not exist, while the one useful fact (something else owns it) went unsaid.
-    owner = runtime_state_owner()
+    owner = runtime_state_owner() or find_server_on_port(cfg.port)
     if owner and owner.get("port") == cfg.port:
         detail = f" (pid {owner['pid']})" if owner.get("pid") else ""
-        console.print(
-            f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use{detail}.\n"
-            "  An agy-remote is already running on this host.\n"
-            f"  • Reach its session:   [bold]tmux attach -t {session_name_for_port(cfg.port)}[/bold]\n"
-            f"  • Re-show its QR:      [bold]agy-remote qr[/bold]\n"
-        )
+        lines = [
+            f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use{detail}.",
+            "  An agy-remote is already running on this host.",
+        ]
+        # Name the session that server actually drives, and only when it is
+        # still there: the name used to be guessed from the port, which sent
+        # people to a session that had died -- "can't find session".
+        adopted = owner.get("tmux_session")
+        if adopted and TmuxSupervisor(session_name=adopted).has_session():
+            lines.append(f"  • Reach its session:   [bold]tmux attach -t {adopted}[/bold]")
+        lines.append("  • Re-show its QR:      [bold]agy-remote qr[/bold]")
+        console.print("\n".join(lines) + "\n")
     else:
         console.print(
             f"[bold red]Port conflict:[/bold red] port {cfg.port} is already in use.\n"
@@ -464,12 +471,14 @@ def attach(
         )
         sys.exit(2)
 
-    session_name = session if wait else _resolve_tmux_session_or_exit(session)
-    if wait and not session_name:
-        # Nothing named and nothing running: adopt whatever turns up, and if
-        # nothing has by the time a phone arrives, start one for it.
-        running = sessions_running("agy")
-        session_name = running[0] if len(running) == 1 else None
+    if wait:
+        # Unattended: own one session, named for the port, and never guess at
+        # somebody else's. A desk with three agy panes in the session its owner
+        # is working in is not a place to start typing.
+        session_name = session or session_name_for_port(port)
+        target = None
+    else:
+        session_name, target = _resolve_tmux_target_or_exit(session)
 
     if rotate_token:
         rotate_credentials()
@@ -505,21 +514,24 @@ def attach(
 
     app = create_app(cfg)
     mgr = getattr(getattr(app, "state", None), "session_manager", None)
-    if session_name:
-        _adopt_tmux_session(cfg, mgr, session_name)
-    elif mgr is not None:
+    if session_name and (target or not wait or TmuxSupervisor(session_name=session_name).has_session()):
+        _adopt_tmux_session(cfg, mgr, session_name, target)
+    if wait and mgr is not None:
+        # Also armed when a session was adopted at startup: that one can die,
+        # and then the next client to arrive needs a live one.
         mgr.ensure_session = _session_on_demand(cfg, mgr)
 
     _serve_forever(cfg, app)
 
 
-def _adopt_tmux_session(cfg: RemoteConfig, mgr: object, session_name: str) -> None:
-    """Point this server at a tmux session: typing, screen, and hook routing."""
+def _adopt_tmux_session(cfg: RemoteConfig, mgr: object, session_name: str, target: str | None = None) -> None:
+    """Point this server at a tmux pane: typing, screen, and hook routing."""
     cfg.tmux_session = session_name
+    cfg.tmux_target = target or session_name
     cfg.tmux_session_id = session_id_of(session_name)
-    set_tmux_supervisor(TmuxSupervisor(session_name=session_name))
+    set_tmux_supervisor(TmuxSupervisor(session_name=session_name, target=cfg.tmux_target))
     if mgr is not None and hasattr(mgr, "attach_screen"):
-        mgr.attach_screen(TmuxScreen(session_name))
+        mgr.attach_screen(TmuxScreen(cfg.tmux_target))
     # Re-publish: the registration is what lets this session's PreToolUse hook
     # find *this* server rather than whichever one owns the shared state file.
     publish_server_registration(cfg)
@@ -533,16 +545,21 @@ async def _adopt_when_a_phone_arrives(cfg: RemoteConfig, mgr: object) -> None:
     as-is -- starting a second one would leave the phone talking to the wrong
     half of your desk.
     """
-    if cfg.tmux_session:
+    if cfg.tmux_session and TmuxSupervisor(session_name=cfg.tmux_session).has_session():
         return
+    if cfg.tmux_session:
+        # It was there when we adopted it and is not now. Holding the name kept
+        # the server reporting a supervisor it no longer had: typing went
+        # nowhere and the mirror served an empty screen.
+        console.print(f"[yellow]tmux session '{cfg.tmux_session}' is gone; adopting another.[/yellow]")
+        cfg.tmux_session = None
+        cfg.tmux_session_id = None
 
-    running = sessions_running("agy")
-    name = running[0] if running else session_name_for_port(cfg.port)
-    if not running:
-        supervisor = TmuxSupervisor(session_name=name, cmd=["agy"], env=agy_child_env(cfg))
-        if not supervisor.start_detached():
-            logger.warning("Could not start a tmux session for the arriving client")
-            return
+    name = session_name_for_port(cfg.port)
+    supervisor = TmuxSupervisor(session_name=name, cmd=["agy"], env=agy_child_env(cfg))
+    if not supervisor.start_detached():
+        logger.warning("Could not start a tmux session for the arriving client")
+        return
 
     _adopt_tmux_session(cfg, mgr, name)
 
@@ -556,7 +573,7 @@ def _session_on_demand(cfg: RemoteConfig, mgr: object):
     return ensure
 
 
-def _resolve_tmux_session_or_exit(session: str | None) -> str:
+def _resolve_tmux_target_or_exit(session: str | None) -> tuple[str, str | None]:
     """Which session to adopt, or a readable exit explaining why none.
 
     Guessing is the one thing not to do here: adopting the wrong session sends
@@ -569,9 +586,12 @@ def _resolve_tmux_session_or_exit(session: str | None) -> str:
                 "  • See what is running:  [bold]tmux list-sessions[/bold]\n"
             )
             sys.exit(2)
-        return session
+        # A named session is taken at its word; its own agy pane is preferred
+        # so keys do not land in whatever window happens to be active.
+        pane = next((p for p in panes_running("agy") if p["session"] == session), None)
+        return session, (pane["target"] if pane else None)
 
-    candidates = sessions_running("agy")
+    candidates = panes_running("agy")
     if not candidates:
         console.print(
             "[bold red]Refusing to start:[/bold red] no tmux session is running agy.\n"
@@ -585,17 +605,18 @@ def _resolve_tmux_session_or_exit(session: str | None) -> str:
         )
         sys.exit(2)
 
-    if len(candidates) > 1:
-        listed = "\n".join(f"    [bold]{name}[/bold]" for name in candidates)
+    sessions = sorted({p["session"] for p in candidates})
+    if len(sessions) > 1:
+        listed = "\n".join(f"    [bold]{name}[/bold]" for name in sessions)
         console.print(
             "[bold red]Refusing to start:[/bold red] more than one tmux session is running agy:\n"
             f"{listed}\n"
             "  Name the one you mean, so the phone does not drive the wrong agent:\n"
-            f"    [bold]agy-remote attach --session {candidates[0]}[/bold]\n"
+            f"    [bold]agy-remote attach --session {sessions[0]}[/bold]\n"
         )
         sys.exit(2)
 
-    return candidates[0]
+    return candidates[0]["session"], candidates[0]["target"]
 
 
 @cli.command("run", context_settings=dict(ignore_unknown_options=True, allow_extra_args=True))

@@ -1,5 +1,31 @@
 # Changelog
  
+## v26.08.22.30 — Keys go to the agy pane, and a dead session is replaced
+
+- **Adoption addressed a session, so keys could land in your own shell.**
+  `send-keys -t <session>` goes to that session's *active* pane. On a real desk
+  with three agy panes inside one interactive session (`0:3.0`, `0:4.0`,
+  `0:9.0`), discovery collapsed them to the session name `0` — and typing would
+  have gone to whichever window happened to be on screen. Panes are addressed
+  now (`session:window.pane`), for keys and for the screen mirror alike.
+- **Unattended mode no longer guesses.** `attach --wait` owns exactly one
+  session, named for its port, and adopts or creates that. It used to adopt
+  whatever single session was running agy, which on that same desk meant taking
+  over the one its owner was working in. Explicit adoption stays explicit:
+  plain `attach` still discovers, and names the pane it found.
+- **A session that died is replaced, not mourned.** Once adopted, the name was
+  held forever: kill the tmux session and the server went on reporting a
+  supervisor it no longer had, typing into nothing and mirroring an empty
+  screen — while the port-conflict message sent you to `tmux attach -t
+  agy-remote`, which answered `can't find session`. The next client to arrive
+  now gets a live session, and the conflict message names the session the
+  owning server actually drives, only while it exists.
+- **`agy-remote qr` advertised a URL that would not answer.** It adopted the
+  running server's token and key but not its scheme or host, so a server on
+  `https://<magicdns>` was published as `http://<tailscale-ip>` — a QR code
+  that pairs a phone to a port serving TLS. The runtime state now carries the
+  certificate paths and MagicDNS name.
+
 ## v26.08.22.29 — Add to Home Screen produces a paired app
 
 - **The installed app opened unpaired.** An installed iOS web app gets its own

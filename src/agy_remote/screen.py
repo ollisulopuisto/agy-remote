@@ -135,14 +135,17 @@ class TmuxScreen:
 
     def __init__(
         self,
-        session_name: str,
+        target: str,
         capture: Callable[[str], list[str] | None] | None = None,
         geometry: Callable[[str], dict[str, int] | None] | None = None,
         min_interval: float = 0.4,
     ) -> None:
         from .tmux_runner import capture_pane, pane_geometry
 
-        self.session_name = session_name
+        #: A tmux target: `session:window.pane` where possible, a bare session
+        #: name otherwise. The pane matters -- a session name reads whichever
+        #: pane is active in it, which may be the user's own shell.
+        self.target = target
         self._capture = capture or capture_pane
         self._geometry = geometry or pane_geometry
         self._min_interval = min_interval
@@ -159,8 +162,8 @@ class TmuxScreen:
             return
         self._last_capture_at = now
 
-        lines = self._capture(self.session_name)
-        geom = self._geometry(self.session_name) or {}
+        lines = self._capture(self.target)
+        geom = self._geometry(self.target) or {}
         with self._lock:
             self._lines = lines if lines is not None else []
             self._geom = geom

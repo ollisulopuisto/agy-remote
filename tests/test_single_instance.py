@@ -211,8 +211,41 @@ def test_a_live_agy_remote_on_the_port_still_gets_its_guidance(monkeypatch, tmp_
     assert res.exit_code == 2, res.output
     out = res.output.lower()
     assert "an agy-remote is already running" in out
-    assert "tmux attach" in out
     assert "424242" in out
+    assert "agy-remote qr" in out
+    # No tmux line: this owner never said it drives a session, and the name
+    # used to be guessed from the port -- which sent people to sessions that
+    # did not exist.
+    assert "tmux attach" not in out
+    assert seen["supervisor"] == []
+
+
+def test_a_server_driving_a_tmux_session_says_which_one(monkeypatch, tmp_path: Path, busy_port: int):
+    """The one case where a tmux hint is real: the owner named a live session."""
+    import json
+
+    seen = _stub_launch(monkeypatch, tmp_path, busy_port)
+    state_file = tmp_path / "runtime.json"
+    state_file.write_text(
+        json.dumps({"auth_token": "first", "port": busy_port, "pid": 424242, "tmux_session": "agy-work"})
+    )
+    monkeypatch.setattr(config_mod, "_pid_alive", lambda pid: pid == 424242)
+
+    # `_stub_launch` swaps in a fake supervisor, so the liveness check has to
+    # be answered by the class the CLI actually holds.
+    class _Live:
+        def __init__(self, *a, **kw) -> None:
+            pass
+
+        def has_session(self) -> bool:
+            return True
+
+    monkeypatch.setattr(cli_mod, "TmuxSupervisor", _Live)
+
+    res = CliRunner().invoke(cli_mod.cli, ["run", "--host", "127.0.0.1", "-p", str(busy_port)], input="n\n")
+
+    assert res.exit_code == 2, res.output
+    assert "tmux attach -t agy-work" in res.output, res.output
     assert seen["supervisor"] == []
 
 

@@ -362,3 +362,43 @@ def test_streamed_private_key_is_owner_only_from_creation(monkeypatch, tmp_path:
         os.umask(old_umask)
 
     assert stat.S_IMODE(key.stat().st_mode) == 0o600
+
+
+def test_qr_reproduces_the_url_the_running_server_serves(tmp_path, monkeypatch):
+    """A pairing QR must point at a port that will answer it.
+
+    `qr` runs in its own process and builds URLs from a config of its own. It
+    adopted the token and key from the runtime state but not the scheme or the
+    host, so a server serving https://<magicdns> was advertised as
+    http://<tailscale-ip> -- a QR that pairs a phone to something that is not
+    listening for it.
+    """
+    from agy_remote import config as config_mod
+    from agy_remote.config import RemoteConfig, adopt_runtime_state, write_runtime_state
+
+    monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", tmp_path / "runtime.json")
+    cert, keyfile = tmp_path / "cert.pem", tmp_path / "key.pem"
+    cert.write_text("x")
+    keyfile.write_text("x")
+
+    live = RemoteConfig(
+        brain_dir=tmp_path,
+        port=8765,
+        auth_token="tok",
+        tls_cert=cert,
+        tls_key=keyfile,
+        tailscale_dns_name="mac-studio.example.ts.net",
+        tailscale_ip="100.64.0.1",
+        lan_ip="192.168.1.222",
+    )
+    assert live.local_base_url.startswith("https://mac-studio.example.ts.net")
+    write_runtime_state(live)
+
+    # A fresh process, as `qr` is, with no TLS of its own.
+    fresh = RemoteConfig(brain_dir=tmp_path, auth_token="other", tailscale_ip="100.64.0.1")
+    assert fresh.local_base_url.startswith("http://")
+
+    adopted = adopt_runtime_state(fresh)
+    assert adopted.local_base_url == live.local_base_url
+    assert adopted.tls_enabled is True
+    assert adopted.get_primary_mobile_url().startswith("https://mac-studio.example.ts.net:8765/")

@@ -44,8 +44,12 @@ class TmuxSupervisor:
         session_name: str = DEFAULT_SESSION_NAME,
         cmd: list[str] | None = None,
         env: dict[str, str] | None = None,
+        target: str | None = None,
     ) -> None:
         self.session_name = session_name
+        #: Where keys land. A session name aims at whichever pane is active in
+        #: it; a `session:window.pane` target aims at the agent itself.
+        self.target = target or session_name
         self.cmd = cmd or ["agy"]
         #: Extra environment for the session, telling its PreToolUse hook which
         #: server owns it. The tmux server is long-lived and does not inherit
@@ -147,12 +151,12 @@ class TmuxSupervisor:
 
         # Send text as raw literal characters first (-l) then Enter
         subprocess.run(
-            ["tmux", "send-keys", "-t", self.session_name, "-l", text],
+            ["tmux", "send-keys", "-t", self.target, "-l", text],
             capture_output=True,
             check=False,
         )
         res = subprocess.run(
-            ["tmux", "send-keys", "-t", self.session_name, "Enter"],
+            ["tmux", "send-keys", "-t", self.target, "Enter"],
             capture_output=True,
             check=False,
         )
@@ -165,25 +169,33 @@ class TmuxSupervisor:
             return False
 
         res = subprocess.run(
-            ["tmux", "send-keys", "-t", self.session_name, name],
+            ["tmux", "send-keys", "-t", self.target, name],
             capture_output=True,
             check=False,
         )
         return res.returncode == 0
 
 
-def sessions_running(command: str = "agy") -> list[str]:
-    """tmux sessions with a pane whose foreground command is `command`.
+def panes_running(command: str = "agy") -> list[dict[str, str]]:
+    """Panes whose foreground command is `command`, as tmux targets.
 
-    A session name proves nothing about what is inside it, so the pane's
-    running command is what identifies an agent worth adopting. `list-panes -a`
-    covers every session on the tmux server, including ones started long before
-    this process existed -- which is the entire point of adoption.
+    The pane is the unit, not the session. `send-keys -t <session>` goes to
+    that session's *active* pane, so a session where someone is working -- an
+    agy in window 3 while they read window 9 -- would have been typed into
+    wherever they happened to be looking. A target like `0:3.0` cannot miss.
 
-    No tmux server at all exits non-zero; that is an empty list, not an error.
+    `list-panes -a` covers every session on the tmux server, including ones
+    started long before this process existed, which is the point of adoption.
+    No tmux server at all exits non-zero: an empty list, not an error.
     """
     res = subprocess.run(
-        ["tmux", "list-panes", "-a", "-F", "#{session_name} #{pane_current_command}"],
+        [
+            "tmux",
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}:#{window_index}.#{pane_index} #{session_name} #{pane_current_command}",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -191,11 +203,14 @@ def sessions_running(command: str = "agy") -> list[str]:
     if res.returncode != 0:
         return []
 
-    found: list[str] = []
+    found: list[dict[str, str]] = []
     for line in (res.stdout or "").splitlines():
-        name, _, running = line.strip().partition(" ")
-        if name and running == command and name not in found:
-            found.append(name)
+        parts = line.strip().split(" ")
+        if len(parts) < 3:
+            continue
+        target, session, running = parts[0], parts[1], parts[-1]
+        if running == command:
+            found.append({"target": target, "session": session})
     return found
 
 

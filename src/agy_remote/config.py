@@ -423,6 +423,9 @@ class RemoteConfig(BaseModel):
     #: whichever one happens to own the shared state file.
     tmux_session: str | None = None
     tmux_session_id: str | None = None
+    #: The pane keys are sent to, as `session:window.pane`. A bare session name
+    #: aims at whichever pane is active in it, which is the user's own work.
+    tmux_target: str | None = None
     #: The agent CLI this server fronts. One value today, kept as a field
     #: because the PWA renders it: the header used to say "agy" whatever was
     #: behind it, which made a session look like something it was not.
@@ -800,6 +803,25 @@ def withdraw_server_registration(port: int, owner_pid: int | None = None) -> Non
         path.unlink(missing_ok=True)
 
 
+def find_server_on_port(port: int) -> dict | None:
+    """The live server holding this port, from its own registration.
+
+    The shared state file names one server; a second instance never owns it.
+    This answers "who has 8766?" for any of them, and only while its pid is
+    alive -- a registration outlives a crash.
+    """
+    path = SERVER_REGISTRY_DIR / f"{port}.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            entry = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    pid = entry.get("pid")
+    if isinstance(pid, int) and pid != os.getpid() and _pid_alive(pid):
+        return entry
+    return None
+
+
 def find_server_for_tmux_session(session_id: str) -> dict | None:
     """The live server driving the tmux session with this id, if any.
 
@@ -857,6 +879,12 @@ def write_runtime_state(cfg: RemoteConfig) -> Path | None:
             "port": cfg.port,
             "agent": cfg.agent,
             "tmux_session": cfg.tmux_session,
+            # `qr` builds its URLs from a config of its own, and without these
+            # it advertised http://<ip> for a server serving https://<magicdns>
+            # -- a QR code that pairs a phone to a port that will not answer it.
+            "tls_cert": str(cfg.tls_cert) if cfg.tls_cert else None,
+            "tls_key": str(cfg.tls_key) if cfg.tls_key else None,
+            "tailscale_dns_name": cfg.tailscale_dns_name,
             "pid": os.getpid(),
         },
         indent=2,
@@ -922,4 +950,11 @@ def adopt_runtime_state(cfg: RemoteConfig) -> RemoteConfig:
         cfg.agent = state["agent"]
     if state.get("tmux_session"):
         cfg.tmux_session = state["tmux_session"]
+    # Reproduce the scheme and host the running server publishes, not this
+    # process's guess at them.
+    if state.get("tls_cert") and state.get("tls_key"):
+        cfg.tls_cert = Path(state["tls_cert"])
+        cfg.tls_key = Path(state["tls_key"])
+    if state.get("tailscale_dns_name"):
+        cfg.tailscale_dns_name = state["tailscale_dns_name"]
     return cfg
