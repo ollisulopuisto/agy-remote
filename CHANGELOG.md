@@ -1,5 +1,23 @@
 # Changelog
  
+## v26.08.22.33 — Approve any session's request, from wherever you are
+
+- **Every session's approvals now reach the phone, each naming its session.**
+  Hiding another session's banner was the honest fix for an unattributed one: a
+  bare `bash` request drawn into the transcript in front of you reads as
+  belonging to that work. But hiding it meant nobody could answer, so the agent
+  that asked sat blocked — and answering it locally, which stopped the five
+  minute stalls, left "approve anything from anywhere" simply not working.
+  Attribution does both jobs: the banner says *in another session: Fix the
+  footer*, in a dashed frame, and Allow/Deny work from wherever you are.
+- **A reconnecting phone finds the ones it missed.** The snapshot filtered
+  pending approvals to the session on screen, so an agy blocked in another
+  window stayed invisible across a reconnect — the request was effectively lost
+  until it timed out.
+- **Approvals carry a title, not just an id.** `rm -rf /` from
+  `fe67ae68-b3b6-4918` tells you nothing about which of four terminals is
+  waiting, and a phone cannot look up a name for a session it has never shown.
+
 ## v26.08.22.32 — Never hold an agy hostage for a banner nobody was shown
 
 - **Every tool call in a hand-started agy stalled for five minutes.** The

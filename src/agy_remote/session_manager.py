@@ -148,14 +148,14 @@ class SessionManager:
         return self.backend.summary_of(self, conversation_id)
 
     def get_active_pending_approvals(self) -> list[dict[str, Any]]:
-        """Return pending approvals for current active conversation."""
-        if not self.active_conversation_id:
-            return []
-        return [
-            app
-            for app in self._pending_approvals.values()
-            if app.get("conversation_id") == self.active_conversation_id and app.get("status") == "pending"
-        ]
+        """Every approval still waiting, from whichever session raised it.
+
+        A client that reconnects has to find the ones it missed. Filtering
+        these to the session on screen meant an agy in another window sat
+        blocked on a request the phone could not see, and a reconnect did not
+        recover it -- the approval was simply lost until it timed out.
+        """
+        return [app for app in self._pending_approvals.values() if app.get("status") == "pending"]
 
     async def register_client(self, websocket: WebSocket) -> None:
         """Register a new WebSocket client and send initial snapshot."""
@@ -348,19 +348,26 @@ class SessionManager:
         (`await_approval`); a backend whose agent must be told the outcome does
         that in `deliver_resolution`.
 
-        Only the active conversation's approvals are broadcast. The phone
-        renders a banner into the transcript it is showing, so a banner raised
-        by another session would read as belonging to the work on screen. The
-        approval stays registered either way, so switching to that session
-        surfaces it through `get_active_pending_approvals`.
+        Every session's approvals are broadcast, each carrying the session
+        that raised it. Hiding another session's was the honest fix for a bare
+        `bash` request drawn into the transcript on screen -- it read as
+        belonging to the work in front of you -- but it also meant nobody could
+        answer it, so the hook was held for a banner that was never drawn. The
+        client names the session instead.
         """
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._approval_futures[approval_id] = fut
 
+        # Name the session, not just its id. "rm -rf /" from
+        # `fe67ae68-b3b6-4918` says nothing about which of four terminals is
+        # waiting, and a phone cannot look up a name for a session it has never
+        # displayed.
+        summary = self._summary_of(conversation_id) or {}
         approval_data = {
             "id": approval_id,
             "conversation_id": conversation_id,
+            "conversation_title": summary.get("title") or conversation_id[:8],
             "tool_name": tool_name,
             "args": args,
             "created_at": datetime.now().isoformat(),
@@ -369,13 +376,7 @@ class SessionManager:
         self._pending_approvals[approval_id] = approval_data
 
         # Broadcast approval request to phone
-        if conversation_id == self.active_conversation_id:
-            await self.broadcast(
-                {
-                    "event": "approval_request",
-                    "data": approval_data,
-                }
-            )
+        await self.broadcast({"event": "approval_request", "data": approval_data})
         return approval_data
 
     async def await_approval(self, approval_id: str, timeout: float = 300.0) -> dict[str, Any]:
@@ -405,12 +406,12 @@ class SessionManager:
     def can_hold_approval(self, conversation_id: str) -> bool:
         """Whether an approval for this session would reach a person.
 
-        The banner is only ever drawn for the conversation on screen, so an
-        approval raised by any other session would be registered and shown to
-        nobody -- and then waited on until agy gave up and killed the hook.
-        Anything this returns False for must be answered immediately.
+        Every session's approvals are broadcast, each naming the session that
+        raised it, so any connected client can answer any of them. What this
+        rules out is holding a hook when nobody is there at all: agy would wait
+        out its own timeout and kill the call.
         """
-        return bool(self._connected_clients) and conversation_id == self.active_conversation_id
+        return bool(self._connected_clients)
 
     async def request_approval(
         self,

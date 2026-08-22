@@ -516,9 +516,10 @@ function handleServerEvent(event) {
   } else if (type === 'terminal_screen') {
     applyTerminal(data);
   } else if (type === 'approval_request') {
-    // A banner is drawn into the transcript on screen, so it may only ever be
-    // one this session asked for -- never another session's, racing in mid-switch.
-    if (data.conversation_id === currentConversationId) {
+    // Every session's approvals arrive here, each naming the session that
+    // raised it -- the banner says so when it is not the one on screen, which
+    // is what lets you answer for a terminal you are not looking at.
+    if (!pendingApprovals.some(a => a.id === data.id)) {
       pendingApprovals.push(data);
       triggerVibrate([80, 40, 100]);
       renderApprovalBanner(data);
@@ -770,11 +771,23 @@ function renderApprovalBanner(app) {
   // agy has no "approve future matching requests", so there is no Always.
   const alwaysBtn = '';
 
+  // Say whose it is when it is not the session on screen -- otherwise a bare
+  // command reads as belonging to the transcript it is drawn into.
+  const origin = window.AgyFormat.approvalOrigin(app, currentConversationId);
+  if (origin) banner.classList.add('approval-elsewhere');
+  const originRow = origin
+    ? `<div class="approval-origin">
+         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+         in another session: ${escapeHtml(origin)}
+       </div>`
+    : '';
+
   banner.innerHTML = `
     <div class="approval-title">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
       Permission Required: ${escapeHtml(app.tool_name)}
     </div>
+    ${originRow}
     <div class="approval-cmd">${escapeHtml(cmdText)}</div>
     <div class="approval-actions">
       <button class="btn-approve" data-approval-id="${escapeHtml(app.id)}" data-decision="allow">

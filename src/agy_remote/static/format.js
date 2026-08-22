@@ -172,7 +172,20 @@
     return typeof count === 'number' && count > 1 ? count + ' devices connected' : null;
   }
 
+  // Which session an approval came from, when that is not the one on screen.
+  // Hiding another session's banner was the fix for an unattributed one -- a
+  // bare `bash` request drawn into the transcript in front of you reads as
+  // belonging to it -- but hiding it also meant nobody could answer, and the
+  // agent that asked sat blocked. Naming it does both jobs.
+  function approvalOrigin(approval, currentConversationId) {
+    if (!approval) return null;
+    var id = approval.conversation_id;
+    if (!id || id === currentConversationId) return null;
+    return approval.conversation_title || String(id).slice(0, 8);
+  }
+
   global.AgyFormat = {
+    approvalOrigin: approvalOrigin,
     peerNotice: peerNotice,
     promptWasDelivered: promptWasDelivered,
     adoptConversationId: adoptConversationId,

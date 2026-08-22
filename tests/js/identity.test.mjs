@@ -125,3 +125,20 @@ test('a second connected device is called out, a lone one is not', () => {
   assert.equal(peerNotice(2), '2 devices connected');
   assert.equal(peerNotice(5), '5 devices connected');
 });
+
+test('a banner from another session says so; one from this session does not', () => {
+  const { approvalOrigin } = sandbox.window.AgyFormat;
+  // Hiding other sessions' banners was the fix for an unattributed one -- a
+  // bare `bash` request drawn into the transcript on screen reads as belonging
+  // to the work in front of you. Naming it is the fix that still lets you
+  // answer it.
+  assert.equal(approvalOrigin({conversation_id: 'a'}, 'a'), null);
+  assert.equal(
+    approvalOrigin({conversation_id: 'b', conversation_title: 'Fix the footer'}, 'a'),
+    'Fix the footer'
+  );
+  // No title to show: the id is still better than nothing, but shortened.
+  assert.equal(approvalOrigin({conversation_id: 'fe67ae68-b3b6-4918'}, 'a'), 'fe67ae68');
+  // Nothing on screen yet (a fresh client): still attribute it.
+  assert.equal(approvalOrigin({conversation_id: 'b', conversation_title: 'Other'}, null), 'Other');
+});

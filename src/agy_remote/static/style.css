@@ -910,3 +910,20 @@ details.message-system > summary {
   border: 1px solid rgba(234, 179, 8, 0.35);
   white-space: nowrap;
 }
+
+/* An approval raised by a session other than the one on screen. It is drawn
+   into this transcript because it has to be answerable from here, so it says
+   plainly that it belongs somewhere else. */
+.approval-banner.approval-elsewhere {
+  border-style: dashed;
+}
+
+.approval-origin {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 6px;
+}

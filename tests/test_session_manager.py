@@ -552,11 +552,13 @@ async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
     it takes. Every other case can only end one way: agy kills the hook after
     300s and the tool call fails.
 
-    Three of them, all real:
+    Two of them, both real:
       - no client connected (an always-on server's normal state),
-      - a client watching a different session, whose banner is deliberately
-        never drawn for this one,
       - a socket still open with nothing behind it.
+
+    A client watching a *different* session is no longer one of them: those
+    approvals are broadcast with the session that raised them, so whoever is
+    connected can answer.
 
     Each now answers immediately with "ask", which hands the decision back to
     agy: it prompts in its own terminal exactly as it would with no hook.
@@ -580,12 +582,18 @@ async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
     assert lonely["decision"] == "ask", lonely
     assert mgr.get_active_pending_approvals() == []
 
-    # 2. A phone is connected, but watching another session. Its banner is only
-    #    ever drawn for the active conversation, so this one would be invisible.
+    # 2. A phone watching another session *is* asked now: the banner names the
+    #    session that raised it, so it can be answered from anywhere. See
+    #    test_an_approval_from_another_session_reaches_the_phone_named.
     mgr._connected_clients.add(_FakeWebSocket())
     mgr.active_conversation_id = "on-screen"
-    elsewhere = await ask("a2", "some-other-session")
-    assert elsewhere["decision"] == "ask", elsewhere
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            mgr.request_approval(
+                approval_id="a2", conversation_id="some-other-session", tool_name="run_command", args={}
+            ),
+            timeout=0.5,
+        )
 
     # 3. A socket that is open with nothing behind it.
     class _DeadSocket:
@@ -597,7 +605,10 @@ async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
     mgr.active_conversation_id = "c1"
     dead = await ask("a3", "c1")
     assert dead["decision"] == "ask", dead
-    assert mgr.get_active_pending_approvals() == []
+    # Nothing is left pending for it: a banner nobody received must not
+    # reappear later as one somebody has to dismiss. (a2 is still pending on
+    # purpose -- its agy is still blocked, and the phone can still answer it.)
+    assert [a["id"] for a in mgr.get_active_pending_approvals()] == ["a2"]
 
     # 4. Someone is genuinely looking at this session: wait, as designed.
     mgr._connected_clients.clear()
@@ -607,3 +618,78 @@ async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
             mgr.request_approval(approval_id="a4", conversation_id="c1", tool_name="run_command", args={}),
             timeout=0.5,
         )
+
+
+@pytest.mark.asyncio
+async def test_an_approval_from_another_session_reaches_the_phone_named(tmp_path: Path):
+    """Every session's approvals reach the phone; each says which it came from.
+
+    Hiding another session's banner was the honest fix for an unattributed one:
+    a bare `bash` request drawn into the transcript on screen reads as
+    belonging to the work in front of you. But hiding it meant nobody could
+    answer, so the hook was held for a banner that was never drawn -- and then
+    answered locally to avoid the hang, which left "approve anything from
+    anywhere" simply not working.
+
+    Attribution is the fix. Broadcast every approval, and say whose it is.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    mgr.active_conversation_id = "on-screen"
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    # Anyone connected can be asked, whichever session is asking.
+    assert mgr.can_hold_approval("elsewhere") is True
+    assert mgr.can_hold_approval("on-screen") is True
+
+    await mgr.register_approval(
+        approval_id="a1",
+        conversation_id="elsewhere",
+        tool_name="run_command",
+        args={"CommandLine": "rm -rf /"},
+    )
+
+    asked = [f for f in ws.sent if f.get("event") == "approval_request"]
+    assert asked, f"another session's approval never reached the phone: {[f['event'] for f in ws.sent]}"
+    assert asked[-1]["data"]["conversation_id"] == "elsewhere"
+
+    # A client that reconnects must still find it, not just one that was
+    # listening at the time.
+    fresh = _FakeWebSocket()
+    await mgr.register_client(fresh)
+    snapshot = next(f for f in fresh.sent if f["event"] == "init")["data"]
+    pending = snapshot["pending_approvals"]
+    assert [a["conversation_id"] for a in pending] == ["elsewhere"], pending
+
+
+@pytest.mark.asyncio
+async def test_an_approval_says_which_session_it_came_from_by_name(tmp_path: Path):
+    """A conversation id is not something anyone can recognise at 2am.
+
+    The banner has to be answerable on its own: "rm -rf /" from
+    `fe67ae68-b3b6-4918` tells you nothing about which of four terminals is
+    waiting, and the phone cannot look the name up for a session it has never
+    displayed.
+    """
+    conv_id = "conv-titled"
+    log_dir = tmp_path / conv_id / ".system_generated" / "logs"
+    log_dir.mkdir(parents=True)
+    with open(log_dir / "transcript.jsonl", "w", encoding="utf-8") as f:
+        step = {"step_index": 0, "type": "USER_INPUT", "source": "USER_INPUT", "content": "Fix the footer"}
+        f.write(json.dumps(step) + "\n")
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _FakeWebSocket()
+    mgr._connected_clients.add(ws)
+
+    await mgr.register_approval(
+        approval_id="a1",
+        conversation_id=conv_id,
+        tool_name="run_command",
+        args={"CommandLine": "rm -rf /"},
+    )
+
+    asked = next(f for f in ws.sent if f.get("event") == "approval_request")["data"]
+    assert asked["conversation_title"] == "Fix the footer", asked
