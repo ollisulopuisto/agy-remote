@@ -1,5 +1,15 @@
 # Changelog
  
+## v26.08.22.31 — The suite stops depending on the developer's tmux
+
+- **Tests inherited each other's supervisor.** `set_tmux_supervisor` writes a
+  module-level global, so a supervisor registered by an attach test outlived it
+  — and `has_session()` shells out to the real tmux. On a machine that happened
+  to have a session by that name, an unrelated test then found a live
+  supervisor and took the tmux delivery path instead of the one it was written
+  for. Green in CI, red on the desk, for a reason that had nothing to do with
+  the code under test. Both supervisor globals are now reset around every test.
+
 ## v26.08.22.30 — Keys go to the agy pane, and a dead session is replaced
 
 - **Adoption addressed a session, so keys could land in your own shell.**
