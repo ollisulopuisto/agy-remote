@@ -11,10 +11,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import find_server_for_tmux_session, read_runtime_state, read_stored_token
+from .config import find_server_for_tmux_session, live_runtime_state, read_stored_token
 from .tmux_runner import session_id_from_env
 
 DEFAULT_PORT = 8765
+
+#: agy kills this hook process at the `timeout` written into hooks.json (300s).
+#: These have to nest strictly inward -- server < hook < agy -- or the outermost
+#: layer wins and the user sees `signal: killed` instead of being told the
+#: approval timed out. Waiting 310s here meant agy always won.
+HOOK_RESPONSE_TIMEOUT = 270.0
 
 
 def resolve_server_endpoint() -> tuple[str, str]:
@@ -52,7 +58,10 @@ def resolve_server_endpoint() -> tuple[str, str]:
             base_url = owner.get("base_url") or f"http://127.0.0.1:{port}"
             return base_url, str(owner.get("auth_token") or _hook_token())
 
-    state = read_runtime_state()
+    # The pid, not just the file: a crashed server leaves its credentials
+    # behind, and posting every tool call to a port nobody holds is at best a
+    # wasted round trip and at worst a block on whatever took that port next.
+    state = live_runtime_state()
     if state:
         port = int(state.get("port", DEFAULT_PORT))
         base_url = state.get("base_url") or f"http://127.0.0.1:{port}"
@@ -79,7 +88,7 @@ def _hook_token() -> str:
     env_token = os.environ.get("AGY_REMOTE_TOKEN")
     if env_token:
         return env_token
-    state = read_runtime_state()
+    state = live_runtime_state()
     if state and state.get("auth_token"):
         return str(state["auth_token"])
     # A second server publishes no state, so the stored host credential is all
@@ -174,7 +183,7 @@ def run_pre_tool_hook() -> None:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=310.0) as resp:
+            with urllib.request.urlopen(req, timeout=HOOK_RESPONSE_TIMEOUT) as resp:
                 resp_data = resp.read().decode("utf-8")
                 # Output decision JSON to stdout for agy CLI
                 print(resp_data)

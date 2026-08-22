@@ -1,5 +1,29 @@
 # Changelog
  
+## v26.08.22.34 — Three more of the same shape
+
+Found by auditing for the pattern behind the last one: a background server
+degrading something it should not have touched.
+
+- **The three approval timeouts were nested backwards.** agy kills its hook at
+  300s; the hook waited 310s for a reply and the server waited 300s before
+  denying. The outermost layer therefore always won — agy killed the process at
+  the same instant the server made up its mind, so a slow answer read as
+  `signal: killed` rather than "approval timed out on mobile remote". They now
+  nest strictly inward: server 240s, hook 270s, agy 300s.
+- **A crashed server kept capturing hooks.** `runtime_state_owner` exists
+  because a state file outlives the server that wrote it, but the hook read the
+  file directly and posted every tool call to a port nobody was listening on.
+  Cheap to refuse today; a block the moment anything else takes that port. The
+  hook now checks the pid — via `live_runtime_state`, which unlike
+  `runtime_state_owner` does not exclude the caller's own pid, a distinction
+  that only matters to a second *server* starting up.
+- **Answered approvals accumulated forever.** Each was marked allowed or denied
+  and left in the dict, holding its tool arguments — a command line, a file
+  path, sometimes a diff. One a minute is half a million a year in a process
+  that never restarts. The last 32 are kept, so a double tap or a late
+  resolution still finds its approval; the rest are dropped.
+
 ## v26.08.22.33 — Approve any session's request, from wherever you are
 
 - **Every session's approvals now reach the phone, each naming its session.**

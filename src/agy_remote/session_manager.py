@@ -46,6 +46,11 @@ class SessionManager:
         #: until someone wants one; this is where one appears.
         self.ensure_session: Callable[[], Awaitable[None]] | None = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
+        #: How many answered approvals to keep. A late `approval_resolved`, or
+        #: a second tap on a banner, has to find its approval rather than a
+        #: 404 -- but a server that runs for weeks must not hoard every command
+        #: line it ever relayed.
+        self._answered_history = 32
         self._approval_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._watcher_task: asyncio.Task[None] | None = None
         #: Mirror of the supervised terminal, when a session is supervised.
@@ -146,6 +151,19 @@ class SessionManager:
     def _summary_of(self, conversation_id: str | None) -> dict[str, Any] | None:
         """The summary for one conversation, as clients need it to name a session."""
         return self.backend.summary_of(self, conversation_id)
+
+    def _forget_old_answers(self) -> None:
+        """Drop the oldest answered approvals, keeping the recent ones.
+
+        Nothing reads an approval once it is answered -- its future is already
+        resolved -- but a client can tap a banner twice, or a resolution can
+        cross with one already in flight, and both should find it rather than a
+        404. Recent history is enough for that; the rest is a slow leak of
+        command lines and file paths in a process that never restarts.
+        """
+        answered = [aid for aid, app in self._pending_approvals.items() if app.get("status") != "pending"]
+        for aid in answered[: max(0, len(answered) - self._answered_history)]:
+            self._pending_approvals.pop(aid, None)
 
     def get_active_pending_approvals(self) -> list[dict[str, Any]]:
         """Every approval still waiting, from whichever session raised it.
@@ -374,24 +392,30 @@ class SessionManager:
             "status": "pending",
         }
         self._pending_approvals[approval_id] = approval_data
+        self._forget_old_answers()
 
         # Broadcast approval request to phone
         await self.broadcast({"event": "approval_request", "data": approval_data})
         return approval_data
 
-    async def await_approval(self, approval_id: str, timeout: float = 300.0) -> dict[str, Any]:
+    async def await_approval(self, approval_id: str, timeout: float = 240.0) -> dict[str, Any]:
         """Wait for the phone's answer to a registered approval.
 
         Used by agy, whose hook process blocks until this returns. A backend
         whose permission simply stays open until someone answers -- in the
         terminal or on the phone -- never calls this.
+
+        This is the innermost of three timeouts and must be the shortest:
+        agy kills the hook at 300s and the hook gives up on the socket at 270s,
+        so deciding at 300s meant agy killed the process at the same instant --
+        `signal: killed`, rather than a denial anyone could read.
         """
         fut = self._approval_futures.get(approval_id)
         if fut is None:
             return {"decision": "deny", "reason": "Unknown approval."}
 
         try:
-            # Wait up to 5 minutes for approval from mobile
+            # Long enough to walk to the phone, short enough to answer first.
             res = await asyncio.wait_for(fut, timeout=timeout)
             return res
         except TimeoutError:
@@ -474,6 +498,7 @@ class SessionManager:
         app = self._pending_approvals[approval_id]
         app["status"] = "allowed" if req.decision in ("allow", "always") else "denied"
         app["reason"] = req.reason
+        self._forget_old_answers()
 
         response_payload: dict[str, Any] = {
             "decision": req.decision,

@@ -720,6 +720,27 @@ def runtime_state_owner() -> dict | None:
     return None
 
 
+def live_runtime_state() -> dict | None:
+    """The published state, but only if the server that published it is alive.
+
+    `runtime_state_owner` answers a different question -- "does *another* live
+    server own this file?" -- and excludes our own pid, which is what a second
+    server starting up needs to know. A hook is never the server, so it wants
+    the plain reading: is whoever wrote this still there? A crashed server
+    leaves its credentials behind, and posting every tool call to a port nobody
+    holds is at best a wasted round trip.
+
+    A file with no pid predates that field and is taken at its word.
+    """
+    state = read_runtime_state()
+    if not state:
+        return None
+    pid = state.get("pid")
+    if pid is None or (isinstance(pid, int) and _pid_alive(pid)):
+        return state
+    return None
+
+
 def port_is_free(host: str, port: int) -> bool:
     """Whether a server could bind here, checked the way uvicorn will bind.
 

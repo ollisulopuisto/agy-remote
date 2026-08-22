@@ -53,7 +53,7 @@ def test_hook_fallback_does_no_network_detection(monkeypatch):
     """
     import agy_remote.hooks as hooks_mod
 
-    monkeypatch.setattr(hooks_mod, "read_runtime_state", lambda: None)
+    monkeypatch.setattr(hooks_mod, "live_runtime_state", lambda: None)
     monkeypatch.delenv("AGY_REMOTE_PORT", raising=False)
 
     # hooks.py must not import the expensive config builder at all.
@@ -75,7 +75,7 @@ def test_hook_uses_https_when_the_server_serves_tls(monkeypatch):
 
     monkeypatch.setattr(
         hooks_mod,
-        "read_runtime_state",
+        "live_runtime_state",
         lambda: {
             "auth_token": "tok",
             "port": 8766,
@@ -229,3 +229,29 @@ def test_a_stable_argv0_is_used_directly_as_before(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(sys, "argv", [str(stable)])
 
     assert resolve_hook_command() == f"{stable} hook-pre-tool"
+
+
+def test_the_timeouts_are_nested_so_the_server_answers_first():
+    """Whoever gives up first decides what the user sees.
+
+    agy kills its hook at 300s. The hook waited 310s for a reply and the server
+    waited 300s before denying, so the outermost layer always won: agy killed
+    the process at the same instant the server made up its mind, and the user
+    got `signal: killed` instead of "approval timed out on mobile remote".
+
+    They have to nest strictly inward: server < hook < agy.
+    """
+    import inspect
+
+    from agy_remote import hooks as hooks_mod
+    from agy_remote.session_manager import SessionManager
+
+    agy_kills_at = 300  # the "timeout" written into hooks.json
+
+    server_waits = inspect.signature(SessionManager.await_approval).parameters["timeout"].default
+    hook_waits = hooks_mod.HOOK_RESPONSE_TIMEOUT
+
+    assert server_waits < hook_waits < agy_kills_at, f"server {server_waits}s, hook {hook_waits}s, agy {agy_kills_at}s"
+    # And with enough room that a slow reply is reported, not truncated.
+    assert hook_waits - server_waits >= 10
+    assert agy_kills_at - hook_waits >= 10

@@ -146,3 +146,26 @@ def test_one_server_does_not_withdraw_another(monkeypatch, tmp_path: Path):
 
     config_mod.withdraw_server_registration(8766, owner_pid=written["pid"] + 1)
     assert (reg / "8766.json").exists()
+
+
+def test_a_crashed_server_does_not_capture_hooks(monkeypatch, tmp_path: Path):
+    """A state file outlives the server that wrote it.
+
+    `runtime_state_owner` exists precisely because a crashed server leaves its
+    credentials behind, but the hook read the file directly. It then posted
+    every tool call to a port nobody is listening on -- fast to refuse today,
+    but the moment anything else takes that port, agy blocks on it.
+    """
+    _registry(monkeypatch, tmp_path)
+    monkeypatch.delenv("AGY_REMOTE_URL", raising=False)
+    monkeypatch.delenv("TMUX", raising=False)
+
+    cfg = _cfg(tmp_path, 8765, None, None)
+    monkeypatch.setattr(config_mod, "_pid_alive", lambda pid: True)
+    config_mod.write_runtime_state(cfg)
+    assert ":8765" in hooks_mod.resolve_server_endpoint()[0]
+
+    # Same file, but the process it names is gone.
+    monkeypatch.setattr(config_mod, "_pid_alive", lambda pid: False)
+    url, token = hooks_mod.resolve_server_endpoint()
+    assert not token, f"handed the host token to a dead server: {url}"

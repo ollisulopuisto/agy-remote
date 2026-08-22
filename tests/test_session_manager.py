@@ -693,3 +693,34 @@ async def test_an_approval_says_which_session_it_came_from_by_name(tmp_path: Pat
 
     asked = next(f for f in ws.sent if f.get("event") == "approval_request")["data"]
     assert asked["conversation_title"] == "Fix the footer", asked
+
+
+@pytest.mark.asyncio
+async def test_answered_approvals_do_not_accumulate_forever(tmp_path: Path):
+    """A server that runs for weeks keeps every approval it ever handled.
+
+    Entries are marked allowed or denied and left in the dict. One a minute is
+    half a million a year, each holding its tool arguments -- a command line, a
+    file path, sometimes a whole diff. Nothing reads them once answered; the
+    futures they carry are already resolved.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    mgr.active_conversation_id = "c1"
+    mgr._connected_clients.add(_FakeWebSocket())
+
+    for i in range(60):
+        await mgr.register_approval(
+            approval_id=f"a{i}",
+            conversation_id="c1",
+            tool_name="run_command",
+            args={"CommandLine": f"echo {i}"},
+        )
+        await mgr.resolve_approval(f"a{i}", ApprovalResponseRequest(decision="allow"))
+
+    assert mgr.get_active_pending_approvals() == []
+    assert len(mgr._pending_approvals) <= 32, f"kept {len(mgr._pending_approvals)} answered approvals"
+
+    # The most recent answers survive: a client resolving one twice, or a late
+    # `approval_resolved` arriving, must still find it rather than 404.
+    assert "a59" in mgr._pending_approvals
