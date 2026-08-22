@@ -1,5 +1,14 @@
 # Changelog
  
+## v26.08.22.36 — Tagging a release publishes one
+
+- **The Releases page had drifted eight versions behind.** The workflow builds
+  and publishes to PyPI on a tag, and stopped there: `v26.08.22.28` through
+  `.35` all shipped with nothing to read on GitHub, the newest release on the
+  page describing yesterday's code. A tag now creates its release too, with the
+  notes taken from this file's section for that exact version — one source, and
+  no step anybody has to remember.
+
 ## v26.08.22.35 — Approvals live in their own session
 
 - **A banner is drawn only in the session that raised it.** Every session's

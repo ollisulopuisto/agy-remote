@@ -63,3 +63,42 @@ jobs:
 
       - name: Publish to PyPI via Trusted Publishing
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [pypi-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create the release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The tag alone leaves nothing on the Releases page, and it drifted:
+      # eight tags shipped to PyPI with no release to read. The notes are the
+      # changelog section for this exact version, so there is one source.
+      - name: Extract this version's changelog section
+        id: notes
+        run: |
+          python3 - "$GITHUB_REF_NAME" <<'EOF' > release-notes.md
+          import re, sys
+          tag = sys.argv[1]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          # "v26.08.22.35" -> the "## v26.08.22.35 — ..." section
+          match = re.search(rf"^## {re.escape(tag)}\b.*?$(.*?)(?=^## |\Z)", text, re.S | re.M)
+          print((match.group(1).strip() if match else f"See CHANGELOG.md for {tag}."))
+          EOF
+          echo "Wrote $(wc -l < release-notes.md) lines of notes"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title=$(grep -m1 "^## ${GITHUB_REF_NAME}" CHANGELOG.md | sed "s/^## //")
+          gh release create "$GITHUB_REF_NAME" \
+            --title "${title:-$GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            --verify-tag
