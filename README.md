@@ -53,17 +53,32 @@ The workflow is inspired by [Claude Code](https://claude.com/claude-code) and it
 
 ```mermaid
 flowchart TD
-    subgraph Host Machine [Local Computer / Host]
-        subgraph Agent Backends [Agent Engine]
-            AGY["Google Antigravity (agy)<br/>• Log Tailing (transcript.jsonl)<br/>• PreToolUse Lifecycle Hook Gateway"]
+    subgraph Host [Local Computer / Host]
+        subgraph Sessions [agy, driven two ways]
+            OWNED["agy started by <b>run</b><br/>PTY supervisor owns it<br/>dies with the server"]
+            ADOPTED["agy in a tmux pane<br/><b>attach</b> adopts it<br/>outlives the server"]
         end
 
-        SUPERVISOR[PTY / tmux Process Supervisor]
-        SERVER[agy-remote FastAPI & WebSocket Server]
-        VAPID[Self-Hosted VAPID Push Manager]
+        BRAIN[("brain/&lt;id&gt;/transcript.jsonl<br/>the conversation, on disk")]
+        HOOK["PreToolUse hook<br/>one process per tool call,<br/>blocked until answered"]
+        REG[("agy-remote-servers/&lt;port&gt;.json<br/>which server drives which tmux session")]
 
-        AGY <-->|PTY / Hooks| SERVER
-        SUPERVISOR <--> SERVER
+        SERVER[agy-remote<br/>FastAPI + WebSocket]
+        VAPID[Self-hosted VAPID push]
+
+        OWNED -->|writes| BRAIN
+        ADOPTED -->|writes| BRAIN
+        BRAIN -->|tailed| SERVER
+
+        OWNED -->|"keystrokes (pty)"| SERVER
+        SERVER -->|"send-keys / capture-pane<br/>addressed to the pane"| ADOPTED
+
+        OWNED -.->|spawns| HOOK
+        ADOPTED -.->|spawns| HOOK
+        HOOK -->|"AGY_REMOTE_URL, else $TMUX session id"| REG
+        REG -.->|"names the server"| HOOK
+        HOOK <-->|"asks; waits 270s"| SERVER
+
         SERVER <--> VAPID
     end
 
@@ -71,7 +86,7 @@ flowchart TD
         TS[Tailscale WireGuard Mesh / Local Wi-Fi]
     end
 
-    subgraph Mobile Device [Mobile Phone / Tablet]
+    subgraph Mobile [Mobile Phone / Tablet]
         PWA[Mobile PWA Client]
         CRYPTO[Client-Side Web Crypto AES-GCM]
         SW[ServiceWorker & Web Push Receiver]
@@ -83,6 +98,13 @@ flowchart TD
     SERVER <===>|AES-256-GCM Encrypted WebSocket| TS <===> CRYPTO
     VAPID --->|W3C Push Notification| SW
 ```
+
+The two paths matter. An `agy` that `run` started is a child: it dies with the
+server, and its hook is told where to post through `AGY_REMOTE_URL`. An `agy`
+adopted from tmux is nobody's child — it outlives the server, is typed into by
+pane target rather than by session (a session name aims at whichever pane is
+active, which may be your own shell), and its hook finds the right server by
+the tmux session id that `$TMUX` carries into every process in the pane.
 
 ### Backend Mechanics
 
@@ -106,6 +128,9 @@ the manager.
 - 🔐 **Payload Encryption**: Every WebSocket frame in both directions is sealed with 256-bit AES-GCM, with replay protection. The key travels in the `#key=...` URL hash, which browsers never send to the server, and is scrubbed from the address bar on load. See [Security](#-security--cryptography) for the precise threat model.
 - 🔔 **Self-Hosted Web Push Notifications**: Native iOS & Android lock-screen push alerts via local VAPID keys whenever `agy` needs tool approval or completes a task.
 - 🔄 **tmux Session Persistence**: Keep sessions running in the background across laptop sleep, screen locks, or closed terminals (`agy-remote run --tmux`).
+- 🪝 **Adopt a Running Session**: `agy-remote attach` takes over an `agy` already running in tmux — your terminal keeps it, the phone gets full control, and killing the server leaves `agy` untouched. Keys go to the agent's *pane*, never to whichever window you happen to be reading.
+- 🛎️ **Always Ready**: `agy-remote attach --wait` serves from login with nothing running, and starts a session when your phone connects. Tapping the home-screen icon is the entire interaction.
+- 🗂️ **Approvals Per Session**: Every session's permission requests reach the phone, but each banner stays in its own transcript — the header says how many are waiting elsewhere, and the drawer says which sessions.
 - 📱 **Responsive PWA**: Installable directly to your iOS or Android Home Screen with safe-area padding and a sleek dark theme.
 - 🛡️ **One-Tap Tool Permissions**: Forwards tool permission prompts (shell commands, file modifications, git pushes) to your phone with haptic feedback to `[Allow]` or `[Deny]`.
 - 📎 **Photo & Screenshot Upload**: Capture screenshots or camera photos directly from mobile into your workspace.
@@ -352,7 +377,25 @@ single paired app for both agents.
 
 ## 🛡️ Remote Tool Approvals
 
-When an agent needs permission to execute bash commands, edit files, or invoke external APIs, `agy-remote` pauses execution, sends a Web Push notification to your phone lock screen, and presents interactive `[Allow]` / `[Deny]` action buttons.
+When an agent needs permission to execute bash commands, edit files, or invoke
+external APIs, `agy-remote` pauses execution, sends a Web Push notification to
+your phone lock screen, and presents interactive `[Allow]` / `[Deny]` buttons.
+
+**It only pauses if someone is there.** With no phone connected — the normal
+state of a server that runs all day — the hook is answered immediately with
+`ask`, and `agy` prompts in its own terminal exactly as it would with no hook
+installed. Anything else would stall every tool call on the machine for as long
+as `agy` waits before killing the hook.
+
+**Approvals belong to the session that raised them.** Every session's requests
+reach the phone, but a banner is drawn only in its own transcript: the header
+carries one badge saying how many are waiting elsewhere and where, and each row
+of the session drawer shows its own count. Open that session to answer.
+
+**Three timeouts, nested inward**, so the layer that gives up first is the one
+that can explain itself: the server decides at 240s, the hook gives up on the
+socket at 270s, and `agy` kills the hook at 300s. Reversed, a slow answer
+surfaces as `signal: killed` rather than "approval timed out on mobile remote".
 
 ### For Google Antigravity (`agy`):
 Install the Antigravity PreToolUse lifecycle hooks:
@@ -456,7 +499,9 @@ prints a fresh QR to re-scan.
 | **Browser** | Strict CSP, zero third-party origins, escape-first Markdown renderer | Prompt-injected XSS stealing the key from `localStorage` |
 | **Path traversal** | Strict `conversation_id` charset + containment check | Reading files outside the brain dir |
 | **Uploads** | Extension allowlist **and** magic-byte sniffing, 25 MB cap, `0600` | Active-content and disguised-payload drops |
-| **Secrets at rest** | `vapid.json` and the runtime state file are `0600` | Local key theft |
+| **Secrets at rest** | `vapid.json`, the runtime state file and each server registration are `0600` | Local key theft |
+| **Access model** | One host-wide token and key: every paired device is a full operator, and `--rotate-token` revokes all of them together | *Not* per-device access. There is nothing to audit afterwards, so the header's device count is the only sign a pairing URL has escaped |
+| **Approval routing** | The hook posts to the server naming its own tmux session, and is answered immediately when no phone is watching | One server cannot answer for another's session, and a background server cannot stall an agent nobody is watching |
 
 ### Honest naming
 

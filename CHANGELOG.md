@@ -1,5 +1,24 @@
 # Changelog
  
+## v26.08.22.37 — The documentation catches up with the day
+
+- **The architecture diagram predated everything.** It showed one `agy` wired
+  to the server through "PTY / Hooks" and stopped there. It now shows the two
+  ways an `agy` is driven — a child of `run` that dies with the server, and a
+  tmux pane adopted by `attach` that outlives it — plus the parts every bug
+  today lived in: the transcript on disk, the per-tool-call hook process, and
+  the server registry it consults to find the server that drives *its* session.
+  Validated against the real mermaid parser rather than eyeballed.
+- **The approvals section described behaviour that changed three times today.**
+  It now says the three things that actually govern it: nothing pauses when no
+  phone is watching, a banner belongs to the session that raised it, and the
+  three timeouts nest inward (server 240s, hook 270s, agy 300s) so the layer
+  that gives up first is the one that can explain itself.
+- **Adoption, always-on and per-session approvals** were absent from the
+  feature list, and the security table gained the two rows it most needed: the
+  access model is all-or-nothing with no per-device revocation, and approval
+  routing is per tmux session.
+
 ## v26.08.22.36 — Tagging a release publishes one
 
 - **The Releases page had drifted eight versions behind.** The workflow builds
