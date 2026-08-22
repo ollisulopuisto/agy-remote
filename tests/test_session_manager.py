@@ -501,3 +501,40 @@ async def test_steps_that_arrive_while_watching_stay_in_the_view(tmp_path: Path)
     # Tailing again with nothing new must not duplicate it.
     await mgr.backend.tick(mgr)
     assert len(mgr.active_steps) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_second_device_connecting_is_announced(tmp_path: Path):
+    """Access is all-or-nothing, so the connection count is the only alarm.
+
+    Every client holds the same host-wide token: there is no per-device
+    identity to audit afterwards and no way to revoke one device without
+    revoking them all. A connection nobody expected is therefore the single
+    observable sign that the pairing URL has escaped -- and nothing announced
+    one, so a second device could watch and type unnoticed.
+    """
+    # Frames are sealed by default; read them in the clear here so the test is
+    # about who is connected, not about the envelope.
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    first = _FakeWebSocket()
+    await mgr.register_client(first)
+    # The count comes with the snapshot, so a client knows from the start
+    # whether it is alone.
+    assert [f["event"] for f in first.sent] == ["init", "peers"]
+    assert first.sent[-1]["data"]["count"] == 1
+
+    second = _FakeWebSocket()
+    await mgr.register_client(second)
+
+    peers = [f for f in first.sent if f["event"] == "peers"]
+    assert peers, f"a second device connected unannounced: {[f['event'] for f in first.sent]}"
+    assert peers[-1]["data"]["count"] == 2
+    # The one that just arrived is told too, so both agree on what is connected.
+    assert [f["event"] for f in second.sent][-1] == "peers"
+
+    # And the alarm clears when it leaves rather than lingering.
+    mgr.unregister_client(second)
+    await mgr.announce_peers()
+    assert [f for f in first.sent if f["event"] == "peers"][-1]["data"]["count"] == 1

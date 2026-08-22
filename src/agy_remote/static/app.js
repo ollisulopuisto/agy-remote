@@ -467,6 +467,8 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
+  } else if (type === 'peers') {
+    applyPeerCount(data && data.count);
   } else if (type === 'prompt_sent') {
     // The server took it but nothing was there to receive it: keep the text
     // and say so, rather than letting it read as delivered.
@@ -1062,6 +1064,26 @@ function triggerVibrate(pattern = [60, 40, 80]) {
   if (navigator.vibrate) {
     try { navigator.vibrate(pattern); } catch (e) {}
   }
+}
+
+// How many devices are on this server. Nothing here is per-device: one token,
+// one key, no way to revoke a single phone -- so a count you did not expect is
+// the only sign the pairing URL has escaped. Alert on it the first time it
+// changes, then leave it in the header.
+let peerCount = 1;
+
+function applyPeerCount(count) {
+  const badge = document.getElementById('peerBadge');
+  const notice = window.AgyFormat.peerNotice(count);
+  if (badge) {
+    badge.textContent = notice || '';
+    badge.hidden = !notice;
+  }
+  if (notice && typeof count === 'number' && count > peerCount) {
+    triggerVibrate([60, 50, 60, 50, 60]);
+    statusText.textContent = notice;
+  }
+  if (typeof count === 'number') peerCount = count;
 }
 
 function applyAgentIdentity() {

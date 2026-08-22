@@ -164,7 +164,16 @@
     return deliveredVia === undefined || deliveredVia === null || deliveredVia !== 'broadcast';
   }
 
+  // What to say about how many devices are connected. Access to this server is
+  // all-or-nothing -- every client holds the same token, none can be revoked
+  // alone -- so a connection you did not expect is the only sign the pairing
+  // URL has escaped. One device is the ordinary case and says nothing.
+  function peerNotice(count) {
+    return typeof count === 'number' && count > 1 ? count + ' devices connected' : null;
+  }
+
   global.AgyFormat = {
+    peerNotice: peerNotice,
     promptWasDelivered: promptWasDelivered,
     adoptConversationId: adoptConversationId,
     applyStepUpdate: applyStepUpdate,

@@ -114,3 +114,14 @@ test('a prompt nothing received is not a prompt sent', () => {
   assert.equal(promptWasDelivered('tmux'), true);
   assert.equal(promptWasDelivered('pty'), true);
 });
+
+test('a second connected device is called out, a lone one is not', () => {
+  const { peerNotice } = sandbox.window.AgyFormat;
+  // Access is all-or-nothing, so an unexpected connection is the only sign the
+  // pairing URL escaped. One device is the normal case and says nothing.
+  assert.equal(peerNotice(1), null);
+  assert.equal(peerNotice(0), null);
+  assert.equal(peerNotice(undefined), null);
+  assert.equal(peerNotice(2), '2 devices connected');
+  assert.equal(peerNotice(5), '5 devices connected');
+});

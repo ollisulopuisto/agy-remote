@@ -177,6 +177,19 @@ class SessionManager:
         except Exception as e:
             logger.debug("Failed sending init payload to websocket: %s", e)
 
+        await self.announce_peers()
+
+    async def announce_peers(self) -> None:
+        """Tell every client how many are connected.
+
+        Access here is all-or-nothing: every client holds the same host-wide
+        token, so there is no per-device identity to audit afterwards and no
+        way to revoke one device without revoking them all. That makes an
+        unexpected connection the only observable sign that the pairing URL has
+        escaped -- and it is only observable if somebody says so.
+        """
+        await self.broadcast({"event": "peers", "data": {"count": len(self._connected_clients)}})
+
     def unregister_client(self, websocket: WebSocket) -> None:
         """Remove a disconnected WebSocket client."""
         self._connected_clients.discard(websocket)

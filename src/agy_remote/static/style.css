@@ -896,3 +896,17 @@ details.message-system > summary {
   letter-spacing: 0.3px;
   text-align: center;
 }
+
+/* More than one device on a server where every client has full control. There
+   is no per-device identity to audit and no way to revoke one phone, so this
+   count is the only warning available. */
+.peer-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background-color: rgba(234, 179, 8, 0.16);
+  color: #fbbf24;
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  white-space: nowrap;
+}

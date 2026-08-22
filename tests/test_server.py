@@ -246,6 +246,8 @@ def test_a_prompt_nothing_received_says_so(tmp_path: Path):
         ws.receive_json()  # sealed init snapshot
         ws.send_json(encrypt_payload({"action": "send_prompt", "data": {"prompt": "into the void"}}, key))
         announced = decrypt_payload(ws.receive_json(), key)
+        while announced.get("event") == "peers":  # a connect announces the count first
+            announced = decrypt_payload(ws.receive_json(), key)
 
     assert announced["event"] == "prompt_sent"
     # No supervisor in this config, so nothing could have typed it.

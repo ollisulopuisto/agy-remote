@@ -281,6 +281,18 @@ def test_vapid_key_file_is_owner_only(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+def _next_frame(ws, key):
+    """The next frame that says something, skipping peer-count announcements.
+
+    Every connect and disconnect broadcasts `peers`, which would otherwise
+    shift the frame order these tests read positionally.
+    """
+    while True:
+        frame = decrypt_payload(ws.receive_json(), key)
+        if frame.get("event") != "peers":
+            return frame
+
+
 def test_unencrypted_frame_rejected_when_e2ee_enabled(tmp_path: Path):
     """Holding the token must not be enough to drive the agent when E2EE is on.
 
@@ -301,7 +313,7 @@ def test_unencrypted_frame_rejected_when_e2ee_enabled(tmp_path: Path):
         ws.send_json(encrypt_payload({"action": "ping"}, key))
 
         # The rejection notice comes first; the pong proves the socket lived.
-        seen = [decrypt_payload(ws.receive_json(), key) for _ in range(2)]
+        seen = [_next_frame(ws, key) for _ in range(2)]
 
     assert all(f.get("event") != "prompt_sent" for f in seen), f"plaintext frame was acted on: {seen}"
     assert seen[-1] == {"event": "pong"}, f"socket did not survive the rejection: {seen}"
@@ -595,16 +607,16 @@ def test_a_rejected_frame_is_reported_back_to_the_client(tmp_path: Path):
 
         ws.send_json({"action": "send_prompt", "data": {"prompt": "INJECTED"}})
         ws.send_json(encrypt_payload({"action": "ping"}, key))
-        unsealed = decrypt_payload(ws.receive_json(), key)
-        assert decrypt_payload(ws.receive_json(), key)["event"] == "pong"
+        unsealed = _next_frame(ws, key)
+        assert _next_frame(ws, key)["event"] == "pong"
 
         # A sealed frame whose nonce the server has already accepted.
         replay = encrypt_payload({"action": "ping"}, key)
         ws.send_json(replay)
-        assert decrypt_payload(ws.receive_json(), key)["event"] == "pong"
+        assert _next_frame(ws, key)["event"] == "pong"
         ws.send_json(replay)
         ws.send_json(encrypt_payload({"action": "ping"}, key))
-        replayed = decrypt_payload(ws.receive_json(), key)
+        replayed = _next_frame(ws, key)
 
     assert unsealed["event"] == "frame_rejected", f"plaintext frame dropped in silence: {unsealed}"
     assert unsealed["data"]["reason"]

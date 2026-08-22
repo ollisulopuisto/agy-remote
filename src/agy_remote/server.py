@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import secrets
@@ -594,6 +595,9 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             logger.debug("WebSocket loop terminated: %s", e)
         finally:
             mgr.unregister_client(websocket)
+            # The count is the alarm, so a device leaving has to clear it.
+            with contextlib.suppress(Exception):
+                await mgr.announce_peers()
 
     # -------------------------------------------------------------------------
     # PWA Static Files & Fallback

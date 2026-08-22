@@ -1,5 +1,17 @@
 # Changelog
  
+## v26.08.22.27 — You can see who else is connected
+
+- **A second device connecting is now announced.** Access to this server is
+  all-or-nothing by design: every client holds the same host-wide token, so
+  there is no per-device identity to audit afterwards and no way to revoke one
+  phone without revoking them all. That makes a connection you did not expect
+  the single observable sign that the pairing URL has escaped — and nothing
+  announced one, so another device could read the whole transcript, type, and
+  answer approvals unnoticed. Every connect and disconnect now broadcasts
+  `peers`, and the header carries the count whenever it is more than one, with a
+  buzz the first time it rises.
+
 ## v26.08.22.26 — Room to type, and approvals that know where to go
 
 - **Two servers no longer answer for each other's sessions.** `AGY_REMOTE_URL` is
