@@ -175,6 +175,10 @@ def _stub_attach(monkeypatch, tmp_path: Path, port: int) -> dict[str, list]:
     monkeypatch.setattr(cli_mod, "create_app", lambda cfg: FakeApp)
     monkeypatch.setattr(cli_mod, "_serve_forever", lambda cfg, app: seen["served"].append(cfg))
     monkeypatch.setattr(config_mod, "RUNTIME_STATE_FILE", tmp_path / "runtime.json")
+    # Adoption publishes a server registration; without this the suite writes
+    # into the real registry under ~/.gemini and leaves entries for ports that
+    # only ever existed in a test.
+    monkeypatch.setattr(config_mod, "SERVER_REGISTRY_DIR", tmp_path / "servers")
     return seen
 
 
