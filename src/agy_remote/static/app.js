@@ -471,6 +471,7 @@ function handleServerEvent(event) {
     updateHeader();
     renderAllMessages();
     renderConversations(data.conversations || []);
+    updateApprovalIndicators();
   } else if (type === 'session_switched') {
     currentConversation = data.conversation || null;
     currentConversationId = data.conversation_id;
@@ -478,6 +479,7 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
+    updateApprovalIndicators();
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
   } else if (type === 'prompt_sent') {
@@ -516,20 +518,24 @@ function handleServerEvent(event) {
   } else if (type === 'terminal_screen') {
     applyTerminal(data);
   } else if (type === 'approval_request') {
-    // Every session's approvals arrive here, each naming the session that
-    // raised it -- the banner says so when it is not the one on screen, which
-    // is what lets you answer for a terminal you are not looking at.
+    // Every session's approvals arrive here so nothing is missed, but a banner
+    // belongs to the session that raised it: drawn into another transcript it
+    // reads as belonging to the work in front of you. Elsewhere it counts.
     if (!pendingApprovals.some(a => a.id === data.id)) {
       pendingApprovals.push(data);
       triggerVibrate([80, 40, 100]);
-      renderApprovalBanner(data);
-      scrollToBottom();
+      if (data.conversation_id === currentConversationId) {
+        renderApprovalBanner(data);
+        scrollToBottom();
+      }
+      updateApprovalIndicators();
     }
   } else if (type === 'frame_rejected') {
     // The server threw our frame away. Without this the prompt just vanished.
     reportUndelivered(`Server rejected the message: ${data && data.reason ? data.reason : 'unknown reason'}`);
   } else if (type === 'approval_resolved') {
     pendingApprovals = pendingApprovals.filter(a => a.id !== data.id);
+    updateApprovalIndicators();
     const elem = document.getElementById(`approval-${data.id}`);
     if (elem) elem.remove();
   }
@@ -551,7 +557,7 @@ function renderAllMessages() {
 
   chatContainer.appendChild(sessionDivider());
   currentSteps.forEach(step => chatContainer.appendChild(stepNodes(step)));
-  pendingApprovals.forEach(app => renderApprovalBanner(app));
+  window.AgyFormat.approvalsForSession(pendingApprovals, currentConversationId).forEach(renderApprovalBanner);
   scrollToBottom();
 }
 
@@ -771,15 +777,13 @@ function renderApprovalBanner(app) {
   // agy has no "approve future matching requests", so there is no Always.
   const alwaysBtn = '';
 
-  // Say whose it is when it is not the session on screen -- otherwise a bare
-  // command reads as belonging to the transcript it is drawn into.
+  // A banner is only ever drawn in the session that raised it, so it needs no
+  // attribution. One that slipped through anyway says where it belongs rather
+  // than borrowing the transcript around it.
   const origin = window.AgyFormat.approvalOrigin(app, currentConversationId);
   if (origin) banner.classList.add('approval-elsewhere');
   const originRow = origin
-    ? `<div class="approval-origin">
-         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-         in another session: ${escapeHtml(origin)}
-       </div>`
+    ? `<div class="approval-origin">in another session: ${escapeHtml(origin)}</div>`
     : '';
 
   banner.innerHTML = `
@@ -1096,6 +1100,38 @@ function triggerVibrate(pattern = [60, 40, 80]) {
 // changes, then leave it in the header.
 let peerCount = 1;
 
+// Where the waiting requests are. Every session's approvals reach this client
+// -- an agy blocked in another window has to be answerable -- but they are
+// shown where they belong: a banner in their own transcript, a count on their
+// row in the drawer, and one badge in the header saying to go look.
+function updateApprovalIndicators() {
+  const elsewhere = window.AgyFormat.approvalsElsewhere(pendingApprovals, currentConversationId);
+
+  const badge = document.getElementById('approvalsElsewhereBadge');
+  if (badge) {
+    badge.textContent = elsewhere.count
+      ? `${elsewhere.count} waiting · ${elsewhere.label}`
+      : '';
+    badge.hidden = !elsewhere.count;
+  }
+
+  const counts = window.AgyFormat.approvalCountsBySession(pendingApprovals);
+  document.querySelectorAll('.session-item[data-conversation-id]').forEach(item => {
+    const waiting = counts[item.dataset.conversationId] || 0;
+    let dot = item.querySelector('.session-waiting');
+    if (!waiting) {
+      if (dot) dot.remove();
+      return;
+    }
+    if (!dot) {
+      dot = document.createElement('span');
+      dot.className = 'session-waiting';
+      item.querySelector('.session-item-title')?.appendChild(dot);
+    }
+    dot.textContent = waiting > 1 ? `${waiting} waiting` : 'waiting';
+  });
+}
+
 function applyPeerCount(count) {
   const badge = document.getElementById('peerBadge');
   const notice = window.AgyFormat.peerNotice(count);
@@ -1132,6 +1168,7 @@ function renderConversations(convs) {
   convs.forEach(c => {
     const item = document.createElement('div');
     item.className = `session-item ${c.id === currentConversationId ? 'active' : ''}`;
+    item.dataset.conversationId = c.id;
     item.onclick = async () => {
       const payload = {
         action: 'switch_conversation',
@@ -1151,6 +1188,7 @@ function renderConversations(convs) {
     `;
     drawerList.appendChild(item);
   });
+  updateApprovalIndicators();
 }
 
 function openDrawer() {

@@ -927,3 +927,28 @@ details.message-system > summary {
   color: #fbbf24;
   margin-bottom: 6px;
 }
+
+/* Requests waiting in a session other than the one on screen. The banner
+   itself stays in its own transcript -- drawn here it would read as belonging
+   to the work in front of you -- so this is what says to go and look. */
+.waiting-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background-color: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  white-space: nowrap;
+}
+
+.session-waiting {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  white-space: nowrap;
+}

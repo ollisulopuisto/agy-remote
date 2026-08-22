@@ -184,7 +184,52 @@
     return approval.conversation_title || String(id).slice(0, 8);
   }
 
+  // Approvals belong to the session that raised them, not to whatever
+  // transcript happens to be open. Drawing another session's banner here would
+  // read as belonging to the work in front of you; counting it per session
+  // says where to look instead.
+  function approvalsForSession(approvals, conversationId) {
+    return (approvals || []).filter(function (a) {
+      return a && a.conversation_id === conversationId;
+    });
+  }
+
+  function approvalCountsBySession(approvals) {
+    var counts = {};
+    (approvals || []).forEach(function (a) {
+      if (!a || !a.conversation_id) return;
+      counts[a.conversation_id] = (counts[a.conversation_id] || 0) + 1;
+    });
+    return counts;
+  }
+
+  // What the one "look elsewhere" badge should say: a name when a single other
+  // session is waiting, a count of sessions when several are.
+  function approvalsElsewhere(approvals, conversationId) {
+    var other = (approvals || []).filter(function (a) {
+      return a && a.conversation_id && a.conversation_id !== conversationId;
+    });
+    var sessions = [];
+    other.forEach(function (a) {
+      if (sessions.indexOf(a.conversation_id) === -1) sessions.push(a.conversation_id);
+    });
+
+    var label = null;
+    if (sessions.length === 1) {
+      var named = other.find(function (a) {
+        return a.conversation_title;
+      });
+      label = named ? named.conversation_title : String(sessions[0]).slice(0, 8);
+    } else if (sessions.length > 1) {
+      label = sessions.length + ' sessions';
+    }
+    return { count: other.length, sessions: sessions, label: label };
+  }
+
   global.AgyFormat = {
+    approvalsForSession: approvalsForSession,
+    approvalCountsBySession: approvalCountsBySession,
+    approvalsElsewhere: approvalsElsewhere,
     approvalOrigin: approvalOrigin,
     peerNotice: peerNotice,
     promptWasDelivered: promptWasDelivered,

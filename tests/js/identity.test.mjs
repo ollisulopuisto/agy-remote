@@ -142,3 +142,35 @@ test('a banner from another session says so; one from this session does not', ()
   // Nothing on screen yet (a fresh client): still attribute it.
   assert.equal(approvalOrigin({conversation_id: 'b', conversation_title: 'Other'}, null), 'Other');
 });
+
+test('approvals are grouped by the session that raised them', () => {
+  const { approvalsForSession, approvalCountsBySession, approvalsElsewhere } = sandbox.window.AgyFormat;
+  const pending = [
+    {id: '1', conversation_id: 'a'},
+    {id: '2', conversation_id: 'b', conversation_title: 'Fix the footer'},
+    {id: '3', conversation_id: 'b'},
+    {id: '4', conversation_id: 'a'},
+  ];
+
+  // Only this session's banners belong in the transcript on screen.
+  assert.deepEqual([...approvalsForSession(pending, 'a')].map(a => a.id), ['1', '4']);
+  assert.deepEqual([...approvalsForSession(pending, 'nope')].map(a => a.id), []);
+
+  // The rest are counted per session, for the drawer.
+  assert.deepEqual(Object.entries(approvalCountsBySession(pending)).sort(), [['a', 2], ['b', 2]]);
+
+  // And summarised for the one badge that says "look elsewhere".
+  const elsewhere = approvalsElsewhere(pending, 'a');
+  assert.equal(elsewhere.count, 2);
+  assert.deepEqual([...elsewhere.sessions], ['b']);
+  assert.equal(elsewhere.label, 'Fix the footer');
+
+  // Two other sessions waiting: no single name to show.
+  const many = approvalsElsewhere([...pending, {id: '5', conversation_id: 'c'}], 'a');
+  assert.equal(many.count, 3);
+  assert.equal(many.label, '2 sessions');
+
+  // Nothing waiting anywhere else.
+  assert.equal(approvalsElsewhere(pending, 'b').count, 2);
+  assert.equal(approvalsElsewhere([{id: '1', conversation_id: 'a'}], 'a').count, 0);
+});

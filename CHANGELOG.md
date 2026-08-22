@@ -1,5 +1,20 @@
 # Changelog
  
+## v26.08.22.35 — Approvals live in their own session
+
+- **A banner is drawn only in the session that raised it.** Every session's
+  approvals still reach the phone — an agy blocked in another window has to be
+  answerable — but drawing them all into whichever transcript happened to be
+  open meant a `git push --force` from one terminal sat in the middle of
+  another's conversation. They are grouped instead: the header carries one
+  badge (*"2 waiting · Fix the footer"*, or *"3 waiting · 2 sessions"*), and
+  each row in the session drawer says how many of its own are waiting. Open
+  that session and its banners are there.
+- **The server already knew this and nobody asked.** `has_pending_approval` has
+  been on every conversation summary all along; the PWA ignored it entirely.
+  Counts are now derived client-side from the approvals themselves, so a
+  request arriving or being answered updates the drawer without a refresh.
+
 ## v26.08.22.34 — Three more of the same shape
 
 Found by auditing for the pattern behind the last one: a background server
