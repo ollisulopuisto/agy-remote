@@ -11,7 +11,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from .config import read_runtime_state, read_stored_token
+from .config import find_server_for_tmux_session, read_runtime_state, read_stored_token
+from .tmux_runner import session_id_from_env
 
 DEFAULT_PORT = 8765
 
@@ -37,6 +38,19 @@ def resolve_server_endpoint() -> tuple[str, str]:
     env_url = os.environ.get("AGY_REMOTE_URL")
     if env_url:
         return env_url, _hook_token()
+
+    # An agy nobody launched has no `AGY_REMOTE_URL`, and the shared state file
+    # can only name one server -- so with two running, both sessions' approvals
+    # went to whichever wrote it last. Inside tmux this process can say which
+    # session it belongs to, from `$TMUX` alone, and a server that adopted that
+    # session says so in its registration.
+    session_id = session_id_from_env()
+    if session_id:
+        owner = find_server_for_tmux_session(session_id)
+        if owner:
+            port = int(owner.get("port", DEFAULT_PORT))
+            base_url = owner.get("base_url") or f"http://127.0.0.1:{port}"
+            return base_url, str(owner.get("auth_token") or _hook_token())
 
     state = read_runtime_state()
     if state:

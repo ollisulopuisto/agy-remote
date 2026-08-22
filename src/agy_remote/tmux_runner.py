@@ -213,6 +213,49 @@ def pane_geometry(session_name: str) -> dict[str, int] | None:
     return {"rows": rows, "cols": cols, "cursor_y": cy, "cursor_x": cx}
 
 
+#: Distinguishes "read $TMUX yourself" from an explicit "there is no $TMUX",
+#: which is a real answer: it means the caller is not inside tmux.
+_FROM_ENV: str = "\x00from-env"
+
+
+def session_id_from_env(tmux_env: str | None = _FROM_ENV) -> str | None:  # type: ignore[assignment]
+    """The tmux session id of the process asking, from `$TMUX` alone.
+
+    tmux exports `socket_path,server_pid,session_id` into every process in a
+    pane, so a PreToolUse hook can say which session it belongs to without
+    running anything. That matters: the hook runs on every single tool call,
+    and shelling out to `tmux display-message` would put a subprocess in that
+    path just to learn something already in the environment.
+
+    Anything unrecognisable is None -- no claim is better than a wrong one,
+    since the claim decides which server gets to approve a command.
+    """
+    raw = os.environ.get("TMUX") if tmux_env is _FROM_ENV else tmux_env
+    if not raw:
+        return None
+    parts = raw.split(",")
+    if len(parts) < 3 or not parts[-1].isdigit():
+        return None
+    return parts[-1]
+
+
+def session_id_of(session_name: str) -> str | None:
+    """The numeric id tmux gave a session, as `$TMUX` reports it.
+
+    `#{session_id}` is `$3`; the environment carries the bare `3`.
+    """
+    res = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", session_name, "-F", "#{session_id}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return None
+    value = (res.stdout or "").strip().lstrip("$")
+    return value if value.isdigit() else None
+
+
 tmux_instance: TmuxSupervisor | None = None
 
 

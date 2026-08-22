@@ -978,8 +978,12 @@ async function sendKey(key) {
 
 // Auto Resize Input Area
 function autoResizeInput() {
+  // Grow with the text, bounded by the viewport rather than a fixed pixel cap:
+  // the chat above is `flex: 1` and yields as this grows, and the keyboard is
+  // what actually limits how much room there is.
+  const cap = Math.max(120, Math.round(window.innerHeight * 0.45));
   promptInput.style.height = 'auto';
-  promptInput.style.height = Math.min(Math.max(promptInput.scrollHeight, 52), 220) + 'px';
+  promptInput.style.height = Math.min(Math.max(promptInput.scrollHeight, 44), cap) + 'px';
 }
 
 function scrollToBottom() {

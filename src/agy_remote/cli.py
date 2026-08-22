@@ -41,6 +41,7 @@ from .server import create_app
 from .tmux_runner import (
     TmuxSupervisor,
     is_tmux_available,
+    session_id_of,
     session_name_for_port,
     sessions_running,
     set_tmux_supervisor,
@@ -462,6 +463,10 @@ def attach(
     cfg.port = port
     cfg.host = host
     cfg.tmux_session = session_name
+    # `$TMUX` carries this id into every process in the pane, so the adopted
+    # agy's hook can find this server without a subprocess and without caring
+    # which server owns the shared state file.
+    cfg.tmux_session_id = session_id_of(session_name)
     if token:
         cfg.auth_token = token
     if no_auth:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
 import logging
@@ -25,6 +26,12 @@ logger = logging.getLogger("agy_remote.config")
 #: so it cannot inherit the in-memory config; without this it would mint a
 #: fresh random token and fail authentication on every approval request.
 RUNTIME_STATE_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-session.json"
+
+#: One file per running server, named by port. The state file above can only
+#: describe one server, so with two running, a hook that had to fall back to it
+#: sent both sessions' approvals to whichever wrote it last. This lets a hook
+#: find the server that owns *its* session instead.
+SERVER_REGISTRY_DIR = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-servers"
 CREDENTIALS_FILE = Path.home() / ".gemini" / "antigravity-cli" / "agy-remote-credentials.json"
 
 #: Standard locations where Tailscale CLI binary is typically installed across platforms.
@@ -411,9 +418,11 @@ class RemoteConfig(BaseModel):
     brain_dir: Path = Field(default_factory=get_default_brain_dir)
     enable_auth: bool = True
     #: The tmux session this server drives when it adopted one it did not
-    #: start. Published in the runtime state so `qr` and a hand-started agy's
-    #: hook can tell which server belongs to which session.
+    #: start, by name and by the numeric id tmux exports in `$TMUX`. Published
+    #: so a hook running inside that session can find this server rather than
+    #: whichever one happens to own the shared state file.
     tmux_session: str | None = None
+    tmux_session_id: str | None = None
     #: The agent CLI this server fronts. One value today, kept as a field
     #: because the PWA renders it: the header used to say "agy" whatever was
     #: behind it, which made a session look like something it was not.
@@ -736,6 +745,86 @@ def find_free_port(host: str = "127.0.0.1") -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))
         return sock.getsockname()[1]
+
+
+def publish_server_registration(cfg: RemoteConfig) -> Path | None:
+    """Record this server so a hook can find it by the session it drives.
+
+    Unlike the shared state file there is no ownership fight here: every server
+    writes its own file, named by the port it holds.
+    """
+    try:
+        SERVER_REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.debug("Could not create the server registry: %s", e)
+        return None
+
+    path = SERVER_REGISTRY_DIR / f"{cfg.port}.json"
+    payload = json.dumps(
+        {
+            "auth_token": cfg.auth_token,
+            "base_url": cfg.local_base_url,
+            "port": cfg.port,
+            "tmux_session": cfg.tmux_session,
+            "tmux_session_id": cfg.tmux_session_id,
+            "pid": os.getpid(),
+        },
+        indent=2,
+    )
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except OSError as e:
+        logger.debug("Could not publish server registration: %s", e)
+        return None
+    return path
+
+
+def withdraw_server_registration(port: int, owner_pid: int | None = None) -> None:
+    """Remove our own registration, and only ever our own.
+
+    A server restarting on the same port can finish shutting down after its
+    replacement has already registered; deleting unconditionally would strand
+    the new one.
+    """
+    path = SERVER_REGISTRY_DIR / f"{port}.json"
+    if owner_pid is not None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                if json.load(f).get("pid") != owner_pid:
+                    return
+        except (OSError, json.JSONDecodeError):
+            return
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
+def find_server_for_tmux_session(session_id: str) -> dict | None:
+    """The live server driving the tmux session with this id, if any.
+
+    A registration outlives a crash, so the pid is the only honest signal that
+    the credentials in it still lead anywhere.
+    """
+    if not session_id:
+        return None
+    try:
+        entries = sorted(SERVER_REGISTRY_DIR.glob("*.json"))
+    except OSError:
+        return None
+
+    for path in entries:
+        try:
+            with open(path, encoding="utf-8") as f:
+                entry = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(entry.get("tmux_session_id") or "") != str(session_id):
+            continue
+        pid = entry.get("pid")
+        if isinstance(pid, int) and _pid_alive(pid):
+            return entry
+    return None
 
 
 def write_runtime_state(cfg: RemoteConfig) -> Path | None:

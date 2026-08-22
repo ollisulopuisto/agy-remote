@@ -1,5 +1,23 @@
 # Changelog
  
+## v26.08.22.26 — Room to type, and approvals that know where to go
+
+- **Two servers no longer answer for each other's sessions.** `AGY_REMOTE_URL` is
+  exported into an agy the server launched, so that hook always finds its own
+  server — but an agy nobody launched (adopted from tmux, or started by hand)
+  fell back to the host-wide state file, which exactly one server owns. Both
+  sessions' approvals went to whichever wrote it last. Inside tmux the hook can
+  identify itself for free: `$TMUX` is `socket,server_pid,session_id`, inherited
+  by every process in the pane. Each server now publishes its own registration
+  under `~/.gemini/antigravity-cli/agy-remote-servers/<port>.json`, and the hook
+  matches on the session id — no subprocess in a path that runs on every tool
+  call. Verified with two servers on two sessions: id 3 → :8765, id 5 → :8766.
+- **The composer had 54% of the screen.** Three 44px buttons flanked the text
+  input, leaving it 210px of a 390px phone — about 25 characters a line, so a
+  prompt of any length was read through a slot. The buttons moved below the
+  text, which now spans the card: 352px, ~41 characters, and it grows to 45% of
+  the viewport instead of a fixed 220px, with the transcript yielding as it does.
+
 ## v26.08.22.25 — Adopt an agy that is already running
 
 - **`agy-remote attach`.** Takes over an `agy` already running in tmux instead of

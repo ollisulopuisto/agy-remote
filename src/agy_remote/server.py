@@ -33,7 +33,9 @@ from .config import (
     clear_runtime_state,
     get_config,
     is_loopback_host,
+    publish_server_registration,
     validate_bind_security,
+    withdraw_server_registration,
     write_runtime_state,
 )
 from .crypto import EnvelopeError, decode_key, decrypt_payload
@@ -107,11 +109,15 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             session_mgr.attach_terminal(supervisor)
         # Let the PreToolUse hook (a separate process) find our token and port.
         write_runtime_state(cfg)
+        # And let a hook inside the tmux session we adopted find *us*, rather
+        # than whichever server happens to own the shared state file.
+        publish_server_registration(cfg)
         owner_pid = os.getpid()
         try:
             yield
         finally:
             clear_runtime_state(owner_pid=owner_pid)
+            withdraw_server_registration(cfg.port, owner_pid=owner_pid)
             await session_mgr.stop()
 
     app = FastAPI(

@@ -478,31 +478,57 @@ body {
   transform: scale(0.94);
 }
 
-.input-row {
+/* The composer is one card with the text on its own row. Flanking the input
+   with three 44px buttons left it 210px of a 390px phone -- about 25 characters
+   a line -- so a prompt of any length was read through a slot. The buttons sit
+   under the text now, and the text gets the full width. */
+.composer {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 4px 6px 6px;
+  transition: border-color 0.15s ease;
+}
+
+.composer:focus-within {
+  border-color: var(--primary);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.composer-spacer {
+  flex: 1;
 }
 
 .prompt-input {
-  flex: 1;
-  background-color: var(--bg-input);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
+  width: 100%;
+  background-color: transparent;
+  border: none;
   color: var(--text-main);
-  padding: 13px 16px;
+  padding: 10px 10px 4px;
   font-size: 16px; /* 16px prevents iOS Safari auto-zooming on focus */
   resize: none;
-  max-height: 220px;
-  min-height: 52px;
-  line-height: 1.4;
+  /* Room to think in. The old 220px cap stopped at ~6 lines; the keyboard is
+     what really bounds this, and the chat above yields as it grows. */
+  max-height: 45vh;
+  min-height: 44px;
+  line-height: 1.45;
   outline: none;
   font-family: inherit;
   box-sizing: border-box;
+  overflow-y: auto;
 }
 
 .prompt-input:focus {
-  border-color: var(--primary);
+  outline: none;
 }
 
 .btn-send {
