@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import agy_remote.cli  # noqa: F401
@@ -245,3 +246,61 @@ def test_attach_refuses_a_session_that_does_not_exist(monkeypatch, tmp_path: Pat
 
     assert res.exit_code == 2, res.output
     assert "typo" in res.output
+
+
+# ---------------------------------------------------------------------------
+# Always-on: serve first, agy later
+# ---------------------------------------------------------------------------
+
+
+def test_wait_serves_even_with_nothing_to_adopt(monkeypatch, tmp_path: Path):
+    """A boot service cannot refuse to start because you have not opened agy yet.
+
+    Without `--wait` this exits 2, which is right when a person typed it and
+    wrong for launchd: boot order is not something you get to depend on.
+    """
+    fake = FakeRun({"list-panes": "notes zsh\n"})
+    monkeypatch.setattr(tmux_runner.subprocess, "run", fake)
+    seen = _stub_attach(monkeypatch, tmp_path, 8796)
+
+    res = CliRunner().invoke(cli_mod.cli, ["attach", "--wait", "--host", "127.0.0.1", "-p", "8796"])
+
+    assert res.exit_code == 0, res.output
+    assert seen["served"], "the server never started"
+    # Nothing was adopted and nothing was created: it is just listening.
+    assert not any("new-session" in call for call in fake.calls), fake.calls
+
+
+@pytest.mark.asyncio
+async def test_the_first_phone_to_connect_gets_a_session(tmp_path: Path):
+    """Tapping the home-screen icon is the whole interaction.
+
+    With the Mac always listening and no agy running, a connection has nothing
+    to drive. Rather than showing an empty transcript, the first client to
+    arrive gets a session started for it and adopted.
+    """
+    from agy_remote.config import RemoteConfig
+    from agy_remote.session_manager import SessionManager
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    started: list[int] = []
+
+    async def ensure() -> None:
+        started.append(1)
+
+    mgr.ensure_session = ensure
+
+    class _Ws:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        async def send_json(self, data) -> None:  # noqa: ANN001
+            self.sent.append(data)
+
+    await mgr.register_client(_Ws())
+    assert started == [1], "no session was started for the first client"
+
+    # A second device joins the one that is already there.
+    await mgr.register_client(_Ws())
+    assert started == [1], "a second device started another session"

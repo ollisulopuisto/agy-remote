@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,10 @@ class SessionManager:
         self.follow_latest: bool = True
         self.active_steps: list[TranscriptStep] = []
         self._connected_clients: set[WebSocket] = set()
+        #: Called before the first client's snapshot when the server is
+        #: listening with nothing behind it. An always-on server has no agy
+        #: until someone wants one; this is where one appears.
+        self.ensure_session: Callable[[], Awaitable[None]] | None = None
         self._pending_approvals: dict[str, dict[str, Any]] = {}
         self._approval_futures: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._watcher_task: asyncio.Task[None] | None = None
@@ -154,6 +159,14 @@ class SessionManager:
 
     async def register_client(self, websocket: WebSocket) -> None:
         """Register a new WebSocket client and send initial snapshot."""
+        if self.ensure_session is not None and not self._connected_clients:
+            # Only for the first arrival: later ones join what is already
+            # running rather than each starting an agent of their own.
+            try:
+                await self.ensure_session()
+            except Exception as e:
+                logger.warning("Could not start a session for the arriving client: %s", e)
+
         self._connected_clients.add(websocket)
         # Send full snapshot of current state
         init_data = {

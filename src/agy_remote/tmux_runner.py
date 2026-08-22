@@ -112,6 +112,34 @@ class TmuxSupervisor:
         # Attach to the session in the current terminal with signal handling
         return self._attach_session()
 
+    def start_detached(self) -> bool:
+        """Create the session if it is missing, without attaching to it.
+
+        `start_or_attach` takes over the terminal it is called from, which a
+        background server has no business doing -- and no terminal to do it
+        with. The session it leaves behind is an ordinary one: attach to it at
+        the desk whenever you like, or never.
+        """
+        if not is_tmux_available():
+            return False
+        if self.has_session():
+            return True
+
+        import shlex
+
+        argv = self.cmd
+        if self.env:
+            argv = ["env", *(f"{k}={v}" for k, v in self.env.items()), *argv]
+        # Same VSUSP guard as start_or_attach: Ctrl-Z would otherwise suspend
+        # agy with no shell to bring it back.
+        safe_cmd = f"stty susp undef 2>/dev/null; exec {shlex.join(argv)}"
+        res = subprocess.run(
+            ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
+            capture_output=True,
+            check=False,
+        )
+        return res.returncode == 0
+
     def inject_input(self, text: str) -> bool:
         """Send keystrokes or prompts into the running tmux session literals safely."""
         if not self.has_session():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
 import math
 import select
 import sys
@@ -29,6 +30,7 @@ from .config import (
     get_tailscale_dns_name,
     is_loopback_host,
     port_is_free,
+    publish_server_registration,
     read_runtime_state,
     rotate_credentials,
     runtime_state_owner,
@@ -48,6 +50,7 @@ from .tmux_runner import (
 )
 from .version import __version__
 
+logger = logging.getLogger("agy_remote.cli")
 console = Console()
 
 
@@ -398,6 +401,11 @@ def serve(
     default=None,
     help="tmux session to adopt (default: the one running agy, if there is exactly one)",
 )
+@click.option(
+    "--wait",
+    is_flag=True,
+    help="Serve even with no agy running, and start one when a phone connects (for a boot service)",
+)
 @click.option("--port", "-p", default=8765, help="Port to listen on", show_default=True)
 @click.option("--host", "-h", default="0.0.0.0", help="Host to bind on", show_default=True)
 @click.option("--token", "-t", default=None, help="Custom auth token")
@@ -429,6 +437,7 @@ def serve(
 )
 def attach(
     session: str | None,
+    wait: bool,
     port: int,
     host: str,
     token: str | None,
@@ -455,18 +464,24 @@ def attach(
         )
         sys.exit(2)
 
-    session_name = _resolve_tmux_session_or_exit(session)
+    session_name = session if wait else _resolve_tmux_session_or_exit(session)
+    if wait and not session_name:
+        # Nothing named and nothing running: adopt whatever turns up, and if
+        # nothing has by the time a phone arrives, start one for it.
+        running = sessions_running("agy")
+        session_name = running[0] if len(running) == 1 else None
 
     if rotate_token:
         rotate_credentials()
     cfg = get_config(tailscale_bin=tailscale_bin)
     cfg.port = port
     cfg.host = host
-    cfg.tmux_session = session_name
-    # `$TMUX` carries this id into every process in the pane, so the adopted
-    # agy's hook can find this server without a subprocess and without caring
-    # which server owns the shared state file.
-    cfg.tmux_session_id = session_id_of(session_name)
+    if session_name:
+        cfg.tmux_session = session_name
+        # `$TMUX` carries this id into every process in the pane, so the adopted
+        # agy's hook can find this server without a subprocess and without
+        # caring which server owns the shared state file.
+        cfg.tmux_session_id = session_id_of(session_name)
     if token:
         cfg.auth_token = token
     if no_auth:
@@ -479,17 +494,66 @@ def attach(
     _guard_or_exit(cfg)
     _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
-    print_banner(cfg, mode=f"agy (adopted tmux session '{session_name}')")
+    mode_label = (
+        f"agy (adopted tmux session '{session_name}')"
+        if session_name
+        else "agy (waiting — a session starts when a phone connects)"
+    )
+    print_banner(cfg, mode=mode_label)
     _warn_if_hooks_unwired()
     _warn_if_second_instance(cfg)
 
     app = create_app(cfg)
-    set_tmux_supervisor(TmuxSupervisor(session_name=session_name))
     mgr = getattr(getattr(app, "state", None), "session_manager", None)
-    if mgr is not None:
-        mgr.attach_screen(TmuxScreen(session_name))
+    if session_name:
+        _adopt_tmux_session(cfg, mgr, session_name)
+    elif mgr is not None:
+        mgr.ensure_session = _session_on_demand(cfg, mgr)
 
     _serve_forever(cfg, app)
+
+
+def _adopt_tmux_session(cfg: RemoteConfig, mgr: object, session_name: str) -> None:
+    """Point this server at a tmux session: typing, screen, and hook routing."""
+    cfg.tmux_session = session_name
+    cfg.tmux_session_id = session_id_of(session_name)
+    set_tmux_supervisor(TmuxSupervisor(session_name=session_name))
+    if mgr is not None and hasattr(mgr, "attach_screen"):
+        mgr.attach_screen(TmuxScreen(session_name))
+    # Re-publish: the registration is what lets this session's PreToolUse hook
+    # find *this* server rather than whichever one owns the shared state file.
+    publish_server_registration(cfg)
+
+
+async def _adopt_when_a_phone_arrives(cfg: RemoteConfig, mgr: object) -> None:
+    """Give an arriving client something to drive.
+
+    The Mac listens all day with nothing behind it; a session only has to exist
+    when someone actually wants one. An agy already running in tmux is adopted
+    as-is -- starting a second one would leave the phone talking to the wrong
+    half of your desk.
+    """
+    if cfg.tmux_session:
+        return
+
+    running = sessions_running("agy")
+    name = running[0] if running else session_name_for_port(cfg.port)
+    if not running:
+        supervisor = TmuxSupervisor(session_name=name, cmd=["agy"], env=agy_child_env(cfg))
+        if not supervisor.start_detached():
+            logger.warning("Could not start a tmux session for the arriving client")
+            return
+
+    _adopt_tmux_session(cfg, mgr, name)
+
+
+def _session_on_demand(cfg: RemoteConfig, mgr: object):
+    """The callback the manager runs when the first client shows up."""
+
+    async def ensure() -> None:
+        await _adopt_when_a_phone_arrives(cfg, mgr)
+
+    return ensure
 
 
 def _resolve_tmux_session_or_exit(session: str | None) -> str:

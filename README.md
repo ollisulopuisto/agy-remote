@@ -17,8 +17,9 @@
   - [1. PTY Supervisor Mode (Recommended)](#1-pty-supervisor-mode-recommended)
   - [2. tmux Persistence Mode](#2-tmux-persistence-mode)
   - [3. Adopt an agy that is already running (`attach`)](#3-adopt-an-agy-that-is-already-running-attach)
-  - [4. Standalone Watcher Server Mode](#4-standalone-watcher-server-mode)
-  - [5. Two agy sessions at once](#5-two-agy-sessions-at-once)
+  - [4. Always on, waiting for your phone (`attach --wait`)](#4-always-on-waiting-for-your-phone-attach---wait)
+  - [5. Standalone Watcher Server Mode](#5-standalone-watcher-server-mode)
+  - [6. Two agy sessions at once](#6-two-agy-sessions-at-once)
 - [Using opencode instead](#-using-opencode-instead)
 - [Mobile PWA Setup](#-mobile-pwa-setup)
 - [Remote Tool Approvals](#-remote-tool-approvals)
@@ -230,7 +231,47 @@ restarts the conversation under a supervisor that owns it.
 
 ---
 
-### 4. Standalone Watcher Server Mode
+### 4. Always on, waiting for your phone (`attach --wait`)
+
+The Mac listens from login with no `agy` running at all. When your phone
+connects, a session appears — an existing tmux `agy` is adopted, and if there
+isn't one, `agy` is started in a detached tmux session and adopted:
+
+```bash
+agy-remote attach --wait
+```
+
+That is the whole interaction from the phone's side: **tap the home-screen
+icon**. The QR code is a one-time pairing, not a login — the token and E2EE key
+live in the PWA's `localStorage` and the address bar is scrubbed on first load,
+so there is nothing to scan or type again.
+
+For a login service, [`contrib/net.agy-remote.plist`](contrib/net.agy-remote.plist)
+is a ready launchd agent:
+
+```bash
+cp contrib/net.agy-remote.plist ~/Library/LaunchAgents/
+# edit ProgramArguments to your path (`which agy-remote`)
+launchctl load ~/Library/LaunchAgents/net.agy-remote.plist
+```
+
+Two things worth knowing for an always-on setup:
+
+- **Pairing expires after 30 days** by default and the phone is then silently
+  unpaired, needing the QR again. Raise it with
+  `AGY_REMOTE_CREDENTIAL_TTL_DAYS` (the plist sets 365).
+- **Every connected device has full control.** There is one host-wide token and
+  one key: no per-device identity, no revoking a single phone. The header shows
+  a device count whenever more than one is connected — with no identity to
+  audit, that count is the only sign your pairing URL has escaped. To revoke,
+  restart with `--rotate-token` and re-pair everything.
+
+The tmux session outlives the server: stop `agy-remote` and `agy` keeps working;
+start it again and it re-adopts the same session.
+
+---
+
+### 5. Standalone Watcher Server Mode
 
 If `agy` is running outside tmux. **Read-only plus approvals**: the phone sees
 the transcript and can approve tools, because the transcript is on disk and the
@@ -243,7 +284,7 @@ agy-remote serve
 
 ---
 
-### 5. Two agy sessions at once
+### 6. Two agy sessions at once
 
 Run a second, fully independent instance on another port. Each server supervises
 its own `agy`, gets its own tmux session name, and hands its phone its own URL:
@@ -441,6 +482,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `agy-remote run [args...]` | Launch `agy` under a PTY with dual desktop & mobile control (recommended). |
 | `agy-remote run --tmux` | Launch `agy` inside a persistent `tmux` session (`agy-remote`). |
 | `agy-remote attach` | Adopt an `agy` already running in tmux: full control, nothing restarted. |
+| `agy-remote attach --wait` | Listen with nothing running; start and adopt a session when a phone connects. |
 | `agy-remote serve` | Start standalone log watcher server. |
 | `agy-remote qr` | Re-display pairing QR code and active network URLs. |
 | `agy-remote qr --port N` | Pairing QR for the instance on port `N` (a second instance does not own the shared runtime state). |
@@ -457,6 +499,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `--port`, `-p <port>` | All server commands | Web server port (default: `8765`). |
 | `--host`, `-h <host>` | All server commands | Web server host bind address (default: `0.0.0.0`). |
 | `--token`, `-t <token>` | All server commands | Custom authentication token. |
+| `--wait` | `attach` | Serve with no `agy` running, and start one when a phone connects (for a boot service). |
 | `--session <name>` | `attach` | tmux session to adopt (default: the one running `agy`, if there is exactly one). |
 | `--rotate-token` | `run`, `serve`, `attach` | Mint fresh auth token and encryption key, invalidating existing mobile pairings. |
 | `--no-auth` | All server commands | Disable token authentication (**refused on non-loopback binds**). |

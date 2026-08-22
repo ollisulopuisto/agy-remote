@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keep agy-remote listening from login, with no agy running until you want one.
+
+  `attach` in waiting mode serves immediately and adopts a tmux session when a phone
+  connects — adopting one already running if there is one, starting `agy` in a
+  detached tmux session if there is not. Your phone taps its home-screen icon
+  and there is something there; nothing needs a QR code after the first pairing.
+
+  Install:
+    cp contrib/net.agy-remote.plist ~/Library/LaunchAgents/
+    # edit ProgramArguments below to your agy-remote path (`which agy-remote`)
+    launchctl load ~/Library/LaunchAgents/net.agy-remote.plist
+
+  Stop / uninstall:
+    launchctl unload ~/Library/LaunchAgents/net.agy-remote.plist
+
+  The tmux session outlives this job: unloading the agent leaves agy running,
+  and loading it again re-adopts the same session.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>net.agy-remote</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/CHANGEME/.local/bin/agy-remote</string>
+        <string>attach</string>
+        <string>--wait</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- tmux and agy have to be findable, and the tmux server belongs to your
+         login session, so this must run as a user agent (LaunchAgents), never
+         as a daemon. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- The default pairing lifetime is 30 days, after which the phone is
+             silently unpaired and needs the QR again. Raise it for an
+             always-on server, or leave it out to keep the 30-day default. -->
+        <key>AGY_REMOTE_CREDENTIAL_TTL_DAYS</key>
+        <string>365</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/agy-remote.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/agy-remote.err</string>
+</dict>
+</plist>

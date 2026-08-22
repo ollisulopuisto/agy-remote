@@ -1,5 +1,23 @@
 # Changelog
  
+## v26.08.22.28 — Always ready for the phone
+
+- **`agy-remote attach --wait`.** Serves from login with no `agy` running at
+  all. When a phone connects, a session appears: an existing tmux `agy` is
+  adopted, and if there is none, `agy` is started in a detached tmux session and
+  adopted. Without this, `attach` refuses to start when there is nothing to
+  adopt — right for a person typing it, wrong for launchd, where boot order is
+  not something you get to depend on. Only the *first* client starts a session;
+  later ones join it rather than each spawning an agent of their own.
+- **A launchd agent** in [`contrib/net.agy-remote.plist`](contrib/net.agy-remote.plist).
+  It must be a user agent, not a daemon: the tmux server belongs to your login
+  session. The tmux session outlives the job, so unloading leaves `agy` running
+  and loading again re-adopts it.
+- **Pairing is one-time, by design.** The QR is not a login: both credentials go
+  into the PWA's `localStorage` and are scrubbed from the address bar on first
+  load, so an always-on server needs nothing scanned again — until the 30-day
+  credential TTL expires, which `AGY_REMOTE_CREDENTIAL_TTL_DAYS` raises.
+
 ## v26.08.22.27 — You can see who else is connected
 
 - **A second device connecting is now announced.** Access to this server is
