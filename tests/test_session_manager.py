@@ -65,6 +65,9 @@ async def test_approval_flow(tmp_path: Path):
     cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
     mgr = SessionManager(cfg)
     mgr.active_conversation_id = "conv-1"
+    # Someone has to be looking at this session, or the hook is answered
+    # locally instead of held -- see test_an_approval_nobody_can_see_is_not_held.
+    mgr._connected_clients.add(_FakeWebSocket())
 
     # Simulate approval request
     approval_task = asyncio.create_task(
@@ -538,3 +541,69 @@ async def test_a_second_device_connecting_is_announced(tmp_path: Path):
     mgr.unregister_client(second)
     await mgr.announce_peers()
     assert [f for f in first.sent if f["event"] == "peers"][-1]["data"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
+    """A server must not hold an agy hostage for a banner nobody was shown.
+
+    The PreToolUse hook blocks the agy that fired it until this returns. That
+    is the point when a phone is watching *that* session -- wait, however long
+    it takes. Every other case can only end one way: agy kills the hook after
+    300s and the tool call fails.
+
+    Three of them, all real:
+      - no client connected (an always-on server's normal state),
+      - a client watching a different session, whose banner is deliberately
+        never drawn for this one,
+      - a socket still open with nothing behind it.
+
+    Each now answers immediately with "ask", which hands the decision back to
+    agy: it prompts in its own terminal exactly as it would with no hook.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    async def ask(approval_id: str, conversation_id: str) -> dict:
+        return await asyncio.wait_for(
+            mgr.request_approval(
+                approval_id=approval_id,
+                conversation_id=conversation_id,
+                tool_name="run_command",
+                args={"CommandLine": "grep -r @podpuri.com ."},
+            ),
+            timeout=5,
+        )
+
+    # 1. Nobody connected at all.
+    lonely = await ask("a1", "c1")
+    assert lonely["decision"] == "ask", lonely
+    assert mgr.get_active_pending_approvals() == []
+
+    # 2. A phone is connected, but watching another session. Its banner is only
+    #    ever drawn for the active conversation, so this one would be invisible.
+    mgr._connected_clients.add(_FakeWebSocket())
+    mgr.active_conversation_id = "on-screen"
+    elsewhere = await ask("a2", "some-other-session")
+    assert elsewhere["decision"] == "ask", elsewhere
+
+    # 3. A socket that is open with nothing behind it.
+    class _DeadSocket:
+        async def send_json(self, data) -> None:  # noqa: ANN001
+            raise ConnectionResetError("phone went to sleep")
+
+    mgr._connected_clients.clear()
+    mgr._connected_clients.add(_DeadSocket())
+    mgr.active_conversation_id = "c1"
+    dead = await ask("a3", "c1")
+    assert dead["decision"] == "ask", dead
+    assert mgr.get_active_pending_approvals() == []
+
+    # 4. Someone is genuinely looking at this session: wait, as designed.
+    mgr._connected_clients.clear()
+    mgr._connected_clients.add(_FakeWebSocket())
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            mgr.request_approval(approval_id="a4", conversation_id="c1", tool_name="run_command", args={}),
+            timeout=0.5,
+        )

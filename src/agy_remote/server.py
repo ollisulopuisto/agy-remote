@@ -450,12 +450,15 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         conversation_id = payload.get("conversationId", "default")
         approval_id = str(uuid.uuid4())
 
-        # Trigger Web Push Notification to mobile lock screen
-        push_mgr.send_notification(
-            title=f"Permission Required: {tool_name}",
-            body=f"{tool_name}: {args.get('CommandLine') or args.get('TargetFile') or 'Action requested'}",
-            data={"approval_id": approval_id, "type": "approval_request"},
-        )
+        # Only buzz a phone about a decision the phone is actually going to be
+        # asked for. Otherwise agy answers it in its own terminal, and a push
+        # would be an alert about something already settled.
+        if mgr.can_hold_approval(conversation_id):
+            push_mgr.send_notification(
+                title=f"Permission Required: {tool_name}",
+                body=f"{tool_name}: {args.get('CommandLine') or args.get('TargetFile') or 'Action requested'}",
+                data={"approval_id": approval_id, "type": "approval_request"},
+            )
 
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,

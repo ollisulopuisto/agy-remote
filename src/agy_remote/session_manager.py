@@ -402,6 +402,16 @@ class SessionManager:
         finally:
             self._approval_futures.pop(approval_id, None)
 
+    def can_hold_approval(self, conversation_id: str) -> bool:
+        """Whether an approval for this session would reach a person.
+
+        The banner is only ever drawn for the conversation on screen, so an
+        approval raised by any other session would be registered and shown to
+        nobody -- and then waited on until agy gave up and killed the hook.
+        Anything this returns False for must be answered immediately.
+        """
+        return bool(self._connected_clients) and conversation_id == self.active_conversation_id
+
     async def request_approval(
         self,
         approval_id: str,
@@ -413,8 +423,35 @@ class SessionManager:
 
         The agy PreToolUse hook path: the hook process blocks on this call and
         returns whatever the phone decides (or a timeout denial) to the CLI.
+        With no client connected there is nobody who could ever answer, and
+        waiting can only end one way: agy kills the hook after its own timeout
+        and the tool call fails. A server that runs all day makes that the
+        normal state rather than a rare one -- every tool call in every
+        hand-started agy stalling for five minutes -- so the answer has to be
+        immediate. "ask" hands the decision back to agy, which prompts in its
+        own terminal exactly as it would with no hook installed.
         """
+        if not self.can_hold_approval(conversation_id):
+            logger.info("Approval for %s answered locally: no phone is watching this session", tool_name)
+            return {
+                "decision": "ask",
+                "reason": "agy-remote: no phone watching this session, asking here instead",
+            }
+
         await self.register_approval(approval_id, conversation_id, tool_name, args)
+
+        # `broadcast` prunes clients whose send failed, so an open socket with
+        # nothing behind it -- a phone that slept, a laptop that closed -- is
+        # discovered exactly here. Waiting on it would hang agy just as surely
+        # as having no client at all.
+        if not self._connected_clients:
+            self._pending_approvals.pop(approval_id, None)
+            logger.info("Approval for %s answered locally: the connection was dead", tool_name)
+            return {
+                "decision": "ask",
+                "reason": "agy-remote: no phone connected, asking here instead",
+            }
+
         return await self.await_approval(approval_id)
 
     async def resolve_approval(

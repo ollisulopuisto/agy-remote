@@ -1,5 +1,23 @@
 # Changelog
  
+## v26.08.22.32 — Never hold an agy hostage for a banner nobody was shown
+
+- **Every tool call in a hand-started agy stalled for five minutes.** The
+  PreToolUse hook blocks the agy that fired it until the server answers, which
+  is exactly right when a phone is watching *that* session. It was also what
+  happened in three cases where no answer could ever come: no client connected
+  at all (an always-on server's normal state), a client watching a different
+  session — the banner is deliberately drawn only for the conversation on
+  screen, so the approval was registered and shown to nobody — and a socket
+  still open with nothing behind it. Each ended the same way: agy killed the
+  hook after 300s and the tool call failed, so file reads and commands died in
+  every session on the desk. All three now answer immediately with `ask`, which
+  hands the decision back to agy: it prompts in its own terminal, exactly as it
+  would with no hook installed.
+- **And no push for a decision already made in the terminal.** The lock-screen
+  notification fired before the server knew whether it would hold the approval,
+  so an alert could arrive about something agy had already asked about locally.
+
 ## v26.08.22.31 — The suite stops depending on the developer's tmux
 
 - **Tests inherited each other's supervisor.** `set_tmux_supervisor` writes a
