@@ -1,5 +1,28 @@
 # Changelog
  
+## v26.08.22.38 — Security: the E2EE key stays off the wire
+
+Findings from a security pass over the day's work, both in the crypto layer's
+own guarantees.
+
+- **The E2EE key was served in an HTTP response body** (High). The
+  authenticated manifest from v26.08.22.29 embedded `?token=…#key=…` in
+  `start_url`, fetched on every page load. The key had never existed on the
+  wire before — it rides the QR *fragment* precisely because fragments are not
+  transmitted — and on the documented plaintext-LAN topologies the payload
+  layer it keys is the only protection. Worse, the endpoint converted token
+  knowledge into key knowledge on request, defeating the advertised downgrade
+  defence. The manifest is anonymous again for everyone; the paired install is
+  built **on the device** as a `data:` URI from credentials the PWA already
+  holds, so nothing secret is served (CSP gains `manifest-src 'self' data:`).
+- **The REST prompt fallback bypassed payload encryption** (Medium). When the
+  socket was dead the PWA fell back to `POST /api/prompt` with the prompt as
+  bare JSON — content the README promises AES-GCM covers "even on a cleartext
+  hop". The fallback now seals its body with the same envelope as the socket,
+  the server refuses an unsealed body while E2EE is on (mirroring the
+  WebSocket rule, replay guard included), and the token moved from the query
+  string to a header.
+
 ## v26.08.22.37 — The documentation catches up with the day
 
 - **The architecture diagram predated everything.** It showed one `agy` wired

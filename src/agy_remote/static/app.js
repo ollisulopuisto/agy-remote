@@ -29,16 +29,29 @@ if (e2eeKeyBase64) {
   localStorage.setItem('agy_e2ee_key', e2eeKeyBase64);
 }
 
-// Point the manifest at our token before anyone can install the app. An
-// installed iOS web app gets its own storage container -- nothing this tab
-// saved comes with it -- and launches at the manifest's start_url, so without
-// this "Add to Home Screen" produces an icon that opens unpaired.
-if (authToken) {
-  const manifestLink = document.querySelector('link[rel="manifest"]');
-  if (manifestLink) {
-    manifestLink.href = `/manifest.json?token=${encodeURIComponent(authToken)}`;
+// Build the paired manifest on the device, before anyone can install the app.
+// An installed iOS web app gets its own storage container -- nothing this tab
+// saved comes with it -- and launches at the manifest's start_url, so a bare
+// "/" produced an icon that opened unpaired. The credentials go into a
+// client-built data: URI rather than a server response: the E2EE key must
+// never appear on the wire, which is the whole reason it travels in the QR
+// fragment. The server's /manifest.json stays anonymous.
+(async () => {
+  const key = e2eeKeyBase64;
+  if (!authToken || !key) return;
+  const link = document.querySelector('link[rel="manifest"]');
+  if (!link) return;
+  try {
+    const base = await fetch('/manifest.json').then(r => r.json());
+    const paired = window.AgyFormat.pairedManifest(base, authToken, key);
+    if (paired) {
+      link.href = 'data:application/manifest+json,' + encodeURIComponent(paired);
+    }
+  } catch (e) {
+    // The anonymous manifest still installs; it just opens unpaired.
+    console.debug('Could not build the paired manifest:', e);
   }
-}
+})();
 
 // Both credentials are now in localStorage, so scrub them out of the visible
 // URL: the token would otherwise sit in browser history, in the address bar
@@ -920,13 +933,19 @@ async function sendPrompt(text) {
 }
 
 // The same server, over a request that reports its own failure. Used when the
-// socket is not open, and as the fallback when writing to it throws.
+// socket is not open, and as the fallback when writing to it throws. Sealed
+// with the same envelope as the socket when a key is loaded -- this path
+// exists for a dead socket, not for stepping around payload encryption, and
+// the server refuses a bare body under E2EE for exactly that reason. The
+// token rides in a header, not the query string.
 async function sendPromptOverRest(prompt) {
   try {
-    const res = await fetch(`/api/prompt?token=${encodeURIComponent(authToken)}`, {
+    const payload = { prompt: prompt, conversation_id: currentConversationId };
+    const body = cryptoKey ? await encryptData(payload) : payload;
+    const res = await fetch('/api/prompt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt, conversation_id: currentConversationId })
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+      body: JSON.stringify(body)
     });
     return res.ok;
   } catch (e) {

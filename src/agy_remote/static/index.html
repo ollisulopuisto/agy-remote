@@ -13,7 +13,7 @@
     compromise would be a full account takeover. Markdown is rendered by an
     escape-first renderer in app.js instead of a remote parser.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; manifest-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/static/style.css">
 </head>

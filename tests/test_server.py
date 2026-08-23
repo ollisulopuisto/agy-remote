@@ -254,33 +254,64 @@ def test_a_prompt_nothing_received_says_so(tmp_path: Path):
     assert announced["data"]["delivered_via"] == "broadcast"
 
 
-def test_the_installed_app_launches_paired(tmp_path: Path):
-    """Add to Home Screen must not produce an icon that opens unpaired.
+def test_the_manifest_never_carries_credentials(tmp_path: Path):
+    """The E2EE key must not exist in any HTTP response, for anyone.
 
-    An installed iOS web app gets its own storage container -- nothing the
-    Safari tab saved comes with it -- and launches at the manifest's
-    `start_url`. With that fixed at "/", the icon opened to "no encryption key
-    in this link", and the only way back was the QR code the install was
-    supposed to make unnecessary.
+    v26.08.22.29 put `?token=...#key=...` into the authenticated manifest's
+    `start_url` so the installed app would launch paired. That was the first
+    code path ever to place the key in a response body -- the key rides only in
+    the QR fragment precisely because fragments never traverse the wire, and on
+    the documented plaintext-LAN topologies the payload layer keyed by it is
+    the *only* protection. Worse, it converted token-knowledge into
+    key-knowledge on request, defeating the advertised downgrade defence.
 
-    The credentials therefore have to be in `start_url`, which means the
-    manifest carrying them has to be authenticated like anything else that
-    hands them out.
+    The paired install is built client-side instead: the PWA assembles a
+    manifest from credentials it already holds and hands it to the browser as
+    a data: URI, so nothing secret is served.
     """
     cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
     client = TestClient(create_app(cfg))
 
-    anonymous = client.get("/manifest.json")
-    assert anonymous.status_code == 200, "the browser fetches this before it has anything"
-    assert cfg.auth_token not in anonymous.text
-    assert cfg.e2ee_key not in anonymous.text
-    assert anonymous.json()["start_url"] == "/"
+    for url in ("/manifest.json", "/manifest.json?token=secret123", "/manifest.json?token=nope"):
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert cfg.auth_token not in resp.text, url
+        assert cfg.e2ee_key not in resp.text, url
+        assert resp.json()["start_url"] == "/"
 
-    paired = client.get(f"/manifest.json?token={cfg.auth_token}")
-    assert paired.status_code == 200
-    start_url = paired.json()["start_url"]
-    assert cfg.auth_token in start_url, start_url
-    assert f"#key={cfg.e2ee_key}" in start_url, start_url
+    # The page must be allowed to install its client-built data: manifest.
+    csp = client.get("/manifest.json").headers.get("Content-Security-Policy", "")
+    assert "manifest-src 'self' data:" in csp
 
-    # A wrong token gets the anonymous manifest, never the credentials.
-    assert cfg.auth_token not in client.get("/manifest.json?token=nope").text
+
+def test_the_prompt_endpoint_refuses_plaintext_when_e2ee_is_on(tmp_path: Path):
+    """The REST fallback must not become a payload-encryption bypass.
+
+    The WS handler rejects unsealed frames outright when E2EE is on; this
+    endpoint accepted a bare JSON prompt with only the token, so the fallback
+    the PWA uses when its socket is dead shipped prompt content payload-
+    plaintext across hops the README says the AES-GCM layer protects.
+    """
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    client = TestClient(create_app(cfg))
+    headers = {"X-Auth-Token": "secret123"}
+
+    plain = client.post("/api/prompt", json={"prompt": "into the clear"}, headers=headers)
+    assert plain.status_code == 400, plain.text
+    assert "encrypt" in plain.json()["detail"].lower()
+
+    sealed = encrypt_payload({"prompt": "sealed prompt", "conversation_id": None}, decode_key(cfg.e2ee_key))
+    ok = client.post("/api/prompt", json=sealed, headers=headers)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "ok"
+
+    # A replayed envelope is refused, same as on the socket.
+    replay = client.post("/api/prompt", json=sealed, headers=headers)
+    assert replay.status_code == 400, replay.text
+
+    # With E2EE off there is nothing to seal with; plain JSON stays valid.
+    cfg2 = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, e2ee_enabled=False)
+    client2 = TestClient(create_app(cfg2))
+    assert client2.post("/api/prompt", json={"prompt": "hi"}, headers=headers).status_code == 200

@@ -226,7 +226,24 @@
     return { count: other.length, sessions: sessions, label: label };
   }
 
+  // The manifest an installed app should launch from, built from credentials
+  // the client already holds. Served from the server, this JSON put the E2EE
+  // key into an HTTP response body -- the one place it must never be: the key
+  // rides in the QR fragment precisely because fragments never traverse the
+  // wire, and on a plaintext LAN hop the payload layer it keys is the only
+  // protection. Built here and handed over as a data: URI, it never leaves
+  // the device. Null when either credential is missing: an icon that launches
+  // half-paired is worse than the anonymous fallback.
+  function pairedManifest(baseManifest, token, e2eeKey) {
+    if (!token || !e2eeKey) return null;
+    var m = {};
+    for (var k in baseManifest) m[k] = baseManifest[k];
+    m.start_url = '/?token=' + encodeURIComponent(token) + '#key=' + e2eeKey;
+    return JSON.stringify(m);
+  }
+
   global.AgyFormat = {
+    pairedManifest: pairedManifest,
     approvalsForSession: approvalsForSession,
     approvalCountsBySession: approvalCountsBySession,
     approvalsElsewhere: approvalsElsewhere,

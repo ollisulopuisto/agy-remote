@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import os
 import secrets
@@ -12,7 +11,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from fastapi import (
     FastAPI,
@@ -26,7 +24,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -141,6 +139,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; "
+            "manifest-src 'self' data:; "
             "connect-src 'self' ws: wss:; "
             "object-src 'none'; "
             "base-uri 'none'; "
@@ -343,15 +342,31 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
     @app.post("/api/prompt")
     async def send_prompt(
-        req: UserPromptRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Send user prompt from mobile UI into active session."""
+        """Send user prompt from mobile UI into active session.
+
+        The same sealing rule as the WebSocket: with E2EE on, an unsealed body
+        is never legitimate. This is the fallback the PWA uses when its socket
+        is dead, and accepting bare JSON here shipped prompt content payload-
+        plaintext across the hops the AES-GCM layer exists to protect --
+        holding the token must not be enough to bypass it.
+        """
         verify_auth(request, token, token_header)
 
         mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        req = UserPromptRequest.model_validate(body)
         delivered_via = await mgr.backend.send_prompt(mgr, req.prompt, req.conversation_id)
 
         await mgr.broadcast(
@@ -612,28 +627,24 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
         @app.get("/manifest.json")
-        async def manifest(token: str | None = Query(None)) -> Response:
-            """The PWA manifest, carrying credentials only to a paired caller.
+        async def manifest() -> FileResponse:
+            """The PWA manifest, with no credentials in it, for anyone.
 
-            An installed iOS web app gets its own storage container -- nothing
-            the Safari tab saved comes with it -- and launches at `start_url`.
-            Fixed at "/", the home-screen icon opened to "no encryption key in
-            this link", so the install that was meant to end the QR code
-            required one. Putting the credentials in `start_url` fixes that,
-            and means this response hands out secrets: it is authenticated like
-            every other one, and an anonymous fetch still gets a usable
-            manifest with a bare start_url.
+            An earlier fix put `?token=...#key=...` into an authenticated
+            manifest's `start_url` so the installed app would launch paired.
+            That was the first code path ever to place the E2EE key in a
+            response body -- the key rides only in the QR *fragment* precisely
+            because fragments never traverse the wire, and on the documented
+            plaintext-LAN topologies the payload layer keyed by it is the only
+            protection. It also converted token-knowledge into key-knowledge on
+            request, defeating the downgrade defence outright.
+
+            The paired install is built client-side instead: the PWA assembles
+            a manifest from the credentials it already holds in localStorage
+            and hands it to the browser as a data: URI, so nothing secret is
+            ever served. This static file is the anonymous fallback.
             """
-            with open(STATIC_DIR / "manifest.json", encoding="utf-8") as f:
-                data = json.load(f)
-
-            if not cfg.enable_auth or token_ok(token):
-                start = f"/?token={quote(cfg.auth_token)}"
-                if cfg.e2ee_enabled:
-                    start += f"#key={cfg.e2ee_key}"
-                data["start_url"] = start
-
-            return Response(content=json.dumps(data), media_type="application/manifest+json")
+            return FileResponse(STATIC_DIR / "manifest.json", media_type="application/manifest+json")
 
         @app.get("/sw.js")
         async def service_worker() -> FileResponse:

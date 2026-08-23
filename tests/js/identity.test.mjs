@@ -174,3 +174,22 @@ test('approvals are grouped by the session that raised them', () => {
   assert.equal(approvalsElsewhere(pending, 'b').count, 2);
   assert.equal(approvalsElsewhere([{id: '1', conversation_id: 'a'}], 'a').count, 0);
 });
+
+test('the paired manifest is built from held credentials, never fetched', () => {
+  const { pairedManifest } = sandbox.window.AgyFormat;
+  const base = { name: 'Agent Remote', start_url: '/', display: 'standalone' };
+
+  const m = JSON.parse(pairedManifest(base, 'tok+en', 'k=ey'));
+  // The token is query (the server needs it); the key is fragment (the server
+  // must never see it -- fragments do not traverse the wire).
+  assert.equal(m.start_url, '/?token=tok%2Ben#key=k=ey');
+  assert.equal(m.name, 'Agent Remote');
+
+  // Missing either credential: leave the manifest alone rather than install
+  // an icon that launches half-paired.
+  assert.equal(pairedManifest(base, '', 'k'), null);
+  assert.equal(pairedManifest(base, 't', null), null);
+
+  // The original object is not mutated -- it may be reused.
+  assert.equal(base.start_url, '/');
+});
