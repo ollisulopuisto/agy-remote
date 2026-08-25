@@ -448,7 +448,8 @@ the tmux path calls `tmux send-keys`.
 | `Enter` | `enter` | Confirm the highlighted choice |
 | `Tab` | `tab` | Confirm slash-command autocomplete |
 | `y` / `n` | `yes` / `no` | Answer a tool confirmation |
-| `Ctrl+C` | `interrupt` | Interrupt |
+| `Ctrl+C` | `interrupt` (alias `ctrl_c`) | Interrupt |
+| `Ctrl+Z` | `ctrl_z` / `suspend` | Delivered as a literal byte — it can never suspend agy (see below) |
 | `PgUp` `PgDn` | `page_up` `page_down` | Scroll a panel |
 | `Backspace` | `backspace` | Delete a character |
 
@@ -646,6 +647,12 @@ A: On iOS, Web Push requires saving the page as a PWA via **Share ➔ Add to Hom
 
 **Q: Can I use `agy-remote` without `tmux`?**  
 A: Yes. Plain `agy-remote run` uses the built-in PTY supervisor; `--tmux` is opt-in.
+
+**Q: How do I detach from `agy-remote run`? It looks like a regular agy screen.**  
+A: It *is* a regular foreground process — no tmux, no screen, no daemon; everything dies with the terminal by design. Ctrl+Z followed by `bg` gets you close to a detach: the shell gets your terminal back while the server keeps serving the phone, and `fg` re-enters with a repaint. For a session you can genuinely leave and re-enter, use `run --tmux` (detach `Ctrl+b d`) or `attach`.
+
+**Q: Ctrl+Z (or Ctrl+C) froze everything and nothing responded. Why?**  
+A: That was a real bug, fixed in v26.08.25.1. A supervised agy has no shell behind it, so anything that suspended it (including agy suspending *itself* on the Ctrl+Z byte) froze the session with the desktop terminal stuck in raw mode — Ctrl+C then landed in a stopped process. Three guards now make the wedge impossible (VSUSP disabled, agy started with SIGTSTP ignored, any stop answered with SIGCONT), and desktop Ctrl+Z suspends agy-remote itself instead — see [Terminal Key Controls](#-terminal-key-controls). If a session still freezes, update first: `uv tool upgrade agy-remote`.
 
 ---
 
