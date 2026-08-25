@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Ctrl+Z and Ctrl+C can no longer wedge a session
+## v26.08.25.1 — Ctrl+Z and Ctrl+C can no longer wedge a session
 
 The VSUSP guard from the earlier round only stopped the *line discipline* from
 generating SIGTSTP. A TUI that reads the 0x1a byte and raises SIGTSTP on itself
