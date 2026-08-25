@@ -205,6 +205,19 @@ agy-remote run
 
 *Scan the QR code with your phone camera to connect. The pairing survives restarts — the token and encryption key are minted once and reused.*
 
+This mode is a **foreground** process — no tmux, no screen, no daemon. The
+supervisor, the web server and `agy` live and die together, so closing the
+terminal ends the session. Your shell's job control still works, though:
+
+- **`Ctrl+C`** is forwarded to `agy` (interrupt whatever it is doing).
+- **`Ctrl+Z`** suspends **agy-remote itself** back to your shell — `agy` keeps
+  running while it is gone. `fg` brings the screen back (it repaints), `bg`
+  resumes serving your phone while the terminal stays yours, and `kill %1`
+  ends the whole thing.
+
+If you want a session you can genuinely walk away from and re-enter later, use
+`run --tmux` (detach with `Ctrl+b d`) or `attach` below.
+
 ---
 
 ### 2. tmux Persistence Mode
@@ -218,6 +231,9 @@ agy-remote run --tmux
 The QR pauses on screen until you press a key — attaching to tmux replaces the
 whole terminal, so the code would otherwise vanish behind agy before you can
 scan it. `agy-remote qr` re-displays it at any time.
+
+Detach with **`Ctrl+b d`** (tmux's default); the session keeps running and
+`tmux attach -t agy-remote` re-enters it.
 
 ---
 
@@ -435,6 +451,15 @@ the tmux path calls `tmux send-keys`.
 | `Ctrl+C` | `interrupt` | Interrupt |
 | `PgUp` `PgDn` | `page_up` `page_down` | Scroll a panel |
 | `Backspace` | `backspace` | Delete a character |
+
+**Why Ctrl+Z never suspends agy.** A supervised agy has no shell behind it, so
+a SIGTSTP would freeze it with nothing able to run `fg` — the screen stops, and
+every key after that (Ctrl+C included) lands in a stopped process. Three guards
+make that impossible: the pty's suspend character is disabled, agy starts with
+SIGTSTP ignored (in both PTY and tmux modes), and the PTY supervisor answers
+any stop that slips through with an immediate SIGCONT. At the desktop, `run`
+routes Ctrl+Z to its own job control instead — see
+[PTY Supervisor Mode](#1-pty-supervisor-mode-recommended).
 
 **Seeing the screen.** The PWA renders `transcript.jsonl`, which holds the
 conversation and nothing else — everything agy draws transiently (the `/model`

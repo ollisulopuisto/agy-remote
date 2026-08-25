@@ -1,5 +1,37 @@
 # Changelog
- 
+
+## v26.08.25.1 — Ctrl+Z and Ctrl+C can no longer wedge a session
+
+The VSUSP guard from the earlier round only stopped the *line discipline* from
+generating SIGTSTP. A TUI that reads the 0x1a byte and raises SIGTSTP on itself
+still froze the whole session: the child stopped, the WNOHANG-only wait never
+noticed a *stopped* child, and the desktop terminal was left in raw mode — so
+the follow-up Ctrl+C was forwarded as a byte into a stopped process and the
+only way out was a kill from another terminal.
+
+- **Desktop Ctrl+Z now suspends agy-remote, not agy** (PTY mode). The
+  supervisor is the process that *has* a shell to `fg` it, so it is what job
+  control acts on: the terminal is restored, agy keeps running, and `fg`
+  repaints the screen. `bg` is a working detach-lite — the loop notices it no
+  longer owns the terminal, stops touching stdin/stdout (no SIGTTIN stops, no
+  scribbling over the shell prompt), and keeps serving the phone mirror until
+  `fg` takes the terminal back.
+- **A stopped child is resumed immediately.** The reaper waits with
+  `WUNTRACED` and answers any stop with SIGCONT: there is no shell to `fg` a
+  supervised agy, so a stop is never legitimate, whatever raised it.
+- **agy starts with SIGTSTP ignored** in both modes — `SIG_IGN` before exec in
+  the PTY child, `trap '' TSTP` in the tmux pane command — closing the
+  self-raised-SIGTSTP path at the source, phone-sent `ctrl_z` included.
+- **No more orphaned agy on abnormal exit.** When the supervisor loop ends for
+  a reason other than the child exiting (stdin EOF, a pty error, a real
+  SIGINT), the child used to be left wedged on a pty nobody reads. It is now
+  hung up (SIGHUP, then SIGKILL after 2s) — `run` owns the agy it starts and
+  dies with it.
+- **README** documents the desktop key behaviour in `run` (Ctrl+C forwarded,
+  Ctrl+Z suspends the supervisor, `bg`/`fg`/`kill %1`), that `run` is a
+  foreground process using neither tmux nor screen, and that a detachable
+  session is `run --tmux` (`Ctrl+b d`) or `attach`.
+
 ## v26.08.22.38 — Security: the E2EE key stays off the wire
 
 Findings from a security pass over the day's work, both in the crypto layer's
