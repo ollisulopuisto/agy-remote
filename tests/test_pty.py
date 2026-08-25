@@ -1,6 +1,10 @@
 """Unit tests for the PTY supervisor module."""
 
 import os
+import signal
+import time
+
+import pytest
 
 from agy_remote.pty_runner import PtySupervisor, get_pty_supervisor, set_pty_supervisor
 
@@ -166,6 +170,82 @@ def test_ctrl_z_does_not_suspend_child_session():
         os.close(master_fd)
 
     assert result == b"received:\x1a\n", result.decode()
+
+
+def test_child_starts_with_sigtstp_ignored():
+    """A TUI that raises SIGTSTP on itself must not be able to freeze the session.
+
+    Disabling VSUSP stops the line discipline generating the signal, but not a
+    program that reads the 0x1a byte and suspends itself. SIG_IGN survives
+    exec, so setting it before execvp shields agy from that path too.
+    """
+    import pty as pty_mod
+
+    master_fd, slave_fd = pty_mod.openpty()
+    read_fd, write_fd = os.pipe()
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.close(master_fd)
+            os.close(read_fd)
+            PtySupervisor()._become_session_leader(slave_fd)
+            ignored = signal.getsignal(signal.SIGTSTP) is signal.SIG_IGN
+            os.write(write_fd, b"ok" if ignored else b"sigtstp-not-ignored")
+        except Exception as e:  # noqa: BLE001 - reported to the parent, not raised
+            os.write(write_fd, f"failed: {e}".encode())
+        finally:
+            os._exit(0)
+
+    os.close(write_fd)
+    os.close(slave_fd)
+    try:
+        result = os.read(read_fd, 256)
+        os.waitpid(pid, 0)
+    finally:
+        os.close(read_fd)
+        os.close(master_fd)
+
+    assert result == b"ok", result.decode()
+
+
+def test_a_stopped_child_is_immediately_resumed():
+    """The reaper answers every stop with SIGCONT.
+
+    There is no shell to `fg` the supervised agy, so a stopped child is always
+    a wedge: the old WNOHANG-only wait never even saw it, and the loop spun
+    over a frozen screen forever.
+    """
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.kill(os.getpid(), signal.SIGSTOP)
+        finally:
+            os._exit(7)
+
+    deadline = time.monotonic() + 5.0
+    code = None
+    while code is None and time.monotonic() < deadline:
+        code = PtySupervisor._reap_child(pid)
+        time.sleep(0.01)
+
+    assert code == 7
+
+
+def test_an_orphaned_child_is_hung_up_on_exit():
+    """The exit paths that are not the child exiting must not leak an agy."""
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            signal.signal(signal.SIGHUP, signal.SIG_DFL)
+            time.sleep(30)
+        finally:
+            os._exit(0)
+
+    PtySupervisor()._hang_up_child(pid)
+
+    with pytest.raises(ChildProcessError):
+        os.waitpid(pid, os.WNOHANG)
 
 
 def test_pty_mode_respects_qr_timeout(monkeypatch):

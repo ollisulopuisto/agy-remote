@@ -106,8 +106,11 @@ class TmuxSupervisor:
         cmd_str = shlex.join(argv)
         if not self.has_session():
             # Disable VSUSP in the pane so Ctrl-Z does not suspend agy into an
-            # unrecoverable hang without a shell to fg it.
-            safe_cmd = f"stty susp undef 2>/dev/null; exec {cmd_str}"
+            # unrecoverable hang without a shell to fg it, and start agy with
+            # SIGTSTP ignored (`trap` survives exec) so a TUI that reads the
+            # 0x1a byte and raises SIGTSTP on itself cannot wedge the pane
+            # either.
+            safe_cmd = f"stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec {cmd_str}"
             subprocess.run(
                 ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
                 check=True,
@@ -134,9 +137,10 @@ class TmuxSupervisor:
         argv = self.cmd
         if self.env:
             argv = ["env", *(f"{k}={v}" for k, v in self.env.items()), *argv]
-        # Same VSUSP guard as start_or_attach: Ctrl-Z would otherwise suspend
-        # agy with no shell to bring it back.
-        safe_cmd = f"stty susp undef 2>/dev/null; exec {shlex.join(argv)}"
+        # Same guards as start_or_attach: Ctrl-Z would otherwise suspend agy
+        # with no shell to bring it back, whether via the line discipline
+        # (VSUSP) or a TUI raising SIGTSTP on itself (trap '' TSTP).
+        safe_cmd = f"stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec {shlex.join(argv)}"
         res = subprocess.run(
             ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
             capture_output=True,

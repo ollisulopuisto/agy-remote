@@ -135,6 +135,6 @@ def test_start_or_attach_creates_session_with_vsusp_disabled(monkeypatch):
     ret = sup.start_or_attach()
 
     assert ret == 0
-    # Verify new-session contains stty susp undef
+    # Verify new-session disables VSUSP and starts agy with SIGTSTP ignored
     new_session_cmd = next(c for c in calls if "new-session" in c)
-    assert "stty susp undef 2>/dev/null; exec agy --fast" in new_session_cmd
+    assert "stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec agy --fast" in new_session_cmd
