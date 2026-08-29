@@ -505,6 +505,20 @@ function handleServerEvent(event) {
     checkUrlNavigation();
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
+  } else if (type === 'session_spawning') {
+    // A stage of this sheet's own spawn: the chip walks cloning -> starting,
+    // and a failure shows git's stderr rather than a guess.
+    if (!activeSpawn || !window.AgySessions.spawnEventMatches(data, activeSpawn)) return;
+    const label = window.AgySessions.spawnStageLabel(data.stage, data.error);
+    if (!label) return;
+    if (data.stage === 'failed') {
+      showSpawnFailure(label);
+    } else {
+      newSessionStage.textContent = label;
+    }
+  } else if (type === 'session_created') {
+    if (!activeSpawn || !window.AgySessions.spawnEventMatches(data, activeSpawn)) return;
+    finishSpawn(data);
   } else if (type === 'prompt_sent') {
     // The server took it but nothing was there to receive it: keep the text
     // and say so, rather than letting it read as delivered.
@@ -1238,6 +1252,143 @@ function closeDrawer() {
   drawer.classList.remove('open');
   drawerBackdrop.classList.remove('open');
 }
+
+// ----------------------------------------------------------------------------
+// New Session Sheet (W1, item 1.3)
+//
+// The sheet asks; the server does. It POSTs the form and then waits on the
+// `session_spawning` / `session_created` events, which name the spawn they
+// belong to -- only the spawn this sheet sent may drive its chip, so two
+// phones on one server do not walk each other's progress.
+// ----------------------------------------------------------------------------
+const newSessionBtn = document.getElementById('newSessionBtn');
+const newSessionSheet = document.getElementById('newSessionSheet');
+const newSessionBackdrop = document.getElementById('newSessionBackdrop');
+const newSessionRepo = document.getElementById('newSessionRepo');
+const newSessionBranch = document.getElementById('newSessionBranch');
+const newSessionTask = document.getElementById('newSessionTask');
+const newSessionName = document.getElementById('newSessionName');
+const newSessionProgress = document.getElementById('newSessionProgress');
+const newSessionStage = document.getElementById('newSessionStage');
+const newSessionError = document.getElementById('newSessionError');
+const newSessionStartBtn = document.getElementById('newSessionStartBtn');
+const newSessionCancelBtn = document.getElementById('newSessionCancelBtn');
+const newSessionCloseBtn = document.getElementById('newSessionCloseBtn');
+
+// The spawn this sheet sent, as the server named it (name, workdir,
+// tmux_session), or null while the sheet is idle.
+let activeSpawn = null;
+
+function setSheetBusy(busy) {
+  [newSessionRepo, newSessionBranch, newSessionTask, newSessionName, newSessionStartBtn, newSessionCancelBtn]
+    .forEach(el => { el.disabled = busy; });
+  newSessionProgress.hidden = !busy;
+  if (!busy) {
+    activeSpawn = null;
+    newSessionError.hidden = true;
+  }
+}
+
+function openNewSessionSheet() {
+  closeDrawer();
+  resetNewSessionSheet();
+  newSessionSheet.hidden = false;
+  newSessionBackdrop.classList.add('open');
+  // The slide starts next frame, from below the viewport, once it is drawn.
+  requestAnimationFrame(() => newSessionSheet.classList.add('open'));
+  newSessionRepo.focus();
+}
+
+function closeNewSessionSheet() {
+  if (activeSpawn) return; // a running spawn keeps the sheet until it settles
+  newSessionSheet.classList.remove('open');
+  newSessionBackdrop.classList.remove('open');
+  setTimeout(() => {
+    newSessionSheet.hidden = true;
+    resetNewSessionSheet();
+  }, 220);
+}
+
+function resetNewSessionSheet() {
+  [newSessionRepo, newSessionBranch, newSessionName].forEach(el => { el.value = ''; });
+  newSessionTask.value = '';
+  newSessionStage.textContent = '';
+  setSheetBusy(false);
+}
+
+function showSpawnFailure(message) {
+  setSheetBusy(false);
+  newSessionError.textContent = message;
+  newSessionError.hidden = false;
+}
+
+async function startNewSession() {
+  const built = window.AgySessions.buildSpawnRequest({
+    repoUrl: newSessionRepo.value,
+    branch: newSessionBranch.value,
+    task: newSessionTask.value,
+    name: newSessionName.value,
+  });
+  if (!built.ok) {
+    newSessionError.textContent = built.error;
+    newSessionError.hidden = false;
+    return;
+  }
+
+  newSessionError.hidden = true;
+  setSheetBusy(true);
+  newSessionStage.textContent = 'Sending…';
+
+  try {
+    // Sealed like the prompts: the task is content the server would never
+    // want on the wire in the clear. The 202 answer is plain.
+    const body = cryptoKey ? await encryptData(built.payload) : built.payload;
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      let detail = `The server refused the spawn (HTTP ${res.status}).`;
+      try {
+        const data = await res.json();
+        if (data && data.detail) detail = data.detail;
+      } catch (e) {
+        // The body was not JSON; the status line is the answer.
+      }
+      showSpawnFailure(detail);
+      return;
+    }
+    activeSpawn = await res.json();
+    newSessionStage.textContent = 'Cloning…';
+  } catch (e) {
+    showSpawnFailure('Could not reach the server to start the session.');
+  }
+}
+
+// `session_created` for our spawn: the session exists and is being supervised.
+// Its conversation appears the moment agy first speaks, and the server binds
+// and switches to it then -- so the sheet's job is done; show Ready and let
+// it go.
+function finishSpawn(data) {
+  newSessionStage.textContent = data && data.ready === false
+    ? 'Started — still settling'
+    : 'Ready';
+  setSheetBusy(false);
+  setTimeout(closeNewSessionSheet, 1400);
+}
+
+newSessionBtn.addEventListener('click', openNewSessionSheet);
+newSessionStartBtn.addEventListener('click', startNewSession);
+newSessionCancelBtn.addEventListener('click', closeNewSessionSheet);
+newSessionCloseBtn.addEventListener('click', closeNewSessionSheet);
+newSessionBackdrop.addEventListener('click', closeNewSessionSheet);
+newSessionTask.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    startNewSession();
+  }
+});
 
 // Mobile Visual Viewport Handling (iOS & Android virtual keyboard)
 function syncViewportHeight() {
