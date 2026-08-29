@@ -179,6 +179,26 @@ class TmuxSupervisor:
         )
         return res.returncode == 0
 
+    def get_pane_pid(self) -> int | None:
+        """The PID of the process running in the target pane, or None if gone."""
+        if not self.has_session():
+            return None
+        return pane_pid(self.target)
+
+
+def pane_pid(target: str) -> int | None:
+    """The PID of the process running in the target tmux pane."""
+    res = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", target, "-F", "#{pane_pid}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return None
+    val = (res.stdout or "").strip()
+    return int(val) if val.isdigit() else None
+
 
 def panes_running(command: str = "agy") -> list[dict[str, str]]:
     """Panes whose foreground command is `command`, as tmux targets.

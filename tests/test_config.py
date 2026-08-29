@@ -258,6 +258,26 @@ def test_find_tailscale_binary_fallback_locations(monkeypatch, tmp_path: Path):
     assert config_mod.find_tailscale_binary() == str(fake_app_ts)
 
 
+def test_find_tailscale_binary_resolves_symlinks(monkeypatch, tmp_path: Path):
+    from agy_remote import config as config_mod
+
+    target = tmp_path / "Applications" / "Tailscale.app" / "Contents" / "MacOS" / "Tailscale"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("#!/bin/sh\necho ok\n")
+    target.chmod(0o755)
+
+    symlink = tmp_path / "bin" / "tailscale"
+    symlink.parent.mkdir(parents=True, exist_ok=True)
+    symlink.symlink_to(target)
+
+    monkeypatch.delenv("AGY_REMOTE_TAILSCALE_BIN", raising=False)
+    monkeypatch.delenv("AGY_REMOTE_TAILSCALE_PATH", raising=False)
+    monkeypatch.setattr(config_mod.shutil, "which", lambda cmd: str(symlink) if cmd == "tailscale" else None)
+
+    # find_tailscale_binary should resolve the symlink so argv[0] runs the real bundle binary
+    assert config_mod.find_tailscale_binary() == str(target.resolve())
+
+
 def test_get_tailscale_ip_and_dns_with_custom_bin(monkeypatch, tmp_path: Path):
     import subprocess
 

@@ -10,9 +10,12 @@ first would answer for a session it is not showing.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import agy_remote.cli  # noqa: F401
@@ -155,3 +158,45 @@ def test_qr_can_target_a_second_instance(monkeypatch, tmp_path: Path):
     assert res.exit_code == 0, res.output
     assert "8766" in res.output
     assert ":8765" not in res.output
+
+
+def _write_conversation(brain_dir: Path, conv_id: str, first_message: str, mtime: float) -> Path:
+    log = brain_dir / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_INPUT", "content": first_message}) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(log, (mtime, mtime))
+    os.utime(brain_dir / conv_id, (mtime, mtime))
+    return log
+
+
+@pytest.mark.asyncio
+async def test_supervised_conversation_binds_and_prevents_switching_to_other_instance(tmp_path: Path):
+    """Two session managers supervising separate agy processes don't cross-talk."""
+    from agy_remote.session_manager import SessionManager
+
+    now = time.time()
+    _write_conversation(tmp_path, "conv-inst-1", "agy 1 work", now - 50)
+    _write_conversation(tmp_path, "conv-inst-2", "agy 2 work", now)
+
+    cfg1 = _cfg(tmp_path, 8765)
+    mgr1 = SessionManager(cfg1)
+    # Server 1 binds to conv-inst-1
+    await mgr1.bind_supervised_conversation("conv-inst-1")
+    assert mgr1.active_conversation_id == "conv-inst-1"
+
+    cfg2 = _cfg(tmp_path, 8766)
+    mgr2 = SessionManager(cfg2)
+    # Server 2 binds to conv-inst-2
+    await mgr2.bind_supervised_conversation("conv-inst-2")
+    assert mgr2.active_conversation_id == "conv-inst-2"
+
+    # Further activity in conv-inst-2 does not pull mgr1 away from conv-inst-1
+    await mgr1.follow_latest_conversation()
+    assert mgr1.active_conversation_id == "conv-inst-1"
+
+    # Further activity in conv-inst-1 does not pull mgr2 away from conv-inst-2
+    await mgr2.follow_latest_conversation()
+    assert mgr2.active_conversation_id == "conv-inst-2"

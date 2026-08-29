@@ -1,6 +1,35 @@
 # Changelog
 
-## v26.08.25.1 — Ctrl+Z and Ctrl+C can no longer wedge a session
+## v26.08.29.2 — Multi-instance isolation and session binding
+
+- **Supervised session binding and isolation.** When running under PTY or tmux
+  supervision, the server automatically discovers and binds to the exact
+  conversation ID belonging to that supervised `agy` process (via `lsof` file
+  descriptor lookup).
+- **Prevent conversation flapping.** Auto-following the latest session now tracks
+  session creation time (`get_newest_conversation_id`) rather than modification
+  time, ensuring background activity in other active sessions does not yank the
+  active view away.
+- **Targeted prompt routing.** Prompts sent to a specific conversation ID will
+  no longer inject keystrokes into a supervisor running a different active session.
+- **Interactive approval badges & drawer refresh.** Tapping the "approvals
+  waiting elsewhere" badge navigates directly to the waiting session (or opens the
+  drawer if multiple), and opening the drawer immediately refreshes the active
+  session list.
+
+
+## v26.08.29.1 — Resolve Tailscale CLI symlinks for HTTPS and E2EE
+
+- **Symlinks are resolved during Tailscale binary discovery.** When `tailscale`
+  is located via `PATH` or standard locations as a symlink (such as Homebrew's
+  symlinks on macOS pointing to `/Applications/Tailscale.app/Contents/MacOS/Tailscale`),
+  the binary path is now resolved to its real target so commands like
+  `tailscale cert` and `tailscale status --json` succeed without bundle permission
+  errors.
+- **`agy-remote qr` preview configures TLS.** When no server is actively running,
+  `agy-remote qr` now checks for Tailscale and displays the HTTPS MagicDNS URL
+  in the preview banner and QR code rather than falling back to plain HTTP.
+
 
 The VSUSP guard from the earlier round only stopped the *line discipline* from
 generating SIGTSTP. A TUI that reads the 0x1a byte and raises SIGTSTP on itself

@@ -845,6 +845,7 @@ def show_qr(port: int | None) -> None:
             "Showing a preview; start one with [bold]agy-remote run[/bold] "
             "and re-run this command to get a scannable code.\n"
         )
+        _setup_tls(cfg, None)
     print_banner(cfg)
 
 

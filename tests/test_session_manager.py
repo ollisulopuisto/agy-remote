@@ -177,6 +177,7 @@ def _write_conversation(brain_dir: Path, conv_id: str, first_message: str, mtime
         encoding="utf-8",
     )
     os.utime(log, (mtime, mtime))
+    os.utime(brain_dir / conv_id, (mtime, mtime))
     return log
 
 
@@ -229,6 +230,76 @@ async def test_selecting_the_newest_conversation_resumes_following(tmp_path: Pat
     await mgr.follow_latest_conversation()
 
     assert mgr.active_conversation_id == "newest-conv"
+
+
+@pytest.mark.asyncio
+async def test_multiple_concurrent_conversations_do_not_cause_flapping(tmp_path: Path):
+    """Activity in an existing session must not yank the view away from another active session."""
+    now = time.time()
+    log_a = _write_conversation(tmp_path, "conv-a", "task A", now - 100)
+    log_b = _write_conversation(tmp_path, "conv-b", "task B", now)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    await mgr.switch_conversation("conv-b")
+    assert mgr.active_conversation_id == "conv-b"
+
+    # conv-a receives a new step, bumping its mtime past conv-b
+    with open(log_a, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"step_index": 1, "type": "USER_INPUT", "source": "USER_INPUT", "content": "more A"}) + "\n")
+    os.utime(log_a, (now + 50, now + 50))
+
+    # The watcher must NOT switch to conv-a: conv-a is an existing session, not a newly started one.
+    switched = await mgr.follow_latest_conversation()
+    assert not switched
+    assert mgr.active_conversation_id == "conv-b"
+
+    # conv-b receives a new step
+    with open(log_b, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"step_index": 1, "type": "USER_INPUT", "source": "USER_INPUT", "content": "more B"}) + "\n")
+    os.utime(log_b, (now + 60, now + 60))
+
+    switched = await mgr.follow_latest_conversation()
+    assert not switched
+    assert mgr.active_conversation_id == "conv-b"
+
+    # A brand new session is launched
+    _write_conversation(tmp_path, "conv-c", "brand new C", now + 100)
+    switched = await mgr.follow_latest_conversation()
+    assert switched
+    assert mgr.active_conversation_id == "conv-c"
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_to_different_conversation_does_not_type_into_wrong_supervisor(tmp_path: Path, monkeypatch):
+    """Prompt sent to an inactive conversation must not type into the active supervisor."""
+    from agy_remote import pty_runner
+
+    typed_prompts = []
+
+    class MockPty:
+        running = True
+
+        def inject_input(self, text: str) -> bool:
+            typed_prompts.append(text)
+            return True
+
+    mock_pty = MockPty()
+    monkeypatch.setattr(pty_runner, "get_pty_supervisor", lambda: mock_pty)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    mgr = SessionManager(cfg)
+    mgr.active_conversation_id = "conv-1"
+
+    # Prompt sent to matching active conversation -> delivered to pty
+    res1 = await mgr.backend.send_prompt(mgr, "do this", conversation_id="conv-1")
+    assert res1 == "pty"
+    assert typed_prompts == ["do this"]
+
+    # Prompt sent to a different conversation -> broadcasted, not typed into conv-1's pty
+    res2 = await mgr.backend.send_prompt(mgr, "do that", conversation_id="conv-2")
+    assert res2 == "broadcast"
+    assert typed_prompts == ["do this"]  # did not receive "do that"
 
 
 # ---------------------------------------------------------------------------

@@ -465,6 +465,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         conversation_id = payload.get("conversationId", "default")
         approval_id = str(uuid.uuid4())
 
+        # If this server is supervising a session, bind to its reported conversation ID
+        if conversation_id and conversation_id != "default":
+            await mgr.bind_supervised_conversation(conversation_id)
+
         # Only buzz a phone about a decision the phone is actually going to be
         # asked for. Otherwise agy answers it in its own terminal, and a push
         # would be an alert about something already settled.
