@@ -335,14 +335,34 @@ def session_id_of(session_name: str) -> str | None:
 
 
 tmux_instance: TmuxSupervisor | None = None
+_tmux_registry: dict[str, TmuxSupervisor] = {}
 
 
-def get_tmux_supervisor() -> TmuxSupervisor | None:
-    """Get global active tmux supervisor."""
+def register_tmux_supervisor(sup: TmuxSupervisor) -> None:
+    """Register a supervisor in the global tmux session registry."""
+    _tmux_registry[sup.session_name] = sup
+    global tmux_instance
+    if tmux_instance is None:
+        tmux_instance = sup
+
+
+def unregister_tmux_supervisor(session_name: str) -> None:
+    """Remove a supervisor from the registry."""
+    _tmux_registry.pop(session_name, None)
+    global tmux_instance
+    if tmux_instance and tmux_instance.session_name == session_name:
+        tmux_instance = next(iter(_tmux_registry.values()), None)
+
+
+def get_tmux_supervisor(session_name: str | None = None) -> TmuxSupervisor | None:
+    """Get tmux supervisor by session name, falling back to default/active supervisor."""
+    if session_name and session_name in _tmux_registry:
+        return _tmux_registry[session_name]
     return tmux_instance
 
 
 def set_tmux_supervisor(sup: TmuxSupervisor) -> None:
-    """Set global active tmux supervisor."""
+    """Set global active tmux supervisor and register it."""
     global tmux_instance
     tmux_instance = sup
+    _tmux_registry[sup.session_name] = sup

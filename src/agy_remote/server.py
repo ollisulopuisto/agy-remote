@@ -305,16 +305,22 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     @app.get("/api/screen")
     async def get_screen(
         request: Request,
+        conversation_id: str | None = Query(None),
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
         """The supervised terminal as plain text, or null in watcher mode."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
-        return {"terminal": mgr.terminal.snapshot() if mgr.terminal else None}
+        mirror = mgr.get_screen_mirror(conversation_id)
+        return {"terminal": mirror.snapshot() if mirror else None}
 
-    def _press_key(key: str) -> str:
+    def _press_key(key: str, conversation_id: str | None = None) -> str:
         """Deliver a key to whichever supervisor is live, if any."""
+        sup = session_mgr.get_supervisor(conversation_id)
+        if sup is not None and hasattr(sup, "send_key"):
+            return "ok" if sup.send_key(key) else "refused"
+
         tmux = get_tmux_supervisor()
         if tmux and tmux.has_session():
             return "ok" if tmux.send_key(key) else "refused"
@@ -338,7 +344,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         only by keystroke; a prompt line cannot express any of them.
         """
         verify_auth(request, token, token_header)
-        return {"status": _press_key(req.key)}
+        return {"status": _press_key(req.key, req.conversation_id)}
 
     @app.post("/api/prompt")
     async def send_prompt(
@@ -595,12 +601,15 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 elif action == "request_screen":
                     # A client revealing the panel wants the screen now, not at
                     # the next redraw -- a still terminal never sends one.
-                    if mgr.terminal is not None:
-                        await mgr.send_to(websocket, {"event": "terminal_screen", "data": mgr.terminal.snapshot()})
+                    conv_id = data.get("conversation_id")
+                    mirror = mgr.get_screen_mirror(conv_id)
+                    if mirror is not None:
+                        await mgr.send_to(websocket, {"event": "terminal_screen", "data": mirror.snapshot()})
                 elif action == "send_key":
                     key = data.get("key")
+                    conv_id = data.get("conversation_id")
                     if isinstance(key, str) and is_known_key(key):
-                        _press_key(key)
+                        _press_key(key, conv_id)
                     else:
                         logger.warning("Refused unknown key press: %r", key)
                 elif action == "approve_tool":

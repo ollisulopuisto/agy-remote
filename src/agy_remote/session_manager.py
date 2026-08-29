@@ -23,6 +23,7 @@ from .crypto import ReplayGuard, decode_key, encrypt_payload
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
+    SessionRecord,
     TranscriptStep,
 )
 from .screen import TerminalMirror
@@ -60,6 +61,10 @@ class SessionManager:
         self._running: bool = False
         #: Track active focus status per connected WebSocket client
         self._client_focus: dict[WebSocket, dict[str, Any]] = {}
+        #: Multi-session registry (Phase 1.1)
+        self._sessions: dict[str, SessionRecord] = {}
+        self._supervisors: dict[str, Any] = {}
+        self._terminal_mirrors: dict[str, TerminalMirror] = {}
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -275,6 +280,101 @@ class SessionManager:
         for ws in to_remove:
             self._connected_clients.discard(ws)
 
+    def register_session(
+        self,
+        record: SessionRecord,
+        supervisor: Any = None,
+        mirror: TerminalMirror | None = None,
+    ) -> None:
+        """Register a session and its supervisor/mirror in the multi-session registry."""
+        self._sessions[record.id] = record
+        if supervisor is not None:
+            self._supervisors[record.id] = supervisor
+        if mirror is not None:
+            self._terminal_mirrors[record.id] = mirror
+
+        # If this session carries a conversation_id and none is active/supervised, adopt it
+        if record.conversation_id:
+            if not self.supervised_conversation_id:
+                self.supervised_conversation_id = record.conversation_id
+            if not self.active_conversation_id:
+                self.active_conversation_id = record.conversation_id
+
+    def unregister_session(self, session_id: str) -> None:
+        """Remove a session from the multi-session registry."""
+        self._sessions.pop(session_id, None)
+        self._supervisors.pop(session_id, None)
+        self._terminal_mirrors.pop(session_id, None)
+
+    def remove_session(self, session_id: str) -> None:
+        """Alias for unregister_session."""
+        self.unregister_session(session_id)
+
+    def list_sessions(self) -> list[SessionRecord]:
+        """All currently registered supervised sessions."""
+        return list(self._sessions.values())
+
+    def get_session(self, key: str | None = None) -> SessionRecord | None:
+        """Find a session record by id, conversation_id, or tmux_name."""
+        if not key:
+            if self.active_conversation_id and self.active_conversation_id in self._sessions:
+                return self._sessions[self.active_conversation_id]
+            for s in self._sessions.values():
+                if s.conversation_id == self.active_conversation_id:
+                    return s
+            return next(iter(self._sessions.values()), None)
+
+        if key in self._sessions:
+            return self._sessions[key]
+        for s in self._sessions.values():
+            if s.conversation_id == key or s.tmux_name == key:
+                return s
+        return None
+
+    def get_session_by_conversation(self, conversation_id: str) -> SessionRecord | None:
+        """Find a session record by its Antigravity conversation ID."""
+        return self.get_session(conversation_id)
+
+    def get_supervisor(self, key: str | None = None) -> Any | None:
+        """Find supervisor for session key, conversation_id, or active session."""
+        session = self.get_session(key)
+        if session and session.id in self._supervisors:
+            return self._supervisors[session.id]
+
+        if key and key in self._supervisors:
+            return self._supervisors[key]
+
+        # Do not fall back to active global supervisor if targeting a different conversation
+        if key is not None and key != self.active_conversation_id and key != self.supervised_conversation_id:
+            return None
+
+        from .pty_runner import get_pty_supervisor
+        from .tmux_runner import get_tmux_supervisor
+
+        tmux = get_tmux_supervisor(session.tmux_name if session else None)
+        if tmux and tmux.has_session():
+            return tmux
+
+        pty = get_pty_supervisor()
+        if pty and pty.running:
+            return pty
+
+        return None
+
+    def get_screen_mirror(self, key: str | None = None) -> TerminalMirror | None:
+        """Find TerminalMirror for session key, conversation_id, or active session."""
+        session = self.get_session(key)
+        if session and session.id in self._terminal_mirrors:
+            return self._terminal_mirrors[session.id]
+
+        if key and key in self._terminal_mirrors:
+            return self._terminal_mirrors[key]
+
+        if key is not None and key != self.active_conversation_id and key != self.supervised_conversation_id:
+            return None
+
+        return self.terminal
+
     def attach_terminal(self, supervisor: Any) -> None:
         """Mirror a supervised session's screen for clients that cannot see it.
 
@@ -317,9 +417,20 @@ class SessionManager:
         await self.broadcast({"event": "terminal_screen", "data": snapshot})
         return True
 
-    async def bind_supervised_conversation(self, conversation_id: str) -> None:
+    async def bind_supervised_conversation(self, conversation_id: str, session_id: str | None = None) -> None:
         """Bind this manager to its supervised agy conversation."""
-        if not conversation_id or self.supervised_conversation_id == conversation_id:
+        if not conversation_id:
+            return
+
+        if session_id and session_id in self._sessions:
+            self._sessions[session_id].conversation_id = conversation_id
+        elif self._sessions:
+            for s in self._sessions.values():
+                if not s.conversation_id:
+                    s.conversation_id = conversation_id
+                    break
+
+        if self.supervised_conversation_id == conversation_id:
             return
         logger.info("Bound supervised session to conversation %s", conversation_id)
         self.supervised_conversation_id = conversation_id

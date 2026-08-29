@@ -68,6 +68,19 @@ class PendingApproval(BaseModel):
     reason: str | None = None
 
 
+class SessionRecord(BaseModel):
+    """A supervised agent session tracked by the server registry."""
+
+    id: str
+    tmux_name: str | None = None
+    pane_target: str | None = None
+    workdir: Any | None = None  # Path or str
+    conversation_id: str | None = None
+    busy: bool = False
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_activity_at: datetime = Field(default_factory=datetime.now)
+
+
 class UserPromptRequest(BaseModel):
     """Request payload to send a prompt to an active session."""
 
@@ -79,6 +92,7 @@ class KeyPressRequest(BaseModel):
     """A single named key the phone wants pressed in the supervised session."""
 
     key: str
+    conversation_id: str | None = None
 
     @field_validator("key")
     @classmethod

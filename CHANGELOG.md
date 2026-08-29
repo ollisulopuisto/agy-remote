@@ -1,5 +1,20 @@
 # Changelog
 
+## v26.08.29.4 — Multi-session core registry
+
+- **Multi-session core architecture.** Introduced `SessionRecord` and a dynamic
+  session registry (`dict[session_id -> SessionRecord]`) in `SessionManager`,
+  decoupling the supervisor layer from a global singleton.
+- **Per-session routing for keys and prompts.** Prompts and named keypresses carrying
+  a `conversation_id` are routed directly to the supervisor owning that specific
+  session, allowing independent concurrent session management.
+- **Isolated terminal mirrors.** Each supervised session maintains its own
+  `TerminalMirror` instance, queried via `/api/screen?conversation_id=...` or
+  the WebSocket `request_screen` payload.
+- **Decoupled Tmux registry.** `tmux_runner.py` now tracks multiple named supervisors
+  in a session map with `register_tmux_supervisor` and `get_tmux_supervisor(name)`.
+
+
 ## v26.08.29.3 — Tmux focus events and push presence suppression
 
 - **Tmux focus events reporting.** Configured `set-option -t <session> focus-events on`

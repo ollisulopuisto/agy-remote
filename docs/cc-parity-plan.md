@@ -50,15 +50,10 @@ watching agy work on a freshly cloned repo.
 
 ### Work items
 
-- **1.1 Multi-session core** — L. Today's architecture is single-session: global
-  `tmux_instance`, one `active_conversation_id`, prompts/keys aimed at "the" session.
-  Introduce a session registry `dict[key → SessionRecord{tmux name, pane target,
-  workdir, conversation_id, screen mirror, busy}]`; `session_switched` (drawer pick) sets
-  the routing target; prompt/key/screen events carry and honour the target
-  (`UserPromptRequest.conversation_id` already exists but is ignored for routing).
-  Approvals already route per-session via the `$TMUX`→server registry — no change.
-  Seams: `tmux_runner.py` (drop the singleton), `session_manager.py`, `server.py`,
-  `backends.py`.
+- **1.1 Multi-session core** — ✅ Completed (v26.08.29.4). Dropped singleton assumptions:
+  `SessionRecord{id, tmux_name, pane_target, workdir, conversation_id, busy}`, dynamic
+  registry in `SessionManager`, decoupled `TmuxSupervisor` registry in `tmux_runner.py`,
+  and per-session prompt/key/screen routing across backends and REST/WS endpoints.
 - **1.2 `POST /api/sessions`** (spawner above) — M. URL validation + dir sanitisation
   (alnum/-/_; collision → `-2`), clone subprocess with timeout, spawn+adopt via existing
   `start_detached`/attach path, readiness poll before seeding. Reuse: `tmux_runner.py`,

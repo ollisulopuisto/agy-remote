@@ -499,12 +499,13 @@ class AgyBackend:
     # -- interaction ---------------------------------------------------------
 
     async def send_prompt(self, mgr: SessionManager, prompt: str, conversation_id: str | None = None) -> str:
-        """Type into whichever supervisor is live; fall back to a broadcast.
+        """Type into whichever supervisor is live; fall back to a broadcast."""
+        target = conversation_id or mgr.active_conversation_id
+        sup = mgr.get_supervisor(target)
+        if sup is not None and hasattr(sup, "inject_input"):
+            sup.inject_input(prompt)
+            return "tmux" if hasattr(sup, "session_name") else "pty"
 
-        If `conversation_id` is supplied and does not match the active
-        session, do not inject keystrokes into a supervisor running a
-        different session.
-        """
         if conversation_id and mgr.active_conversation_id and conversation_id != mgr.active_conversation_id:
             logger.info(
                 "Prompt targeted at conversation %s, but active is %s; broadcasting",
