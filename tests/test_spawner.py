@@ -201,6 +201,39 @@ def test_a_spawn_clones_starts_adopts_and_seeds(tmp_path: Path, monkeypatch):
     assert created["data"]["name"] == "My-Repo"
 
 
+def test_a_spawn_registers_the_session_in_the_registry(tmp_path: Path, monkeypatch):
+    """1.1 core: a phone-spawned session is a first-class registry entry, not just globals.
+
+    New per-session routing (keys, prompts, screen) resolves through
+    SessionManager's registry, so the spawner must register a SessionRecord
+    it can look up by tmux name, with its supervisor and screen mirror.
+    """
+    events: list = []
+    started = _install_fakes(monkeypatch)
+    cfg, mgr = _manager(tmp_path, events)
+    monkeypatch.setenv("AGY_REMOTE_PROJECTS_DIR", str(tmp_path / "projects"))
+
+    spawner = SessionSpawner(cfg, mgr)
+    spawner._clone = _no_clone
+
+    async def scenario():
+        spawner.create(NewSessionRequest(repo_url="https://github.com/org/myrepo", name="My Repo!"))
+        await spawner._task
+
+    asyncio.run(scenario())
+
+    workdir = tmp_path / "projects" / "My-Repo"
+    (supervisor,) = started
+
+    (record,) = mgr.list_sessions()
+    assert record.tmux_name == "agy-remote-My-Repo"
+    assert str(record.workdir) == str(workdir)
+
+    # Per-session routing must find this session's supervisor and screen by name.
+    assert mgr.get_supervisor("agy-remote-My-Repo") is supervisor
+    assert mgr.get_screen_mirror("agy-remote-My-Repo") is not None
+
+
 def test_a_failed_clone_reports_and_leaves_nothing_started(tmp_path: Path, monkeypatch):
     events: list = []
     started = _install_fakes(monkeypatch)

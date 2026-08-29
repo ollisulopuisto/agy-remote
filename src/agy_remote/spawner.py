@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import RemoteConfig, agy_child_env, publish_server_registration
+from .models import SessionRecord
 from .screen import TmuxScreen
 from .tmux_runner import (
     TmuxSupervisor,
@@ -305,18 +306,25 @@ class SessionSpawner:
         return supervisor
 
     def _adopt(self, plan: SpawnPlan, supervisor: TmuxSupervisor) -> None:
-        """Hand the new session to the server: typing, screen, hook routing.
+        """Hand the new session to the server: registry, typing, screen, hook routing.
 
-        This build supervises one session at a time, so adopting replaces the
-        previous adoption. The previous agy keeps running in tmux; its
-        approvals still reach the phone (hooks route by session), only the
-        driving moves with the adoption.
+        Adoption registers the session in the 1.1 registry, where per-session
+        routing (prompts, keys, screen) resolves it by tmux name. The legacy
+        single-slot globals still steer the hook router and the
+        conversation-less fallbacks, so they move with the adoption as well.
         """
+        record = SessionRecord(
+            id=plan.tmux_session,
+            tmux_name=plan.tmux_session,
+            workdir=str(plan.workdir),
+        )
+        mirror = TmuxScreen(plan.tmux_session)
+        self.mgr.register_session(record, supervisor=supervisor, mirror=mirror)
         self.cfg.tmux_session = plan.tmux_session
         self.cfg.tmux_target = plan.tmux_session
         self.cfg.tmux_session_id = session_id_of(plan.tmux_session)
         set_tmux_supervisor(supervisor)
-        self.mgr.attach_screen(TmuxScreen(plan.tmux_session))
+        self.mgr.attach_screen(mirror)
         # Re-publish: the registration is what lets the new session's PreToolUse
         # hook find this server rather than the shared state file's owner.
         publish_server_registration(self.cfg)
