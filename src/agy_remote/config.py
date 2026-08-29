@@ -60,8 +60,11 @@ def find_tailscale_binary(custom_path: str | Path | None = None) -> str | None:
         if os.sep not in str_path and (os.altsep is None or os.altsep not in str_path):
             found = shutil.which(str_path)
             if found:
+                resolved = Path(found).resolve()
+                if resolved.is_file() and os.access(resolved, os.X_OK):
+                    return str(resolved)
                 return found
-        p = Path(custom_path).expanduser()
+        p = Path(custom_path).expanduser().resolve()
         if p.is_file() and os.access(p, os.X_OK):
             return str(p)
         logger.warning("Specified Tailscale binary does not exist or is not executable: %s", custom_path)
@@ -70,17 +73,20 @@ def find_tailscale_binary(custom_path: str | Path | None = None) -> str | None:
     for env_var in ("AGY_REMOTE_TAILSCALE_BIN", "AGY_REMOTE_TAILSCALE_PATH", "TAILSCALE_BIN"):
         val = os.environ.get(env_var)
         if val:
-            p = Path(val).expanduser()
+            p = Path(val).expanduser().resolve()
             if p.is_file() and os.access(p, os.X_OK):
                 return str(p)
 
     found = shutil.which("tailscale")
     if found:
+        resolved = Path(found).resolve()
+        if resolved.is_file() and os.access(resolved, os.X_OK):
+            return str(resolved)
         return found
 
     for loc in TAILSCALE_SEARCH_LOCATIONS:
         try:
-            loc_expanded = loc.expanduser()
+            loc_expanded = loc.expanduser().resolve()
             if loc_expanded.is_file() and os.access(loc_expanded, os.X_OK):
                 return str(loc_expanded)
         except OSError:
