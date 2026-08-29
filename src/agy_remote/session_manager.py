@@ -37,6 +37,8 @@ class SessionManager:
         self.config = config or get_config()
         self.backend = backend or make_backend(self.config)
         self.active_conversation_id: str | None = None
+        #: The conversation ID belonging to the supervised agy process for this server.
+        self.supervised_conversation_id: str | None = None
         #: Track whichever conversation is newest, until the user picks one.
         self.follow_latest: bool = True
         self.active_steps: list[TranscriptStep] = []
@@ -114,6 +116,12 @@ class SessionManager:
         """The most recently updated conversation ID, cheaply."""
         return self.backend.get_latest_conversation_id()
 
+    def get_newest_conversation_id(self) -> str | None:
+        """The most recently created conversation ID, cheaply."""
+        if hasattr(self.backend, "get_newest_conversation_id"):
+            return self.backend.get_newest_conversation_id()
+        return self.backend.get_latest_conversation_id()
+
     def get_transcript_path(self, conversation_id: str) -> Path | None:
         """Where the conversation lives on disk, or None for API-backed agents."""
         return self.backend.get_transcript_path(conversation_id)
@@ -126,7 +134,8 @@ class SessionManager:
         the moment a new one appears; picking the newest resumes following.
         """
         if pin:
-            self.follow_latest = conversation_id == self.get_latest_conversation_id()
+            newest_id = self.get_newest_conversation_id() or self.get_latest_conversation_id()
+            self.follow_latest = conversation_id == newest_id
 
         self.active_conversation_id = conversation_id
         self.active_steps = []
@@ -141,6 +150,7 @@ class SessionManager:
                     # Which session this is, so a client can say so rather than
                     # letting a new one look like more of the last one.
                     "conversation": self._summary_of(conversation_id),
+                    "conversations": [c.model_dump(mode="json") for c in self.list_conversations()],
                     "steps": [step.model_dump() for step in self.active_steps],
                     "pending_approvals": self.get_active_pending_approvals(),
                 },
@@ -285,8 +295,17 @@ class SessionManager:
         await self.broadcast({"event": "terminal_screen", "data": snapshot})
         return True
 
+    async def bind_supervised_conversation(self, conversation_id: str) -> None:
+        """Bind this manager to its supervised agy conversation."""
+        if not conversation_id or self.supervised_conversation_id == conversation_id:
+            return
+        logger.info("Bound supervised session to conversation %s", conversation_id)
+        self.supervised_conversation_id = conversation_id
+        if self.active_conversation_id != conversation_id:
+            await self.switch_conversation(conversation_id)
+
     async def follow_latest_conversation(self) -> bool:
-        """Move the view to the newest conversation, unless the user pinned one.
+        """Move the view to the newest conversation, unless the user pinned one or a session is supervised.
 
         Launching agy starts a new conversation, and the phone has no way to
         know: it kept rendering whatever session was newest when the server
@@ -294,14 +313,14 @@ class SessionManager:
         guard only ever switched when nothing at all was active, so in practice
         it never fired after startup.
         """
-        if not self.follow_latest:
+        if not self.follow_latest or self.supervised_conversation_id is not None:
             return False
 
-        latest_id = self.get_latest_conversation_id()
-        if not latest_id or latest_id == self.active_conversation_id:
+        newest_id = self.get_newest_conversation_id()
+        if not newest_id or newest_id == self.active_conversation_id:
             return False
 
-        await self.switch_conversation(latest_id)
+        await self.switch_conversation(newest_id)
         return True
 
     async def disconnect_expired_clients(self) -> int:

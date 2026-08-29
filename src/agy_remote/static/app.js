@@ -492,6 +492,13 @@ function handleServerEvent(event) {
     pendingApprovals = data.pending_approvals || [];
     updateHeader();
     renderAllMessages();
+    if (data.conversations) {
+      renderConversations(data.conversations);
+    } else {
+      document.querySelectorAll('.session-item[data-conversation-id]').forEach(item => {
+        item.classList.toggle('active', item.dataset.conversationId === currentConversationId);
+      });
+    }
     updateApprovalIndicators();
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
@@ -1210,9 +1217,18 @@ function renderConversations(convs) {
   updateApprovalIndicators();
 }
 
-function openDrawer() {
+async function openDrawer() {
   drawer.classList.add('open');
   drawerBackdrop.classList.add('open');
+  try {
+    const res = await fetch(`/api/conversations?token=${encodeURIComponent(authToken)}`);
+    if (res.ok) {
+      const convs = await res.json();
+      renderConversations(convs);
+    }
+  } catch (e) {
+    console.debug('Failed refreshing conversations in drawer:', e);
+  }
 }
 
 function closeDrawer() {
@@ -1266,6 +1282,29 @@ promptInput.addEventListener('focus', () => {
 
 menuBtn.addEventListener('click', openDrawer);
 closeDrawerBtn.addEventListener('click', closeDrawer);
+
+const elsewhereBadge = document.getElementById('approvalsElsewhereBadge');
+if (elsewhereBadge) {
+  elsewhereBadge.addEventListener('click', () => {
+    const elsewhere = window.AgyFormat.approvalsElsewhere(pendingApprovals, currentConversationId);
+    if (elsewhere.sessions && elsewhere.sessions.length === 1) {
+      const targetId = elsewhere.sessions[0];
+      const payload = {
+        action: 'switch_conversation',
+        data: { conversation_id: targetId }
+      };
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        if (cryptoKey) {
+          encryptData(payload).then(msg => ws.send(JSON.stringify(msg)));
+        } else {
+          ws.send(JSON.stringify(payload));
+        }
+      }
+    } else {
+      openDrawer();
+    }
+  });
+}
 drawerBackdrop.addEventListener('click', closeDrawer);
 
 // Swipe gesture to close drawer

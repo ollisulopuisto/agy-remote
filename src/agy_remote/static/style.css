@@ -940,6 +940,7 @@ details.message-system > summary {
   color: #fca5a5;
   border: 1px solid rgba(239, 68, 68, 0.4);
   white-space: nowrap;
+  cursor: pointer;
 }
 
 .session-waiting {

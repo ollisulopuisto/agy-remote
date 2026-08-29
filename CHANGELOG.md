@@ -1,5 +1,23 @@
 # Changelog
 
+## v26.08.29.2 — Multi-instance isolation and session binding
+
+- **Supervised session binding and isolation.** When running under PTY or tmux
+  supervision, the server automatically discovers and binds to the exact
+  conversation ID belonging to that supervised `agy` process (via `lsof` file
+  descriptor lookup).
+- **Prevent conversation flapping.** Auto-following the latest session now tracks
+  session creation time (`get_newest_conversation_id`) rather than modification
+  time, ensuring background activity in other active sessions does not yank the
+  active view away.
+- **Targeted prompt routing.** Prompts sent to a specific conversation ID will
+  no longer inject keystrokes into a supervisor running a different active session.
+- **Interactive approval badges & drawer refresh.** Tapping the "approvals
+  waiting elsewhere" badge navigates directly to the waiting session (or opens the
+  drawer if multiple), and opening the drawer immediately refreshes the active
+  session list.
+
+
 ## v26.08.29.1 — Resolve Tailscale CLI symlinks for HTTPS and E2EE
 
 - **Symlinks are resolved during Tailscale binary discovery.** When `tailscale`

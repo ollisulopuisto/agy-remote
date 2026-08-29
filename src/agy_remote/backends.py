@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -63,6 +64,9 @@ class AgentBackend(Protocol):
 
     def get_latest_conversation_id(self) -> str | None:
         """The most recently updated conversation, cheaply (no content reads)."""
+
+    def get_newest_conversation_id(self) -> str | None:
+        """The most recently created conversation, cheaply."""
 
     def get_transcript_path(self, conversation_id: str) -> Path | None:
         """Where the conversation lives on disk, or None (API-backed agents)."""
@@ -107,12 +111,58 @@ def make_backend(config: RemoteConfig) -> AgentBackend:
 # ---------------------------------------------------------------------------
 
 
+def find_conversation_for_pid(pid: int, brain_dir: Path) -> str | None:
+    """Find the conversation ID whose directory is open by process `pid` or its children."""
+    if not pid or pid <= 0:
+        return None
+    try:
+        pids_to_check = [str(pid)]
+        try:
+            cres = subprocess.run(
+                ["pgrep", "-P", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=1.0,
+            )
+            if cres.returncode == 0:
+                pids_to_check.extend(cres.stdout.split())
+        except Exception:
+            pass
+
+        res = subprocess.run(
+            ["lsof", "-p", ",".join(pids_to_check), "-Fn"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2.0,
+        )
+        if res.returncode == 0:
+            brain_str = str(brain_dir.resolve())
+            for line in res.stdout.splitlines():
+                if line.startswith("n") and brain_str in line:
+                    path_str = line[1:]
+                    try:
+                        rel = Path(path_str).relative_to(brain_dir.resolve())
+                        parts = rel.parts
+                        if parts:
+                            conv_id = parts[0]
+                            if all(c.isalnum() or c in "-_" for c in conv_id):
+                                return conv_id
+                    except ValueError:
+                        pass
+    except Exception as e:
+        logger.debug("Failed looking up conversation for pid %d: %s", pid, e)
+    return None
+
+
 class AgyBackend:
     """Antigravity CLI: brain-dir transcript tailing plus PreToolUse hooks."""
 
     name = "agy"
 
     def __init__(self, config: RemoteConfig) -> None:
+        self.config = config
         self.brain_dir = config.brain_dir
         #: Read offset for the active conversation's transcript.
         self._last_file_pos = 0
@@ -123,6 +173,27 @@ class AgyBackend:
         #: Number of transcripts actually parsed; asserted on in tests.
         self.parse_count = 0
 
+    def _discover_supervised_conversation(self) -> str | None:
+        """Find the conversation ID for the running supervisor, if any."""
+        from .pty_runner import get_pty_supervisor
+        from .tmux_runner import get_tmux_supervisor
+
+        pty = get_pty_supervisor()
+        if pty and pty.running and pty.pid:
+            conv_id = find_conversation_for_pid(pty.pid, self.brain_dir)
+            if conv_id:
+                return conv_id
+
+        tmux = get_tmux_supervisor()
+        if tmux and tmux.has_session():
+            t_pid = tmux.get_pane_pid()
+            if t_pid:
+                conv_id = find_conversation_for_pid(t_pid, self.brain_dir)
+                if conv_id:
+                    return conv_id
+
+        return None
+
     async def start(self, mgr: SessionManager) -> None:
         self.brain_dir.mkdir(parents=True, exist_ok=True)
 
@@ -131,6 +202,11 @@ class AgyBackend:
 
     async def tick(self, mgr: SessionManager) -> None:
         """Follow a newer conversation, then tail the active one's transcript."""
+        if mgr.supervised_conversation_id is None:
+            conv_id = self._discover_supervised_conversation()
+            if conv_id:
+                await mgr.bind_supervised_conversation(conv_id)
+
         await mgr.follow_latest_conversation()
 
         if not mgr.active_conversation_id:
@@ -241,10 +317,11 @@ class AgyBackend:
                 elif step_type == "PLANNER_RESPONSE" and content:
                     last_response = content[:150]
 
+        ctime = self._get_conversation_ctime(conversation_id, log_path)
         return ConversationSummary(
             id=conversation_id,
             title=first_prompt or f"Session {conversation_id[:8]}",
-            created_at=datetime.fromtimestamp(stat.st_ctime),
+            created_at=datetime.fromtimestamp(ctime) if ctime > 0 else datetime.fromtimestamp(stat.st_ctime),
             updated_at=datetime.fromtimestamp(stat.st_mtime),
             step_count=step_count,
             last_user_message=last_prompt,
@@ -260,6 +337,39 @@ class AgyBackend:
         ]
         summaries.sort(key=lambda s: s.updated_at or datetime.min, reverse=True)
         return summaries
+
+    def _get_conversation_ctime(self, conversation_id: str, log_path: Path) -> float:
+        """The creation timestamp of this conversation, cheaply without content reads."""
+        cached = self._summary_cache.get(log_path)
+        if cached and cached[2].created_at:
+            return cached[2].created_at.timestamp()
+
+        try:
+            lstat = log_path.stat()
+            birthtime = getattr(lstat, "st_birthtime", None)
+            if birthtime and birthtime > 0 and birthtime <= lstat.st_mtime:
+                return birthtime
+            conv_dir = self.brain_dir / conversation_id
+            if conv_dir.is_dir():
+                dstat = conv_dir.stat()
+                dbirth = getattr(dstat, "st_birthtime", None)
+                if dbirth and dbirth > 0 and dbirth <= lstat.st_mtime:
+                    return dbirth
+                return min(dstat.st_ctime, dstat.st_mtime, lstat.st_mtime)
+            return min(lstat.st_ctime, lstat.st_mtime)
+        except OSError:
+            return 0.0
+
+    def get_newest_conversation_id(self) -> str | None:
+        """Find the most recently created conversation ID cheaply."""
+        newest_id: str | None = None
+        newest_ctime = float("-inf")
+        for conversation_id, log_path in self._iter_transcripts():
+            ctime = self._get_conversation_ctime(conversation_id, log_path)
+            if ctime > newest_ctime:
+                newest_ctime = ctime
+                newest_id = conversation_id
+        return newest_id
 
     def get_latest_conversation_id(self) -> str | None:
         """Find the most recently updated conversation ID from mtimes alone.
@@ -391,9 +501,18 @@ class AgyBackend:
     async def send_prompt(self, mgr: SessionManager, prompt: str, conversation_id: str | None = None) -> str:
         """Type into whichever supervisor is live; fall back to a broadcast.
 
-        agy drives one session per supervisor, so there is nowhere else the
-        typing could go and `conversation_id` is accepted but unused.
+        If `conversation_id` is supplied and does not match the active
+        session, do not inject keystrokes into a supervisor running a
+        different session.
         """
+        if conversation_id and mgr.active_conversation_id and conversation_id != mgr.active_conversation_id:
+            logger.info(
+                "Prompt targeted at conversation %s, but active is %s; broadcasting",
+                conversation_id,
+                mgr.active_conversation_id,
+            )
+            return "broadcast"
+
         from .pty_runner import get_pty_supervisor
         from .tmux_runner import get_tmux_supervisor
 
