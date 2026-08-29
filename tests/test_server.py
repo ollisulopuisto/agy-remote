@@ -315,3 +315,64 @@ def test_the_prompt_endpoint_refuses_plaintext_when_e2ee_is_on(tmp_path: Path):
     cfg2 = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, e2ee_enabled=False)
     client2 = TestClient(create_app(cfg2))
     assert client2.post("/api/prompt", json={"prompt": "hi"}, headers=headers).status_code == 200
+
+
+def test_focus_state_and_push_suppression(tmp_path: Path, monkeypatch):
+    """When a client is actively focused on the app/session, push notifications are suppressed."""
+    import time
+
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    app = create_app(cfg)
+    key = decode_key(cfg.e2ee_key)
+    client = TestClient(app)
+
+    sent_pushes: list[dict] = []
+    from agy_remote.push import PushManager
+
+    monkeypatch.setattr(
+        PushManager,
+        "send_notification",
+        lambda self, title, body, data=None: sent_pushes.append({"title": title, "body": body, "data": data}),
+    )
+
+    with client.websocket_connect(f"/ws?token={cfg.auth_token}") as ws:
+        ws.receive_json()  # init snapshot
+
+        mgr = app.state.session_manager
+        assert mgr.is_client_focused() is False
+
+        # Send focus_state focused=True
+        ws.send_json(encrypt_payload({"action": "focus_state", "data": {"focused": True}}, key))
+        time.sleep(0.05)
+        assert mgr.is_client_focused() is True
+
+        headers = {"X-Auth-Token": "secret123"}
+        payload = {
+            "toolCall": {"name": "Bash", "args": {"CommandLine": "ls -la"}},
+            "conversationId": "default",
+        }
+
+        # Mock request_approval to return immediately
+        async def fake_request_approval(*args, **kwargs):
+            return {"decision": "allow"}
+
+        monkeypatch.setattr(mgr, "request_approval", fake_request_approval)
+
+        resp = client.post("/api/hook/pre-tool", json=payload, headers=headers)
+        assert resp.status_code == 200
+        assert len(sent_pushes) == 0  # Suppressed due to active focus!
+
+        # Now send focus_state focused=False
+        ws.send_json(encrypt_payload({"action": "focus_state", "data": {"focused": False}}, key))
+        time.sleep(0.05)
+        assert mgr.is_client_focused() is False
+
+        # Hook now sends push notification
+        resp2 = client.post("/api/hook/pre-tool", json=payload, headers=headers)
+        assert resp2.status_code == 200
+        assert len(sent_pushes) == 1
+        assert "Bash" in sent_pushes[0]["title"]
+        assert sent_pushes[0]["data"]["approval_id"]
+        assert sent_pushes[0]["data"]["conversation_id"] == "default"

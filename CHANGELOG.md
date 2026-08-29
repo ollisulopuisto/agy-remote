@@ -1,5 +1,20 @@
 # Changelog
 
+## v26.08.29.3 — Tmux focus events and push presence suppression
+
+- **Tmux focus events reporting.** Configured `set-option -t <session> focus-events on`
+  in tmux sessions so terminal focus escape sequences (`\033[I` / `\033[O`) pass
+  transparently to supervised applications.
+- **Focus key definitions.** Added `focus_in` and `focus_out` named keys to `KEY_SEQUENCES`
+  and `TMUX_KEY_NAMES`.
+- **Push presence suppression.** Web Push notifications are now suppressed when a
+  connected client is actively focused on the session in the PWA, preventing redundant
+  audible alerts while watching the screen.
+- **Notification deep linking and focus highlighting.** Tapping a mobile push notification
+  opens or switches to the target session (`/#session=<id>&focus=<approval_id>`) and
+  highlights the pending approval card with a pulse animation.
+
+
 ## v26.08.29.2 — Multi-instance isolation and session binding
 
 - **Supervised session binding and isolation.** When running under PTY or tmux

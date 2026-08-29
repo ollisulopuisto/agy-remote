@@ -470,13 +470,17 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             await mgr.bind_supervised_conversation(conversation_id)
 
         # Only buzz a phone about a decision the phone is actually going to be
-        # asked for. Otherwise agy answers it in its own terminal, and a push
-        # would be an alert about something already settled.
-        if mgr.can_hold_approval(conversation_id):
+        # asked for. Suppress push if a connected client is already actively
+        # focused on this session (presence suppression).
+        if mgr.can_hold_approval(conversation_id) and not mgr.is_client_focused(conversation_id):
             push_mgr.send_notification(
                 title=f"Permission Required: {tool_name}",
                 body=f"{tool_name}: {args.get('CommandLine') or args.get('TargetFile') or 'Action requested'}",
-                data={"approval_id": approval_id, "type": "approval_request"},
+                data={
+                    "approval_id": approval_id,
+                    "conversation_id": conversation_id,
+                    "type": "approval_request",
+                },
             )
 
         decision_payload = await mgr.request_approval(
@@ -570,6 +574,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
                 if action == "ping":
                     await mgr.send_to(websocket, {"event": "pong"})
+                elif action == "focus_state":
+                    focused = bool(data.get("focused", False))
+                    conv_id = data.get("conversation_id")
+                    mgr.set_client_focus(websocket, focused, conv_id)
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:

@@ -115,6 +115,11 @@ class TmuxSupervisor:
                 ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
                 check=True,
             )
+            subprocess.run(
+                ["tmux", "set-option", "-t", self.session_name, "focus-events", "on"],
+                capture_output=True,
+                check=False,
+            )
 
         # Attach to the session in the current terminal with signal handling
         return self._attach_session()
@@ -146,6 +151,12 @@ class TmuxSupervisor:
             capture_output=True,
             check=False,
         )
+        if res.returncode == 0:
+            subprocess.run(
+                ["tmux", "set-option", "-t", self.session_name, "focus-events", "on"],
+                capture_output=True,
+                check=False,
+            )
         return res.returncode == 0
 
     def inject_input(self, text: str) -> bool:

@@ -387,6 +387,7 @@ function connectWebSocket() {
     statusBadge.className = 'status-badge';
     statusText.textContent = cryptoKey ? 'E2EE Live' : 'Live';
     startHeartbeat(ws);
+    reportFocusState();
   };
 
   ws.onmessage = async (event) => {
@@ -485,6 +486,7 @@ function handleServerEvent(event) {
     renderAllMessages();
     renderConversations(data.conversations || []);
     updateApprovalIndicators();
+    checkUrlNavigation();
   } else if (type === 'session_switched') {
     currentConversation = data.conversation || null;
     currentConversationId = data.conversation_id;
@@ -500,6 +502,7 @@ function handleServerEvent(event) {
       });
     }
     updateApprovalIndicators();
+    checkUrlNavigation();
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
   } else if (type === 'prompt_sent') {
@@ -1344,6 +1347,86 @@ document.querySelectorAll('.chip-btn').forEach(btn => {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(err => {
     console.debug('ServiceWorker registration skipped:', err);
+  });
+}
+
+// Navigation and Focus Support
+async function switchConversation(id) {
+  if (!id || id === currentConversationId) return;
+  const payload = {
+    action: 'switch_conversation',
+    data: { conversation_id: id }
+  };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
+  }
+}
+
+function highlightApproval(approvalId) {
+  if (!approvalId) return;
+  setTimeout(() => {
+    const elem = document.getElementById(`approval-${approvalId}`);
+    if (elem) {
+      elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      elem.classList.add('highlight-pulse');
+      setTimeout(() => elem.classList.remove('highlight-pulse'), 3000);
+    }
+  }, 200);
+}
+
+function checkUrlNavigation() {
+  const hash = window.location.hash;
+  const search = window.location.search;
+  const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+  const searchParams = new URLSearchParams(search);
+
+  const targetSession = hashParams.get('session') || searchParams.get('session');
+  const targetFocus = hashParams.get('focus') || searchParams.get('focus');
+
+  if (targetSession && targetSession !== currentConversationId) {
+    switchConversation(targetSession);
+  }
+  if (targetFocus) {
+    highlightApproval(targetFocus);
+  }
+}
+
+function reportFocusState() {
+  const isFocused = !document.hidden && document.hasFocus();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = {
+      action: 'focus_state',
+      data: {
+        focused: isFocused,
+        conversation_id: currentConversationId,
+      }
+    };
+    if (cryptoKey) {
+      encryptData(payload).then(msg => ws.send(JSON.stringify(msg)));
+    } else {
+      ws.send(JSON.stringify(payload));
+    }
+  }
+}
+
+window.addEventListener('focus', reportFocusState);
+window.addEventListener('blur', reportFocusState);
+document.addEventListener('visibilitychange', reportFocusState);
+window.addEventListener('hashchange', checkUrlNavigation);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'NAVIGATE') {
+      const targetSession = event.data.session;
+      const targetFocus = event.data.focus;
+      if (targetSession && targetSession !== currentConversationId) {
+        switchConversation(targetSession);
+      }
+      if (targetFocus) {
+        highlightApproval(targetFocus);
+      }
+    }
   });
 }
 

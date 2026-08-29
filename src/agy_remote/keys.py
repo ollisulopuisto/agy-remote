@@ -32,6 +32,8 @@ KEY_SEQUENCES: dict[str, bytes] = {
     "suspend": b"\x1a",  # Ctrl+Z
     "yes": b"y",
     "no": b"n",
+    "focus_in": b"\x1b[I",  # CSI I: terminal gained focus
+    "focus_out": b"\x1b[O",  # CSI O: terminal lost focus
 }
 
 #: The same keys, spelled the way `tmux send-keys` spells them.
@@ -53,6 +55,8 @@ TMUX_KEY_NAMES: dict[str, str] = {
     "suspend": "C-z",
     "yes": "y",
     "no": "n",
+    "focus_in": "FocusIn",
+    "focus_out": "FocusOut",
 }
 
 

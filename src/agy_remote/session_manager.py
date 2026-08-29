@@ -58,6 +58,8 @@ class SessionManager:
         #: Mirror of the supervised terminal, when a session is supervised.
         self.terminal: TerminalMirror | None = None
         self._running: bool = False
+        #: Track active focus status per connected WebSocket client
+        self._client_focus: dict[WebSocket, dict[str, Any]] = {}
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -231,9 +233,29 @@ class SessionManager:
         """
         await self.broadcast({"event": "peers", "data": {"count": len(self._connected_clients)}})
 
+    def set_client_focus(self, websocket: WebSocket, focused: bool, conversation_id: str | None = None) -> None:
+        """Track whether a client window is actively focused and which conversation it is viewing."""
+        if not focused:
+            self._client_focus.pop(websocket, None)
+        else:
+            self._client_focus[websocket] = {"focused": True, "conversation_id": conversation_id}
+
+    def is_client_focused(self, conversation_id: str | None = None) -> bool:
+        """Check if any connected client has active focus on the app (optionally on conversation_id)."""
+        if not self._client_focus:
+            return False
+        if conversation_id is None or conversation_id == "default":
+            return any(info.get("focused") for info in self._client_focus.values())
+        return any(
+            info.get("focused")
+            and (info.get("conversation_id") is None or info.get("conversation_id") == conversation_id)
+            for info in self._client_focus.values()
+        )
+
     def unregister_client(self, websocket: WebSocket) -> None:
         """Remove a disconnected WebSocket client."""
         self._connected_clients.discard(websocket)
+        self._client_focus.pop(websocket, None)
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
         """Send JSON payload to all active WebSocket clients."""

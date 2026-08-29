@@ -138,3 +138,28 @@ def test_start_or_attach_creates_session_with_vsusp_disabled(monkeypatch):
     # Verify new-session disables VSUSP and starts agy with SIGTSTP ignored
     new_session_cmd = next(c for c in calls if "new-session" in c)
     assert "stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec agy --fast" in new_session_cmd
+    # Verify focus-events is enabled
+    focus_events_cmd = next(c for c in calls if "set-option" in c and "focus-events" in c)
+    assert "focus-events" in focus_events_cmd
+    assert "on" in focus_events_cmd
+
+
+def test_start_detached_enables_focus_events(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class Res:
+            returncode = 1 if "has-session" in cmd else 0
+
+        return Res()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    sup = TmuxSupervisor(session_name="test-detached-focus", cmd=["agy"])
+    assert sup.start_detached() is True
+
+    focus_events_cmd = next(c for c in calls if "set-option" in c and "focus-events" in c)
+    assert "focus-events" in focus_events_cmd
+    assert "on" in focus_events_cmd

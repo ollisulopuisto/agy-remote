@@ -58,6 +58,14 @@ def test_send_key_reports_whether_it_pressed_anything():
         os.close(write_fd)
 
 
+def test_focus_events_keys():
+    """Focus events (focus_in / focus_out) are CSI I and CSI O."""
+    assert _press("focus_in") == b"\x1b[I"
+    assert _press("focus_out") == b"\x1b[O"
+    assert is_known_key("focus_in") is True
+    assert is_known_key("focus_out") is True
+
+
 def test_both_runners_speak_the_same_key_names():
     """A key the PTY path accepts must also work under --tmux, and vice versa."""
     assert set(KEY_SEQUENCES) == set(TMUX_KEY_NAMES)

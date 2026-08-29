@@ -47,15 +47,29 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const data = event.notification.data || {};
+  const convId = data.conversation_id || data.session_id || '';
+  const approvalId = data.approval_id || '';
+
+  const params = [];
+  if (convId) params.push(`session=${encodeURIComponent(convId)}`);
+  if (approvalId) params.push(`focus=${encodeURIComponent(approvalId)}`);
+  const targetUrl = params.length > 0 ? `/#${params.join('&')}` : '/';
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
-        if (client.url && 'focus' in client) {
+        if ('focus' in client) {
+          if (client.navigate && targetUrl !== '/') {
+            client.navigate(targetUrl);
+          } else {
+            client.postMessage({ type: 'NAVIGATE', session: convId, focus: approvalId });
+          }
           return client.focus();
         }
       }
       if (clients.openWindow) {
-        return clients.openWindow('/');
+        return clients.openWindow(targetUrl);
       }
     })
   );
