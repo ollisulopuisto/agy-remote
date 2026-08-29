@@ -27,6 +27,7 @@ dependencies = [
 
 [project.scripts]
 agy-remote = "agy_remote:main"
+agy-msg = "agy_remote.cli:msg_command"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

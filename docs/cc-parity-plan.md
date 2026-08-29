@@ -89,7 +89,7 @@ inspectable, no open file descriptors, works across restarts.
   one line per message: {"id": "…", "from": "…", "to": "…", "text": "…", "ts": "…"}
 ```
 
-- **Send**: tiny `agy-msg` CLI shipped in the same package: `agy-msg to <target> "text"`.
+- **Send**: tiny `agy-msg` CLI shipped in the same package: `agy-msg <target> "text"`.
   The calling agent invokes it as an ordinary bash tool call; `from` comes from
   `AGY_REMOTE_SESSION_ID` (exported into each agy at spawn — env flows into the tools agy
   spawns). It appends one validated line to the target's inbox. No helper wanted? The
@@ -100,7 +100,7 @@ inspectable, no open file descriptors, works across restarts.
   PWA renders distinctly from human prompts:
   `[message from agy-work (session 3): …]`
 - **Human in the loop**: sending is a bash tool call, so it passes the existing PreToolUse
-  approval gate — the phone shows `agy-msg to agy-work "…"` and approves/denies. First
+  approval gate — the phone shows `agy-msg agy-work "…"` and approves/denies. First
   "always allow" makes steady-state chatter free. This is the safety spine: agent A
   cannot talk to B without the human having permitted the channel.
 - **Loop protection**: 4 KB cap per message; per-pair rate limit (e.g. 10/10 min);

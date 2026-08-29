@@ -24,6 +24,7 @@ from .config import (
     RemoteConfig,
     TailscaleCertError,
     adopt_runtime_state,
+    agy_child_env,
     ensure_tailscale_cert,
     find_free_port,
     find_server_on_port,
@@ -37,6 +38,7 @@ from .config import (
     runtime_state_owner,
 )
 from .hooks import hook_health, install_hooks_config, run_pre_tool_hook
+from .mailbox import MailboxError, send_message
 from .pty_runner import PtySupervisor, set_pty_supervisor
 from .push import get_push_manager
 from .screen import TmuxScreen
@@ -177,21 +179,6 @@ def _guard_or_exit(cfg: RemoteConfig) -> None:
     except InsecureConfigError as e:
         console.print(f"[bold red]Refusing to start:[/bold red] {e}")
         sys.exit(2)
-
-
-def agy_child_env(cfg: RemoteConfig) -> dict[str, str]:
-    """What the supervised agy needs to know about the server supervising it.
-
-    Its PreToolUse hook otherwise resolves the endpoint from a host-wide state
-    file, so with two servers running both sessions' approvals would go to
-    whichever one published that file. Carries no token: under tmux this ends
-    up in argv, which `ps` shows to every local user, and the token is a
-    host-wide credential both servers already share.
-    """
-    return {
-        "AGY_REMOTE_URL": cfg.local_base_url,
-        "AGY_REMOTE_PORT": str(cfg.port),
-    }
 
 
 def _serve_forever(cfg: RemoteConfig, app: object) -> None:
@@ -862,6 +849,34 @@ def push_test(message: str) -> None:
     console.print(
         f"[bold green]✓ Test push notification sent to {len(push_mgr.subscriptions)} subscriber(s)![/bold green]"
     )
+
+
+@click.command("msg")
+@click.argument("target")
+@click.argument("text", nargs=-1, required=False)
+def msg_command(target: str, text: tuple[str, ...]) -> None:
+    """Post a message into another agy session's inbox (agent-to-agent mailbox).
+
+    The message is the words after the target, or stdin when piped. The sender
+    signs itself from AGY_REMOTE_SESSION_ID (exported into every agy this
+    server spawns), so an agent's bash call needs no --from. This runs as an
+    ordinary tool call, so the PreToolUse gate can approve or deny the channel.
+    """
+    message = " ".join(text).strip()
+    if not message and not sys.stdin.isatty():
+        message = sys.stdin.read().strip()
+    try:
+        inbox = send_message(target, message)
+    except MailboxError as e:
+        print(f"agy-msg: {e}", file=sys.stderr)
+        sys.exit(1)
+    console.print(f"[bold green]✓ message to {target}[/bold green] [dim]({inbox})[/dim]")
+
+
+#: The group's `msg` subcommand and the standalone `agy-msg` script are one
+#: command: `click.command` hands back the Command itself, so the entrypoint
+#: in pyproject.toml can point at it directly.
+cli.add_command(msg_command)
 
 
 @cli.command("setup-hooks")
