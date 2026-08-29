@@ -1,6 +1,17 @@
 # Changelog
 
-## v26.08.25.1 — Ctrl+Z and Ctrl+C can no longer wedge a session
+## v26.08.29.1 — Resolve Tailscale CLI symlinks for HTTPS and E2EE
+
+- **Symlinks are resolved during Tailscale binary discovery.** When `tailscale`
+  is located via `PATH` or standard locations as a symlink (such as Homebrew's
+  symlinks on macOS pointing to `/Applications/Tailscale.app/Contents/MacOS/Tailscale`),
+  the binary path is now resolved to its real target so commands like
+  `tailscale cert` and `tailscale status --json` succeed without bundle permission
+  errors.
+- **`agy-remote qr` preview configures TLS.** When no server is actively running,
+  `agy-remote qr` now checks for Tailscale and displays the HTTPS MagicDNS URL
+  in the preview banner and QR code rather than falling back to plain HTTP.
+
 
 The VSUSP guard from the earlier round only stopped the *line discipline* from
 generating SIGTSTP. A TUI that reads the 0x1a byte and raises SIGTSTP on itself
