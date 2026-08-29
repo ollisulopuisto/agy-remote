@@ -45,6 +45,7 @@ class TmuxSupervisor:
         cmd: list[str] | None = None,
         env: dict[str, str] | None = None,
         target: str | None = None,
+        workdir: str | None = None,
     ) -> None:
         self.session_name = session_name
         #: Where keys land. A session name aims at whichever pane is active in
@@ -56,6 +57,9 @@ class TmuxSupervisor:
         #: ours, so it travels in the command itself -- which `ps` exposes to
         #: every local user, so nothing secret may be put here.
         self.env = env or {}
+        #: Directory the session starts in (`-c`). A phone-spawned session
+        #: lands in its freshly cloned repo, not the tmux server's cwd.
+        self.workdir = workdir
 
     def has_session(self) -> bool:
         """Check if target tmux session is currently active."""
@@ -111,10 +115,11 @@ class TmuxSupervisor:
             # 0x1a byte and raises SIGTSTP on itself cannot wedge the pane
             # either.
             safe_cmd = f"stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec {cmd_str}"
-            subprocess.run(
-                ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
-                check=True,
-            )
+            args = ["tmux", "new-session", "-d", "-s", self.session_name]
+            if self.workdir:
+                args += ["-c", self.workdir]
+            args.append(safe_cmd)
+            subprocess.run(args, check=True)
             subprocess.run(
                 ["tmux", "set-option", "-t", self.session_name, "focus-events", "on"],
                 capture_output=True,
@@ -146,11 +151,11 @@ class TmuxSupervisor:
         # with no shell to bring it back, whether via the line discipline
         # (VSUSP) or a TUI raising SIGTSTP on itself (trap '' TSTP).
         safe_cmd = f"stty susp undef 2>/dev/null; trap '' TSTP 2>/dev/null; exec {shlex.join(argv)}"
-        res = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", self.session_name, safe_cmd],
-            capture_output=True,
-            check=False,
-        )
+        args = ["tmux", "new-session", "-d", "-s", self.session_name]
+        if self.workdir:
+            args += ["-c", self.workdir]
+        args.append(safe_cmd)
+        res = subprocess.run(args, capture_output=True, check=False)
         if res.returncode == 0:
             subprocess.run(
                 ["tmux", "set-option", "-t", self.session_name, "focus-events", "on"],

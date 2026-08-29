@@ -45,11 +45,13 @@ from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
     KeyPressRequest,
+    NewSessionRequest,
     UserPromptRequest,
 )
 from .pty_runner import get_pty_supervisor
 from .push import get_push_manager
 from .session_manager import SessionManager
+from .spawner import SessionSpawner, SpawnerBusyError, SpawnerError
 from .tmux_runner import get_tmux_supervisor
 from .version import VERSION
 
@@ -129,6 +131,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     )
     app.state.session_manager = session_mgr
     app.state.config = cfg
+    app.state.spawner = SessionSpawner(cfg, session_mgr, push_mgr)
 
     #: Sent on every response as a second line of defence behind the <meta> CSP
     #: in index.html. No third-party origins are permitted: this page holds the
@@ -301,6 +304,42 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         if not success:
             raise HTTPException(status_code=404, detail="Could not switch conversation")
         return {"status": "ok", "active_conversation_id": conversation_id}
+
+    @app.post("/api/sessions", status_code=status.HTTP_202_ACCEPTED)
+    async def create_session(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Clone a repository and start an agy on it, reported over events.
+
+        The reply is the *acceptance*: the clone, the spawn and the readiness
+        wait take minutes, and progress arrives as `session_spawning` /
+        `session_created` events rather than as a held response.
+
+        The same sealing rule as the other content endpoints: with E2EE on, an
+        unsealed body is never legitimate.
+        """
+        verify_auth(request, token, token_header)
+
+        mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        req = NewSessionRequest.model_validate(body)
+        spawner: SessionSpawner = request.app.state.spawner
+        try:
+            return spawner.create(req)
+        except SpawnerBusyError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        except SpawnerError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/screen")
     async def get_screen(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ToolCall(BaseModel):
@@ -86,6 +86,36 @@ class UserPromptRequest(BaseModel):
 
     prompt: str
     conversation_id: str | None = None
+
+
+class NewSessionRequest(BaseModel):
+    """The phone asks the server to clone a repo and start an agy on it.
+
+    The server is the operator's always-on machine: it owns the clone, the
+    tmux session and the supervision, and reports back over events.
+    """
+
+    repo_url: str
+    branch: str | None = None
+    #: The task to hand the agent once the code is there, or None to watch it idle.
+    task: str | None = None
+    #: Display name; derived from the repo URL when absent.
+    name: str | None = None
+    #: Default: the server clones (deterministic, no approval round-trip).
+    #: True: the clone instruction becomes the seed prompt, so it is an
+    #: ordinary tool call the human approves on the phone.
+    let_agent_clone: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_field_names(cls, data: Any) -> Any:
+        """The plan and the first PWA build named the fields differently."""
+        if isinstance(data, dict):
+            if not data.get("repo_url") and data.get("repo"):
+                data["repo_url"] = data.pop("repo")
+            if not data.get("task") and data.get("prompt"):
+                data["task"] = data.pop("prompt")
+        return data
 
 
 class KeyPressRequest(BaseModel):

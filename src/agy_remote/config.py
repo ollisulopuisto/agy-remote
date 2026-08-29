@@ -519,6 +519,27 @@ class RemoteConfig(BaseModel):
 config_instance: RemoteConfig | None = None
 
 
+def agy_child_env(cfg: RemoteConfig, session_id: str | None = None) -> dict[str, str]:
+    """What a supervised agy needs to know about the server supervising it.
+
+    Its PreToolUse hook otherwise resolves the endpoint from a host-wide state
+    file, so with two servers running both sessions' approvals would go to
+    whichever one published that file. Carries no token: under tmux this ends
+    up in argv, which `ps` shows to every local user, and the token is a
+    host-wide credential both servers already share.
+
+    `session_id` is the tmux session name the agy was spawned in: it is how
+    that agent signs itself when it talks to another session over the mailbox.
+    """
+    env = {
+        "AGY_REMOTE_URL": cfg.local_base_url,
+        "AGY_REMOTE_PORT": str(cfg.port),
+    }
+    if session_id:
+        env["AGY_REMOTE_SESSION_ID"] = session_id
+    return env
+
+
 def get_config(tailscale_bin: str | Path | None = None) -> RemoteConfig:
     """Get global configuration singleton."""
     global config_instance
