@@ -417,6 +417,14 @@ built-in checks, but the hook fires regardless — so `agy-remote run
 into the `agy` it spawns, and the hook then allows every tool call immediately.
 A hand-started `agy` never carries the marker and keeps the full approval flow.
 
+**Mixed installs are refused at startup.** The hook binary must be the same
+build as the `agy-remote` you launch: a stale `uv tool install` drifted behind
+its checkout breaks the approval protocol silently. `run`, `serve` and
+`attach` check the hook's `--version` against their own and exit with the fix
+printed (`uv tool upgrade agy-remote`); `--allow-stale-hook` overrides. While
+running, every approval POST carries the hook's version and the server warns
+on a mismatch.
+
 **Three timeouts, nested inward**, so the layer that gives up first is the one
 that can explain itself: the server decides at 240s, the hook gives up on the
 socket at 270s, and `agy` kills the hook at 300s. Reversed, a slow answer

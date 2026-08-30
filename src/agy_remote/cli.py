@@ -355,6 +355,11 @@ def cli() -> None:
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
 )
+@click.option(
+    "--allow-stale-hook",
+    is_flag=True,
+    help="Start even when hooks.json points at a different agy-remote build",
+)
 def serve(
     port: int,
     host: str,
@@ -365,6 +370,7 @@ def serve(
     tailscale_bin: str | None,
     brain_dir: Path | None,
     rotate_token: bool,
+    allow_stale_hook: bool,
 ) -> None:
     """Start the agy-remote server and watch active sessions."""
     if rotate_token:
@@ -385,7 +391,7 @@ def serve(
     _preflight_port_or_exit(cfg)
     _setup_tls(cfg, tls)
     print_banner(cfg, mode="Watcher Server")
-    _warn_if_hooks_unwired()
+    _ensure_hooks_wiring(allow_stale_hook=allow_stale_hook)
     _warn_if_second_instance(cfg)
 
     _serve_forever(cfg, create_app(cfg))
@@ -433,6 +439,11 @@ def serve(
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
 )
+@click.option(
+    "--allow-stale-hook",
+    is_flag=True,
+    help="Start even when hooks.json points at a different agy-remote build",
+)
 def attach(
     session: str | None,
     wait: bool,
@@ -445,6 +456,7 @@ def attach(
     tailscale_bin: str | None,
     brain_dir: Path | None,
     rotate_token: bool,
+    allow_stale_hook: bool,
 ) -> None:
     """Drive an agy already running in tmux, without restarting it.
 
@@ -500,7 +512,7 @@ def attach(
         else "agy (waiting — a session starts when a phone connects)"
     )
     print_banner(cfg, mode=mode_label)
-    _warn_if_hooks_unwired()
+    _ensure_hooks_wiring(allow_stale_hook=allow_stale_hook)
     _warn_if_second_instance(cfg)
 
     app = create_app(cfg)
@@ -644,6 +656,11 @@ def _resolve_tmux_target_or_exit(session: str | None) -> tuple[str, str | None]:
     is_flag=True,
     help="Issue a new token and encryption key, revoking every paired phone",
 )
+@click.option(
+    "--allow-stale-hook",
+    is_flag=True,
+    help="Start even when hooks.json points at a different agy-remote build",
+)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -657,6 +674,7 @@ def run(
     tailscale_bin: str | None,
     qr_timeout: float,
     rotate_token: bool,
+    allow_stale_hook: bool,
 ) -> None:
     """Launch agy inside a supervisor with simultaneous desktop & mobile control."""
     if rotate_token:
@@ -678,7 +696,7 @@ def run(
     child_cmd = ["agy"] + ctx.args
 
     print_banner(cfg, mode="agy (tmux)" if tmux else "agy (PTY)")
-    _warn_if_hooks_unwired()
+    _ensure_hooks_wiring(allow_stale_hook=allow_stale_hook)
     _warn_if_second_instance(cfg)
 
     # Start FastAPI server in a background thread
@@ -786,17 +804,41 @@ def _wants_skip_permissions(extra_args: list[str]) -> bool:
     )
 
 
-def _warn_if_hooks_unwired() -> None:
-    """Remote approvals fail silently when hooks.json is absent or stale."""
+def _ensure_hooks_wiring(allow_stale_hook: bool = False) -> str | None:
+    """Check that remote approvals are actually wired before promising them.
+
+    Missing or broken wiring only warns: approvals degrade to the terminal,
+    which is coherent. A *stale* hook -- a different agy-remote build than the
+    one running, typically a uv tool install that drifted behind its checkout
+    -- is refused outright: the two halves stop speaking the same protocol,
+    and the symptoms (endless prompts, ignored skip-permissions) look like
+    anything but a version mismatch.
+    """
     status, detail = hook_health()
     if status == "ok":
-        return
+        return status
+    if status == "stale" and not allow_stale_hook:
+        console.print(
+            f"[bold red]Refusing to start: the installed hook is a different agy-remote build.[/bold red]\n"
+            f"  {detail}\n"
+            "  Mixed builds break the approval protocol silently -- a skip-permissions\n"
+            "  marker this build sends means nothing to the old hook, and vice versa.\n"
+            "  Fix:  [bold]uv tool upgrade agy-remote[/bold]  (or re-run [bold]agy-remote setup-hooks[/bold]\n"
+            "        from the install that should own hooks.json)\n"
+            "  Override:  [bold]--allow-stale-hook[/bold]\n"
+        )
+        raise SystemExit(2)
     if status == "missing":
         console.print(
             "[bold yellow]Remote approvals are NOT wired on this machine:[/bold yellow] "
             "no PreToolUse hook installed.\n"
             "  Tool permissions will appear in the terminal only, never on the phone.\n"
             "  Fix:  [bold]agy-remote setup-hooks[/bold]\n"
+        )
+    elif status == "stale":
+        console.print(
+            f"[bold yellow]Remote approvals are wired to a DIFFERENT build "
+            f"(continuing on --allow-stale-hook):[/bold yellow]\n  {detail}\n"
         )
     else:
         console.print(
@@ -805,6 +847,7 @@ def _warn_if_hooks_unwired() -> None:
             "  (moved checkout, recreated venv, or config from another machine).\n"
             "  Fix:  [bold]agy-remote setup-hooks[/bold]\n"
         )
+    return status
 
 
 def attach_tmux_after_pairing(supervisor: TmuxSupervisor, pause=None, timeout: float = 30) -> int:

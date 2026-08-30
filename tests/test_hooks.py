@@ -144,11 +144,19 @@ def test_hook_health_reports_a_stale_binary_path(tmp_path: Path):
     assert "/nonexistent/venv/bin/agy-remote" in detail
 
 
-def test_hook_health_accepts_a_working_install(tmp_path: Path):
-    from agy_remote.hooks import hook_health
+def test_hook_health_accepts_a_working_install(tmp_path: Path, monkeypatch):
+    import shlex
+
+    from agy_remote import hooks as hooks_mod
 
     install_hooks_config(tmp_path)
-    status, _detail = hook_health(config_dir=tmp_path)
+    hooks_file = tmp_path / "hooks.json"
+    command = json.loads(hooks_file.read_text())["remote-approval"]["PreToolUse"][0]["hooks"][0]["command"]
+    # Pin parity to whatever the resolved binary actually reports, so the test
+    # stays green while checkout and tool install drift in real life.
+    reported = hooks_mod._hook_binary_version(shlex.split(command)[0])
+    monkeypatch.setattr(hooks_mod, "_RUNNING_VERSION", reported)
+    status, _detail = hooks_mod.hook_health(config_dir=tmp_path)
     assert status == "ok"
 
 
@@ -302,6 +310,136 @@ def test_run_recognizes_the_skip_permissions_flag_in_its_passthrough_args():
     assert not _wants_skip_permissions(["--model", "x"])
     # A different flag that merely contains the words must not match.
     assert not _wants_skip_permissions(["--dangerously-skip-permissions-nothing"])
+
+
+# ---------------------------------------------------------------------------
+# A stale copy must be impossible to miss. The uv tool install drifts behind
+# the checkout it was installed from, and a mixed pair -- new run with an old
+# hook, or the reverse -- breaks the approval protocol silently.
+# ---------------------------------------------------------------------------
+
+
+def _fake_hook_binary(tmp_path: Path, output: str, name: str = "agy-remote") -> str:
+
+    binary = tmp_path / "bin" / name
+    binary.parent.mkdir(exist_ok=True)
+    binary.write_text(f"#!/bin/sh\ncat <<'EOF'\n{output}\nEOF\n")
+    binary.chmod(0o755)
+    return str(binary)
+
+
+def test_a_hook_binary_from_another_build_is_stale(monkeypatch, tmp_path: Path):
+    from agy_remote import hooks as hooks_mod
+
+    binary = _fake_hook_binary(tmp_path, "agy-remote v0.0.0.1")
+    monkeypatch.setattr(hooks_mod, "_RUNNING_VERSION", "26.08.30.102")
+    _write_hooks_file(tmp_path, f"{binary} hook-pre-tool")
+
+    status, detail = hooks_mod.hook_health(config_dir=tmp_path)
+
+    assert status == "stale"
+    assert "0.0.0.1" in detail and "26.08.30.102" in detail
+
+
+def test_a_hook_binary_that_reports_no_version_is_stale(monkeypatch, tmp_path: Path):
+    from agy_remote import hooks as hooks_mod
+
+    binary = _fake_hook_binary(tmp_path, "something else entirely")
+    monkeypatch.setattr(hooks_mod, "_RUNNING_VERSION", "26.08.30.102")
+    _write_hooks_file(tmp_path, f"{binary} hook-pre-tool")
+
+    status, detail = hooks_mod.hook_health(config_dir=tmp_path)
+
+    assert status == "stale"
+    assert "no version" in detail
+
+
+def test_a_matching_hook_binary_is_ok(monkeypatch, tmp_path: Path):
+    from agy_remote import hooks as hooks_mod
+
+    binary = _fake_hook_binary(tmp_path, "agy-remote v26.08.30.102")
+    monkeypatch.setattr(hooks_mod, "_RUNNING_VERSION", "26.08.30.102")
+    _write_hooks_file(tmp_path, f"{binary} hook-pre-tool")
+
+    status, _detail = hooks_mod.hook_health(config_dir=tmp_path)
+
+    assert status == "ok"
+
+
+@pytest.mark.parametrize("command_form", ["uvx", "module"])
+def test_the_version_check_skips_forms_that_cannot_answer_cheaply(monkeypatch, tmp_path: Path, command_form):
+    """`uvx` resolves the package over the network and `python -m --version`
+    prints the interpreter's version -- neither may run on every tool call's
+    health check, and neither may be mistaken for a stale binary."""
+    import sys
+
+    from agy_remote import hooks as hooks_mod
+
+    monkeypatch.setattr(hooks_mod, "_RUNNING_VERSION", "26.08.30.102")
+    if command_form == "uvx":
+        # A uvx that would fail loudly if spawned: the check must not run it.
+        fake_uvx = _fake_hook_binary(tmp_path, "", name="uvx")
+        command = f"{fake_uvx} agy-remote hook-pre-tool"
+    else:
+        command = f"{sys.executable} -m agy_remote.cli hook-pre-tool"
+    _write_hooks_file(tmp_path, command)
+
+    status, _detail = hooks_mod.hook_health(config_dir=tmp_path)
+
+    assert status == "ok"
+
+
+def test_the_hook_advertises_its_version_to_the_server(monkeypatch):
+    """So a mixed install is visible while running, not only at startup."""
+    import io
+
+    from agy_remote import hooks as hooks_mod
+
+    captured: dict = {}
+
+    class FakeResponse:
+        def read(self):
+            return b'{"decision": "ask"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=0):
+        captured["version"] = req.headers.get("X-agy-remote-version")
+        return FakeResponse()
+
+    monkeypatch.setattr(hooks_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("AGY_REMOTE_URL", "http://127.0.0.1:9999")
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"toolCall": {"name": "run_command"}}'))
+
+    import contextlib
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        hooks_mod.run_pre_tool_hook()
+
+    assert captured["version"] == hooks_mod.__version__
+
+
+def test_run_refuses_to_start_with_a_mixed_hook_build(monkeypatch):
+    """The exact failure seen in the wild: `run` upgraded, the hook binary not
+    (or the reverse). Coherence matters more than a quick start."""
+    import sys
+
+    cli_mod = sys.modules["agy_remote.cli"]
+    monkeypatch.setattr(cli_mod, "hook_health", lambda: ("stale", "old binary reports v0.0.0.1"))
+    with pytest.raises(SystemExit):
+        cli_mod._ensure_hooks_wiring(allow_stale_hook=False)
+
+
+def test_run_can_be_forced_past_a_mixed_hook_build(monkeypatch):
+    import sys
+
+    cli_mod = sys.modules["agy_remote.cli"]
+    monkeypatch.setattr(cli_mod, "hook_health", lambda: ("stale", "old binary reports v0.0.0.1"))
+    assert cli_mod._ensure_hooks_wiring(allow_stale_hook=True) == "stale"
 
 
 def test_the_timeouts_are_nested_so_the_server_answers_first():

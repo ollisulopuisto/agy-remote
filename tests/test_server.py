@@ -168,6 +168,59 @@ def test_key_press_without_a_supervisor_says_so(tmp_path: Path, no_session):
 
 
 # ---------------------------------------------------------------------------
+# A hook from another build must be loud, not silent. Mixed installs break
+# the approval protocol in ways that look like mysterious prompts or hangs.
+# ---------------------------------------------------------------------------
+
+
+def _post_from_hook(client: TestClient, version: str | None):
+    payload = {"toolCall": {"name": "Bash", "args": {"CommandLine": "ls -la"}}, "conversationId": "default"}
+    headers = {"X-Auth-Token": "secret123"}
+    if version is not None:
+        headers["X-Agy-Remote-Version"] = version
+    return client.post("/api/hook/pre-tool", json=payload, headers=headers)
+
+
+def test_a_hook_from_another_build_is_logged_loudly(tmp_path: Path, no_session, caplog):
+    import logging
+
+    client = _client(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="agy_remote.server"):
+        resp = _post_from_hook(client, "v0.0.0.1")
+
+    assert resp.status_code == 200
+    assert any("0.0.0.1" in record.getMessage() for record in caplog.records)
+
+
+def test_a_hook_from_this_build_stays_quiet(tmp_path: Path, no_session, caplog):
+    import logging
+
+    from agy_remote.version import VERSION
+
+    client = _client(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="agy_remote.server"):
+        resp = _post_from_hook(client, f"v{VERSION}")
+
+    assert resp.status_code == 200
+    assert not [r for r in caplog.records if "version" in r.getMessage().lower()]
+
+
+def test_a_hook_without_a_version_header_is_tolerated(tmp_path: Path, no_session, caplog):
+    """Older hooks send no header at all; one missing version must not spam."""
+    import logging
+
+    client = _client(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="agy_remote.server"):
+        resp = _post_from_hook(client, None)
+
+    assert resp.status_code == 200
+    assert not [r for r in caplog.records if "version" in r.getMessage().lower()]
+
+
+# ---------------------------------------------------------------------------
 # Pairing expiry must hold while the server runs, not only at the next restart.
 # ---------------------------------------------------------------------------
 

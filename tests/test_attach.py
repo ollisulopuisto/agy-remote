@@ -195,7 +195,7 @@ def _stub_attach(monkeypatch, tmp_path: Path, port: int) -> dict[str, list]:
 
     monkeypatch.setattr(cli_mod, "get_config", fake_config)
     monkeypatch.setattr(cli_mod, "_setup_tls", lambda cfg, tls: None)
-    monkeypatch.setattr(cli_mod, "_warn_if_hooks_unwired", lambda: None)
+    monkeypatch.setattr(cli_mod, "_ensure_hooks_wiring", lambda allow_stale_hook=False: "ok")
     monkeypatch.setattr(cli_mod, "_warn_if_second_instance", lambda cfg: None)
     monkeypatch.setattr(cli_mod, "print_banner", lambda cfg, mode="": seen["banner"].append(mode))
     monkeypatch.setattr(cli_mod, "create_app", lambda cfg: FakeApp)

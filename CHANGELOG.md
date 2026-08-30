@@ -1,5 +1,23 @@
 # Changelog
 
+## v26.08.30.103 — A stale copy refuses to start instead of asking forever
+
+- **Mixed builds are now caught at startup.** The uv tool install drifts
+  behind the checkout it was installed from, and a mixed pair — new `run`
+  with an old hook binary, or the reverse — breaks the approval protocol
+  silently: a skip-permissions marker this build sends means nothing to an
+  old hook, and vice versa. `hook_health` now spawns the hook binary's
+  `--version` and compares it to the running build, answering `stale` on a
+  mismatch; `run`, `serve` and `attach` refuse to start on stale (exit 2),
+  printing both versions and the fix. `--allow-stale-hook` overrides. Parity
+  is only checked on a direct binary — `uvx` would resolve the package over
+  the network, and `python -m ... --version` prints the interpreter's.
+- **The hook advertises its version on every approval.** Each PreToolUse POST
+  carries `X-Agy-Remote-Version`; the server logs a loud warning when it
+  differs from its own build, so drift appearing mid-session shows up in the
+  log instead of only as mysterious prompts or hangs. The approval itself
+  still proceeds — refusing it would strand the agent.
+
 ## v26.08.30.102 — --dangerously-skip-permissions survives its own hook
 
 - **A supervised agy launched with `--dangerously-skip-permissions` no longer

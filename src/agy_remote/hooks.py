@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -13,6 +14,8 @@ from pathlib import Path
 
 from .config import find_server_for_tmux_session, live_runtime_state, read_stored_token
 from .tmux_runner import session_id_from_env
+from .version import VERSION as _RUNNING_VERSION
+from .version import __version__
 
 DEFAULT_PORT = 8765
 
@@ -197,6 +200,9 @@ def run_pre_tool_hook() -> None:
             headers={
                 "Content-Type": "application/json",
                 "X-Auth-Token": auth_token,
+                # So a mixed install -- this hook from one build, the server
+                # from another -- is visible while running, not just at startup.
+                "X-Agy-Remote-Version": __version__,
             },
             method="POST",
         )
@@ -215,6 +221,23 @@ def run_pre_tool_hook() -> None:
         print(json.dumps({"decision": "ask", "reason": f"Hook error: {e}"}))
 
 
+def _hook_binary_version(binary: str) -> str | None:
+    """The numeric version a hook binary reports for itself, e.g. 26.08.30.102.
+
+    None means it ran but said nothing recognizable -- itself a symptom of a
+    binary that is not the agy-remote hooks.json meant to point at.
+    """
+    try:
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for token in (proc.stdout or "").split():
+        candidate = token[1:] if token.startswith("v") and token[1:2].isdigit() else token
+        if candidate and candidate[0].isdigit() and "." in candidate:
+            return candidate
+    return None
+
+
 def hook_health(config_dir: Path | None = None) -> tuple[str, str | None]:
     """Whether remote approvals are actually wired on this machine.
 
@@ -224,7 +247,16 @@ def hook_health(config_dir: Path | None = None) -> tuple[str, str | None]:
     asking in its own TUI, and the phone never sees the approval. `run` checks
     this at startup so the failure is loud instead of silent.
 
-    Returns ("ok" | "missing" | "broken", detail).
+    A binary that exists is not enough: it must also be *this* build. The uv
+    tool install drifts behind the checkout it was installed from, and a mixed
+    pair -- new run with an old hook, or the reverse -- breaks the protocol
+    silently (a new run's skip-permissions marker means nothing to an old
+    hook; an old run's env means nothing to a new one). That state answers
+    "stale" and `run` refuses to start on it. Parity is only checkable on a
+    direct binary: `uvx` would resolve the package over the network, and
+    `python -m ... --version` prints the interpreter's version.
+
+    Returns ("ok" | "missing" | "broken" | "stale", detail).
     """
     if config_dir is None:
         config_dir = Path.home() / ".gemini" / "config"
@@ -247,6 +279,10 @@ def hook_health(config_dir: Path | None = None) -> tuple[str, str | None]:
             except ValueError:
                 return "broken", command
             if Path(binary).is_file() and os.access(binary, os.X_OK):
+                if Path(binary).name == "agy-remote":
+                    reported = _hook_binary_version(binary)
+                    if reported != _RUNNING_VERSION:
+                        return "stale", f"{binary} reports {reported or 'no version'}, this is {_RUNNING_VERSION}"
                 return "ok", command
             return "broken", binary
 

@@ -612,6 +612,20 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         conversation_id = payload.get("conversationId", "default")
         approval_id = str(uuid.uuid4())
 
+        # A mixed install breaks the approval protocol silently: a new run's
+        # skip-permissions marker means nothing to an old hook and vice versa.
+        # The approval still proceeds -- refusing it would strand the agent --
+        # but the drift must be visible somewhere other than the symptoms.
+        hook_version = (request.headers.get("X-Agy-Remote-Version") or "").lstrip("v")
+        if hook_version and hook_version != VERSION:
+            logger.warning(
+                "PreToolUse hook reports v%s but this server runs v%s: "
+                "a mixed agy-remote install. Upgrade the stale side "
+                "(usually: uv tool upgrade agy-remote) and restart the session.",
+                hook_version,
+                VERSION,
+            )
+
         # If this server is supervising a session, bind to its reported conversation ID
         if conversation_id and conversation_id != "default":
             await mgr.bind_supervised_conversation(conversation_id)
