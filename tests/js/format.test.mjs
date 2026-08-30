@@ -64,3 +64,64 @@ test('a session announces itself, so a new one is not read as more of the last',
   assert.equal(sessionLabel({ id: 'abcdef12' }, ''), 'Session abcdef12');
   assert.equal(sessionLabel(null, '17:35'), '');
 });
+
+test('mailbox envelope parses agent-to-agent messages and ignores human prompts', () => {
+  const { parseEnvelope } = sandbox.window.AgyFormat;
+
+  const agentMsg = parseEnvelope('[message from agy-work: tests are red, check log]');
+  assert.equal(agentMsg.isEnvelope, true);
+  assert.equal(agentMsg.from, 'agy-work');
+  assert.equal(agentMsg.text, 'tests are red, check log');
+
+  const multiline = parseEnvelope('[message from agy-db:\nLine 1\nLine 2\n]');
+  assert.equal(multiline.isEnvelope, true);
+  assert.equal(multiline.from, 'agy-db');
+  assert.equal(multiline.text, 'Line 1\nLine 2');
+
+  const human = parseEnvelope('just a regular human prompt');
+  assert.equal(human.isEnvelope, false);
+  assert.equal(human.from, null);
+  assert.equal(human.text, 'just a regular human prompt');
+
+  const empty = parseEnvelope('');
+  assert.equal(empty.isEnvelope, false);
+  assert.equal(empty.text, '');
+});
+
+test('trafficForSession filters pairs where session is a member', () => {
+  const { trafficForSession } = sandbox.window.AgyFormat;
+  const pairs = [
+    { a: 'agy-a', b: 'agy-b', count: 3, looping: false, muted: false },
+    { a: 'agy-b', b: 'agy-c', count: 5, looping: true, muted: false },
+    { a: 'agy-x', b: 'agy-y', count: 1, looping: false, muted: true }
+  ];
+
+  const forB = trafficForSession(pairs, 'agy-b');
+  assert.equal(forB.length, 2);
+  assert.equal(forB[0].a, 'agy-a');
+  assert.equal(forB[1].b, 'agy-c');
+
+  assert.equal(trafficForSession(pairs, 'agy-unknown').length, 0);
+  assert.equal(trafficForSession(null, 'agy-a').length, 0);
+});
+
+test('formatTrafficPill formats display label, peer, and status states', () => {
+  const { formatTrafficPill } = sandbox.window.AgyFormat;
+
+  const normal = formatTrafficPill({ a: 'agy-a', b: 'agy-b', count: 4, looping: false, muted: false }, 'agy-a');
+  assert.equal(normal.peer, 'agy-b');
+  assert.equal(normal.count, 4);
+  assert.equal(normal.state, 'active');
+  assert.equal(normal.label, '⇄ agy-b ×4');
+
+  const looping = formatTrafficPill({ a: 'agy-a', b: 'agy-b', count: 20, looping: true, muted: false }, 'agy-b');
+  assert.equal(looping.peer, 'agy-a');
+  assert.equal(looping.state, 'looping');
+  assert.equal(looping.looping, true);
+
+  const muted = formatTrafficPill({ a: 'agy-a', b: 'agy-c', count: 0, looping: false, muted: true }, 'agy-a');
+  assert.equal(muted.peer, 'agy-c');
+  assert.equal(muted.state, 'muted');
+  assert.equal(muted.muted, true);
+});
+

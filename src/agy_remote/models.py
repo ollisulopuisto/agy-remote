@@ -146,6 +146,13 @@ class ApprovalResponseRequest(BaseModel):
     overwrite_args: dict[str, Any] | None = None
 
 
+class MuteMailboxRequest(BaseModel):
+    """A pair of session names whose mailbox channel is muted or unmuted."""
+
+    a: str
+    b: str
+
+
 class ServerEvent(BaseModel):
     """Event pushed from server to WebSocket clients."""
 

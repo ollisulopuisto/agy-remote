@@ -41,10 +41,12 @@ from .config import (
 )
 from .crypto import EnvelopeError, decode_key, decrypt_payload
 from .keys import is_known_key
+from .mailbox import MailboxError, validate_target
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
     KeyPressRequest,
+    MuteMailboxRequest,
     NewSessionRequest,
     UserPromptRequest,
 )
@@ -340,6 +342,57 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except SpawnerError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.get("/api/mailbox")
+    async def get_mailbox(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Traffic and loop status across all agent-to-agent mailbox pairs."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        return {"pairs": mgr.agent_traffic()}
+
+    @app.post("/api/mailbox/mute")
+    async def mute_mailbox(
+        req: MuteMailboxRequest,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Mute an agent mailbox pair, pausing delivery between them."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            a = validate_target(req.a)
+            b = validate_target(req.b)
+        except MailboxError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if a == b:
+            raise HTTPException(status_code=400, detail="Cannot mute a session talking to itself")
+        mgr.mute_mailbox_pair(a, b)
+        return {"status": "ok", "pair": {"a": a, "b": b, "muted": True}}
+
+    @app.delete("/api/mailbox/mute")
+    async def unmute_mailbox(
+        req: MuteMailboxRequest,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Unmute an agent mailbox pair, resuming message delivery."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            a = validate_target(req.a)
+            b = validate_target(req.b)
+        except MailboxError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        if a == b:
+            raise HTTPException(status_code=400, detail="Cannot unmute a session talking to itself")
+        mgr.unmute_mailbox_pair(a, b)
+        return {"status": "ok", "pair": {"a": a, "b": b, "muted": False}}
 
     @app.get("/api/screen")
     async def get_screen(

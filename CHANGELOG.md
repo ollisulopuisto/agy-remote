@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.30.95 — Mailbox REST control surface and PWA loop visibility (W2 2.3)
+
+- **Mailbox REST API (`GET /api/mailbox`, `POST /api/mailbox/mute`, `DELETE /api/mailbox/mute`).**
+  REST control surface exposing active pair stats, loop status, message counts,
+  and undirected mute/unmute actions for agent mailbox pairs.
+- **Distinct agent message rendering in transcript.** Injected synthetic prompt
+  envelopes (`[message from <sender>: ...]`) render with dedicated styling
+  distinguishing agent chatter from user prompts.
+- **Drawer session traffic badges and mute controls.** Session items in the PWA
+  drawer show live `⇄ <peer> ×<count>` traffic badges with looping indicators
+  and tap-to-mute/unmute toggling.
+
 ## v26.08.30.1 — Start a session from the phone, and let agents talk
 
 - **Start an agy session from the phone (W1 1.2).** New `POST /api/sessions`:

@@ -10,6 +10,7 @@ let recognition = null;
 let autoScroll = true;
 let attachedFiles = [];
 let cryptoKey = null;
+let agentTraffic = [];
 
 // Parse token and E2EE key from URL and Hash
 const urlParams = new URLSearchParams(window.location.search);
@@ -482,6 +483,7 @@ function handleServerEvent(event) {
     currentConversationId = data.active_conversation_id;
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
+    agentTraffic = data.agent_traffic || [];
     updateHeader();
     renderAllMessages();
     renderConversations(data.conversations || []);
@@ -506,6 +508,9 @@ function handleServerEvent(event) {
     checkUrlNavigation();
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
+  } else if (type === 'agent_traffic') {
+    agentTraffic = (data && data.pairs) || [];
+    renderConversations(drawerConversations);
   } else if (type === 'session_spawning') {
     // A stage of this sheet's own spawn: the chip walks cloning -> starting,
     // and a failure shows git's stderr rather than a guess.
@@ -637,6 +642,21 @@ function appendStep(step, target) {
   const source = step.source || 'UNKNOWN';
 
   if (stepType === 'USER_INPUT' || source === 'USER_INPUT' || source === 'USER_EXPLICIT') {
+    const env = window.AgyFormat.parseEnvelope(step.content);
+    if (env && env.isEnvelope) {
+      const envelopeDiv = document.createElement('div');
+      envelopeDiv.className = 'message-agent-envelope';
+      envelopeDiv.innerHTML = `
+        <div class="agent-envelope-header">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          <span>Message from <strong>${escapeHtml(env.from)}</strong></span>
+        </div>
+        <div class="agent-envelope-body">${escapeHtml(env.text)}</div>
+      `;
+      target.appendChild(envelopeDiv);
+      return;
+    }
+
     const userDiv = document.createElement('div');
     userDiv.className = 'message-user';
     userDiv.textContent = step.content || '';
@@ -1214,6 +1234,28 @@ function updateHeader() {
   }
 }
 
+async function toggleMailboxMute(a, b, currentlyMuted) {
+  const method = currentlyMuted ? 'DELETE' : 'POST';
+  const url = `/api/mailbox/mute${authToken ? `?token=${encodeURIComponent(authToken)}` : ''}`;
+  try {
+    const res = await fetch(url, {
+      method: method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a, b })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const existing = agentTraffic.find(p => (p.a === a && p.b === b) || (p.a === b && p.b === a));
+      if (existing) {
+        existing.muted = !currentlyMuted;
+      }
+      renderConversations(drawerConversations);
+    }
+  } catch (err) {
+    console.error('Failed to toggle mailbox mute:', err);
+  }
+}
+
 function renderConversations(convs) {
   drawerConversations = convs;
   drawerList.innerHTML = '';
@@ -1238,6 +1280,41 @@ function renderConversations(convs) {
       <div class="session-item-title">${escapeHtml(c.title || c.id)}</div>
       <div class="session-item-meta">${timeStr} • ${c.step_count} steps</div>
     `;
+
+    // Agent mailbox traffic badges (W2, item 2.3)
+    const matchingPairs = [];
+    const keysToCheck = [c.id, c.title, c.tmux_name].filter(Boolean);
+    keysToCheck.forEach(k => {
+      const pairs = window.AgyFormat.trafficForSession(agentTraffic, k);
+      pairs.forEach(p => {
+        if (!matchingPairs.some(mp => (mp.a === p.a && mp.b === p.b) || (mp.a === p.b && mp.b === p.a))) {
+          matchingPairs.push(p);
+        }
+      });
+    });
+
+    if (matchingPairs.length > 0) {
+      const trafficContainer = document.createElement('div');
+      trafficContainer.className = 'session-item-traffic';
+      matchingPairs.forEach(pair => {
+        const pillData = window.AgyFormat.formatTrafficPill(pair, c.id) ||
+                         window.AgyFormat.formatTrafficPill(pair, c.title);
+        if (!pillData) return;
+        const pill = document.createElement('span');
+        pill.className = `traffic-pill ${pillData.state}`;
+        pill.title = pillData.muted
+          ? 'Mailbox muted. Tap to unmute.'
+          : (pillData.looping ? 'Mailbox looping paused. Tap to mute.' : 'Agent mailbox active. Tap to mute.');
+        pill.textContent = `${pillData.label}${pillData.muted ? ' (muted)' : (pillData.looping ? ' (looping)' : '')}`;
+        pill.onclick = (e) => {
+          e.stopPropagation();
+          toggleMailboxMute(pair.a, pair.b, pair.muted);
+        };
+        trafficContainer.appendChild(pill);
+      });
+      item.appendChild(trafficContainer);
+    }
+
     drawerList.appendChild(item);
   });
   updateApprovalIndicators();

@@ -242,6 +242,45 @@
     return JSON.stringify(m);
   }
 
+  // Agent-to-agent mailbox envelope parser (W2, item 2.3).
+  // When an agent sends a message via agy-msg, the server wraps it in
+  // `[message from <from>: <text>]`. The phone recognizes this synthetic prompt
+  // and renders it distinctly from a human prompt.
+  function parseEnvelope(text) {
+    var raw = String(text == null ? '' : text).trim();
+    var match = raw.match(/^\[message from ([A-Za-z0-9_-]+):\s*([\s\S]*)\]$/);
+    if (!match) return { isEnvelope: false, from: null, text: raw };
+    return {
+      isEnvelope: true,
+      from: match[1],
+      text: match[2].trim()
+    };
+  }
+
+  // The mailbox pairs one session is part of, addressed as peers.
+  function trafficForSession(pairs, sessionKey) {
+    if (!pairs || !Array.isArray(pairs) || !sessionKey) return [];
+    return pairs.filter(function (p) {
+      return p && (p.a === sessionKey || p.b === sessionKey);
+    });
+  }
+
+  // Format a single mailbox traffic pair into a display pill for the session row.
+  function formatTrafficPill(pair, currentSessionKey) {
+    if (!pair) return null;
+    var peer = pair.a === currentSessionKey ? pair.b : (pair.b === currentSessionKey ? pair.a : pair.a + '↔' + pair.b);
+    var count = typeof pair.count === 'number' ? pair.count : 0;
+    var state = pair.muted ? 'muted' : (pair.looping ? 'looping' : 'active');
+    return {
+      peer: peer,
+      count: count,
+      state: state,
+      muted: !!pair.muted,
+      looping: !!pair.looping,
+      label: '⇄ ' + peer + ' ×' + count
+    };
+  }
+
   global.AgyFormat = {
     pairedManifest: pairedManifest,
     approvalsForSession: approvalsForSession,
@@ -259,6 +298,10 @@
     toolSummary: toolSummary,
     outputSummary: outputSummary,
     isCollapsible: isCollapsible,
-    firstLine: firstLine
+    firstLine: firstLine,
+    parseEnvelope: parseEnvelope,
+    trafficForSession: trafficForSession,
+    formatTrafficPill: formatTrafficPill
   };
 })(typeof window !== 'undefined' ? window : this);
+
