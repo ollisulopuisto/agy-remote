@@ -1,5 +1,36 @@
 # Changelog
 
+## v26.08.30.1 — Start a session from the phone, and let agents talk
+
+- **Start an agy session from the phone (W1 1.2).** New `POST /api/sessions`:
+  the server validates the repo URL (scheme allowlist, no `file://`), clones
+  into a sanitized directory under the projects root, starts the agy, and
+  reports `cloning → starting → ready` over WebSocket events. A failure shows
+  git's own stderr on the phone.
+- **Spawned sessions are first-class registry members (W1 1.2).** Every
+  session the server starts registers a `SessionRecord` and exports
+  `AGY_REMOTE_SESSION_ID`, so keys, prompts, approvals and the mailbox route
+  to it like any other supervised session.
+- **Agent-to-agent mailbox (W2 2.2).** New `agy-msg <session> "text"` command
+  (`agy-remote msg` likewise): appends one validated JSON line to the
+  target's inbox — JSONL under the brain directory, append-only, `0700`
+  directory and `0600` file. Targets are restricted to `A-Za-z0-9_-` so a
+  target can never be a path; messages are capped at 4 KB; the sender signs
+  itself from `AGY_REMOTE_SESSION_ID`. Sending is an ordinary bash tool call,
+  so it passes the existing PreToolUse approval gate: the human approves the
+  channel.
+- **New-session sheet in the PWA (W1 1.3).** A sheet collects repo, branch,
+  task and name; a live stage chip walks cloning → starting, and only the
+  sheet that sent the spawn reacts to its events — two phones on one server
+  never drive each other's sheets.
+- **Stop button and session status dots (W1 1.4).** A Stop button in the
+  composer sends Esc, which halts agy's active stream — the safe interrupt,
+  where Ctrl+C makes agy exit. Drawer rows show one dot with the shared
+  status rule: red for a pending tool gate, pulsing yellow for a session
+  mid-turn (transcript quiescence, 30 s window), green for the session on
+  screen, grey otherwise. The rule lives in one tested place, `AgySessions.sessionStatus`.
+
+
 ## v26.08.29.4 — Multi-session core registry
 
 - **Multi-session core architecture.** Introduced `SessionRecord` and a dynamic
