@@ -55,9 +55,24 @@
     return false;
   }
 
+  // The one rule the drawer's dot and the Stop button share (W1, item 1.4).
+  // A pending tool gate is red and wins over everything. A transcript update
+  // inside the busy window means the agent is mid-turn: yellow, even on the
+  // session on screen. Beyond the window, or with no activity at all, only
+  // "is this the one on screen" decides: active or idle. The window is a
+  // parameter so tests can tighten it.
+  function sessionStatus(state) {
+    var s = state || {};
+    if (s.pending > 0) return 'approval';
+    var windowMs = s.busyWindowMs != null ? s.busyWindowMs : 30000;
+    if (s.lastActivityAt != null && s.now - s.lastActivityAt < windowMs) return 'busy';
+    return s.isActive ? 'active' : 'idle';
+  }
+
   global.AgySessions = {
     buildSpawnRequest: buildSpawnRequest,
     spawnStageLabel: spawnStageLabel,
-    spawnEventMatches: spawnEventMatches
+    spawnEventMatches: spawnEventMatches,
+    sessionStatus: sessionStatus
   };
 })(typeof window !== 'undefined' ? window : this);

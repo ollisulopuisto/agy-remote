@@ -12,7 +12,7 @@ const source = readFileSync(new URL('../../src/agy_remote/static/sessions.js', i
 const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { buildSpawnRequest, spawnStageLabel, spawnEventMatches } = sandbox.window.AgySessions;
+const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus } = sandbox.window.AgySessions;
 
 // Objects built inside the vm sandbox carry the sandbox's Object.prototype,
 // which deepStrictEqual rejects; a JSON round-trip gives them this realm's.
@@ -92,4 +92,35 @@ test('an event without any identifying field is nobody\'s', () => {
   const handle = { name: 'repo', workdir: '/p/repo', tmux_session: 'agy-remote-repo' };
   assert.equal(spawnEventMatches({}, handle), false);
   assert.equal(spawnEventMatches(null, handle), false);
+});
+// -- sessionStatus: the drawer dot and the Stop button share one rule -------
+
+test('a pending approval wins over everything: red', () => {
+  assert.equal(sessionStatus({ pending: 2, lastActivityAt: 0, now: 1000, isActive: true }), 'approval');
+  assert.equal(sessionStatus({ pending: 1, lastActivityAt: null, now: 0, isActive: false }), 'approval');
+});
+
+test('a recent transcript update means busy: yellow', () => {
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 90000, now: 100000, isActive: false }), 'busy');
+  // Busy beats active: the dot on the current session pulses while it works.
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 90000, now: 100000, isActive: true }), 'busy');
+});
+
+test('quiescence beyond the window is no longer busy', () => {
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 60000, now: 100000, isActive: true }), 'active');
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 60000, now: 100000, isActive: false }), 'idle');
+});
+
+test('the boundary is exact: a full window of silence is quiescent', () => {
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 70001, now: 100000, isActive: true }), 'busy');
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 70000, now: 100000, isActive: true }), 'active');
+});
+
+test('a session with no activity at all is just active or idle', () => {
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: null, now: 100000, isActive: true }), 'active');
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: null, now: 100000, isActive: false }), 'idle');
+});
+
+test('a caller may tighten the busy window for tests', () => {
+  assert.equal(sessionStatus({ pending: 0, lastActivityAt: 99900, now: 100000, isActive: false, busyWindowMs: 50 }), 'idle');
 });
