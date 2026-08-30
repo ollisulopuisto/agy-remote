@@ -178,6 +178,9 @@
     <pre class="file-viewer-body" id="fileViewerBody"></pre>
   </div>
 
+  <!-- Vendored mermaid (no CDN: the CSP permits no remote script origins, and
+       this PWA must work air-gapped). Deferred: only diagram fences use it. -->
+  <script src="/static/mermaid.min.js" defer></script>
   <script src="/static/format.js"></script>
   <script src="/static/sessions.js"></script>
   <script src="/static/app.js"></script>

@@ -281,6 +281,13 @@
     return refs;
   }
 
+  // Whether a fenced code block's language tag marks a mermaid diagram.
+  // agy writes them as ```mermaid; mmd is the classic file extension. Anything
+  // else -- including lookalikes like mermaid2 -- stays a plain code block.
+  function isMermaidLang(lang) {
+    return /^(mermaid|mmd)$/i.test(String(lang == null ? '' : lang).trim());
+  }
+
   // The mailbox pairs one session is part of, addressed as peers.
   function trafficForSession(pairs, sessionKey) {
     if (!pairs || !Array.isArray(pairs) || !sessionKey) return [];
@@ -325,6 +332,7 @@
     firstLine: firstLine,
     parseEnvelope: parseEnvelope,
     parseFileRefs: parseFileRefs,
+    isMermaidLang: isMermaidLang,
     trafficForSession: trafficForSession,
     formatTrafficPill: formatTrafficPill
   };

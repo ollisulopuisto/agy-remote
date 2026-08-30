@@ -698,6 +698,7 @@ function appendStep(step, target) {
       const textDiv = document.createElement('div');
       textDiv.className = 'model-text-content';
       textDiv.innerHTML = renderMarkdown(step.content);
+      renderMermaidIn(textDiv);
 
       if (stepType === 'GENERIC' && AgyFormat.isCollapsible(step.content)) {
         modelDiv.appendChild(collapsed(AgyFormat.outputSummary(step.content), textDiv, 'output-card'));
@@ -1161,8 +1162,14 @@ function renderMarkdown(text) {
 
   const codeBlocks = [];
   // Stash fenced code first so its contents are never treated as markup.
+  // Mermaid fences become placeholders instead: the diagram renderer takes
+  // the raw text and produces an SVG (see renderMermaidIn).
   let out = String(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const cleanCode = code.replace(/\n$/, '');
+    if (window.AgyFormat.isMermaidLang(lang)) {
+      const i = codeBlocks.push(`<div class="md-mermaid" data-diagram>${escapeHtml(cleanCode)}</div>`) - 1;
+      return `\u0000CODE${i}\u0000`;
+    }
     const i = codeBlocks.push(
       `<div class="code-block-wrapper">` +
       `<button class="copy-code-btn" data-copy="${escapeHtml(cleanCode)}" title="Copy code">Copy</button>` +
@@ -1226,6 +1233,48 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// -- mermaid -----------------------------------------------------------------
+//
+// agy is fond of ```mermaid fences; on the desktop they render, on the phone
+// they were a wall of DSL. The bundle is vendored (the CSP permits no remote
+// script origins, and this PWA must work air-gapped) and runs at
+// securityLevel 'strict' -- it parses transcript text, which is
+// attacker-influenceable, so its built-in sanitization is not optional.
+
+let mermaidInitialized = false;
+let mermaidSeq = 0;
+
+function ensureMermaid() {
+  if (!window.mermaid) return null;
+  if (!mermaidInitialized) {
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
+    mermaidInitialized = true;
+  }
+  return window.mermaid;
+}
+
+async function renderMermaidIn(root) {
+  const mermaid = ensureMermaid();
+  if (!mermaid) return;
+  const nodes = root.querySelectorAll('.md-mermaid[data-diagram]');
+  for (const node of nodes) {
+    node.removeAttribute('data-diagram'); // claimed: a rerender must not redraw it
+    const code = node.textContent;
+    try {
+      const { svg } = await mermaid.render(`mmd-${++mermaidSeq}`, code);
+      // The node may have been detached while the diagram rendered -- a
+      // rerender or a switch replaced it mid-await.
+      if (node.isConnected) node.innerHTML = svg;
+    } catch (err) {
+      console.warn('Mermaid render failed:', err);
+      if (node.isConnected) {
+        node.classList.add('md-mermaid-failed');
+        node.innerHTML = `<pre class="md-code"><code>${escapeHtml(code)}</code></pre>`;
+      }
+    }
+  }
 }
 
 function triggerVibrate(pattern = [60, 40, 80]) {

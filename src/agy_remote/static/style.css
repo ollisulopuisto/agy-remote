@@ -1410,3 +1410,25 @@ details.message-system > summary {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* Mermaid diagrams: rendered in place of the ```mermaid fence. The SVG is
+   centered and pannable-by-scroll; a failed diagram falls back to the raw
+   DSL in a code block rather than vanishing. */
+.md-mermaid {
+  margin: 8px 0;
+  padding: 10px;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: auto;
+  text-align: center;
+}
+
+.md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.md-mermaid-failed {
+  text-align: left;
+}

@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.30.97 — Mermaid diagrams render on the phone
+
+- **```mermaid fences render as diagrams.** agy writes its plans and
+  architectures as mermaid; the PWA now renders them in place (vendored
+  mermaid v11, dark theme) instead of showing a wall of DSL. A diagram that
+  fails to parse falls back to the raw code block rather than vanishing.
+- **Vendored, not CDN.** The page holds the E2EE key, so the CSP permits no
+  remote script origins and the product must work air-gapped: the bundle is
+  served same-origin from `/static`, deferred so only diagram fences pay for
+  it. The renderer runs at `securityLevel: 'strict'` — it parses transcript
+  text, which is attacker-influenceable.
+
 ## v26.08.30.96 — The device count stops counting ghosts, and transcript file references open on the phone
 
 - **Zombie connections no longer inflate the device count.** iOS suspends the

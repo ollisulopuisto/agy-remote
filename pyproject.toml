@@ -1,6 +1,6 @@
 [project]
 name = "agy-remote"
-version = "26.8.30.96"
+version = "26.8.30.97"
 description = "Mobile Remote Web Controller & PWA for Antigravity CLI (agy)"
 readme = "README.md"
 license = { file = "LICENSE" }

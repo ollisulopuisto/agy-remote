@@ -163,3 +163,35 @@ test('file references in the transcript become tappable chips', () => {
   assert.equal(spaced[0].name, 'a.ts');
 });
 
+test('mermaid fences are recognized by their language tag, nothing else', () => {
+  const { isMermaidLang } = sandbox.window.AgyFormat;
+  // agy writes diagrams as ```mermaid fences; mmd is the classic extension.
+  assert.equal(isMermaidLang('mermaid'), true);
+  assert.equal(isMermaidLang('mmd'), true);
+  assert.equal(isMermaidLang('Mermaid'), true, 'the tag is not case-sensitive');
+  // Everything else stays a code block -- a python or bash fence must never
+  // be handed to the diagram renderer.
+  for (const lang of ['python', 'ts', '', 'mermaid2', 'mmdown']) {
+    assert.equal(isMermaidLang(lang), false, lang);
+  }
+  assert.equal(isMermaidLang(undefined), false);
+  assert.equal(isMermaidLang(null), false);
+});
+
+test('mermaid renders from vendored code only, with strict security', () => {
+  // The page holds the E2EE key, so the CSP permits no remote script origins;
+  // mermaid must be vendored and served same-origin. It parses
+  // attacker-influenceable transcript text, so the strict security level (its
+  // built-in sanitization) is not optional either.
+  const html = readFileSync(new URL('../../src/agy_remote/static/index.html', import.meta.url), 'utf8');
+  const vendored = html.indexOf('src="/static/mermaid.min.js"');
+  assert.ok(vendored !== -1, 'index.html must load the vendored mermaid bundle');
+  const appScript = html.indexOf('src="/static/app.js"');
+  assert.ok(vendored < appScript, 'mermaid must load before app.js uses it');
+  assert.ok(/<script src="\/static\/mermaid\.min\.js" defer><\/script>/.test(html), 'mermaid loads deferred');
+
+  const app = readFileSync(new URL('../../src/agy_remote/static/app.js', import.meta.url), 'utf8');
+  assert.ok(/securityLevel:\s*'strict'/.test(app), 'mermaid must run at securityLevel strict');
+  assert.ok(!/https?:\/\/[^"']*(mermaid|cdn)/.test(app), 'no mermaid CDN may be referenced');
+});
+
