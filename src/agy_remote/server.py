@@ -95,8 +95,8 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     """Factory creating configured FastAPI app."""
     cfg = config or get_config()
     validate_bind_security(cfg)
-    session_mgr = SessionManager(cfg)
     push_mgr = get_push_manager()
+    session_mgr = SessionManager(cfg, push_manager=push_mgr)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -412,6 +412,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
 
         req = UserPromptRequest.model_validate(body)
+        # A human's own words: any loop this session was caught in is broken.
+        # A prompt without a target goes to the session on screen, so that is
+        # whose loop this one breaks.
+        mgr.note_human_prompt(req.conversation_id or mgr.active_conversation_id)
         delivered_via = await mgr.backend.send_prompt(mgr, req.prompt, req.conversation_id)
 
         await mgr.broadcast(
@@ -626,6 +630,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                 elif action == "send_prompt":
                     prompt_text = data.get("prompt", "")
                     if prompt_text:
+                        # A human's own words: any loop the target session was
+                        # caught in is broken (a bare prompt targets the
+                        # session on screen).
+                        mgr.note_human_prompt(data.get("conversation_id") or mgr.active_conversation_id)
                         # Say how it went out. "broadcast" means no supervisor
                         # took it -- the prompt was typed nowhere, and a client
                         # that hears only `prompt_sent` cannot tell that apart

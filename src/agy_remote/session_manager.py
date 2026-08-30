@@ -20,6 +20,7 @@ from fastapi import WebSocket
 from .backends import AgentBackend, make_backend
 from .config import RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
+from .loop_guard import LoopGuard
 from .mailbox import format_envelope, mailbox_dir, parse_message_line
 from .models import (
     ApprovalResponseRequest,
@@ -35,9 +36,15 @@ logger = logging.getLogger("agy_remote.session")
 class SessionManager:
     """Manages active agent conversations and real-time streaming."""
 
-    def __init__(self, config: RemoteConfig | None = None, backend: AgentBackend | None = None) -> None:
+    def __init__(
+        self,
+        config: RemoteConfig | None = None,
+        backend: AgentBackend | None = None,
+        push_manager: Any = None,
+    ) -> None:
         self.config = config or get_config()
         self.backend = backend or make_backend(self.config)
+        self.push_manager = push_manager
         self.active_conversation_id: str | None = None
         #: The conversation ID belonging to the supervised agy process for this server.
         self.supervised_conversation_id: str | None = None
@@ -71,6 +78,14 @@ class SessionManager:
         #: agents write while we are watching, and replaying a prompt an agent
         #: already handled would start a conversation the human never sent.
         self._inbox_pos: dict[str, int] = {}
+        #: Loop protection for the agent-to-agent mailbox: a sliding rate
+        #: window per pair plus a ping-pong latch that pauses a pair (and
+        #: raises an alert) when two agents run in circles without a human.
+        self.loop_guard = LoopGuard(
+            rate_limit=self.config.mailbox_rate_limit,
+            window_seconds=self.config.mailbox_rate_window_seconds,
+            ping_pong_limit=self.config.mailbox_ping_pong_limit,
+        )
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -198,19 +213,15 @@ class SessionManager:
         """
         return [app for app in self._pending_approvals.values() if app.get("status") == "pending"]
 
-    async def register_client(self, websocket: WebSocket) -> None:
-        """Register a new WebSocket client and send initial snapshot."""
-        if self.ensure_session is not None and not self._connected_clients:
-            # Only for the first arrival: later ones join what is already
-            # running rather than each starting an agent of their own.
-            try:
-                await self.ensure_session()
-            except Exception as e:
-                logger.warning("Could not start a session for the arriving client: %s", e)
+    def _init_data(self) -> dict[str, Any]:
+        """The snapshot a new client receives on connect, as a plain dict.
 
-        self._connected_clients.add(websocket)
-        # Send full snapshot of current state
-        init_data = {
+        Kept in one place so a client arriving mid-session (and these tests)
+        see exactly what the socket will hand over -- including the
+        agent-to-agent traffic counters, so a phone that pairs late is not
+        blind to a loop that is already running.
+        """
+        return {
             "event": "init",
             "data": {
                 # Which agent CLI is behind this server; the PWA adapts its
@@ -224,8 +235,24 @@ class SessionManager:
                 # A client that connects mid-panel must see the panel, not wait
                 # for the next redraw that may never come.
                 "terminal": self.terminal.snapshot() if self.terminal else None,
+                # Which agent-to-agent pairs are chattering, looping, or muted.
+                "agent_traffic": self.agent_traffic(),
             },
         }
+
+    async def register_client(self, websocket: WebSocket) -> None:
+        """Register a new WebSocket client and send initial snapshot."""
+        if self.ensure_session is not None and not self._connected_clients:
+            # Only for the first arrival: later ones join what is already
+            # running rather than each starting an agent of their own.
+            try:
+                await self.ensure_session()
+            except Exception as e:
+                logger.warning("Could not start a session for the arriving client: %s", e)
+
+        self._connected_clients.add(websocket)
+        # Send full snapshot of current state
+        init_data = self._init_data()
         try:
             await websocket.send_json(self.seal(init_data))
         except Exception as e:
@@ -391,7 +418,60 @@ class SessionManager:
             return session.tmux_name
         return from_id
 
-    def poll_inboxes(self) -> None:
+    # ---------------------------------------------------------------------
+    # Agent-to-agent loop protection (W2, item 2.3)
+    # ---------------------------------------------------------------------
+    def agent_traffic(self) -> list[dict[str, object]]:
+        """Every mailbox pair the guard knows, for the PWA and the API."""
+        return self.loop_guard.pair_stats()
+
+    def mute_mailbox_pair(self, a: str, b: str) -> None:
+        """Deliberately go dark on one pair until a human unmutes it."""
+        self.loop_guard.mute_pair(a, b)
+
+    def unmute_mailbox_pair(self, a: str, b: str) -> None:
+        """Reopen a muted pair; its held mail starts flowing again."""
+        self.loop_guard.unmute_pair(a, b)
+
+    def note_human_prompt(self, key: str | None) -> None:
+        """A human's own words reached a session: the loop record resets.
+
+        `key` is what a prompt carries -- a conversation id, a tmux name, or a
+        session id -- and is resolved to the registry's id, which is what the
+        mailbox keys its pairs by. The ping-pong latch and counter clear; the
+        rate window does not, so breaking a loop never widens the pipe.
+        """
+        if not key:
+            return
+        record = self.get_session(key)
+        if record is not None:
+            self.loop_guard.note_human_prompt(record.id)
+
+    def _raise_loop_alert(self, from_id: str, to_id: str) -> None:
+        """Push the "agents are looping" alert, once, when a pair latches.
+
+        The latch is the safety valve: the server has stopped feeding two
+        agents that are talking past each other, and the human needs to know
+        now, not when the inbox file grows. Without a push manager (tests, a
+        server started before push was wired) the WebSocket event still goes
+        out; the lock-screen alert is best-effort on top of it.
+        """
+        logger.warning("Mailbox loop between %s and %s: delivery paused until a human speaks", from_id, to_id)
+        if self.push_manager is None:
+            return
+        try:
+            self.push_manager.send_notification(
+                title="Agents are looping",
+                body=(
+                    f"{from_id} and {to_id} kept replying to each other. "
+                    "Their mailbox is paused until you send one of them a prompt."
+                ),
+                data={"type": "agent_loop", "from": from_id, "to": to_id},
+            )
+        except Exception as e:  # noqa: BLE001 - an alert that fails must not stop the loop guard
+            logger.debug("Loop alert push failed: %s", e)
+
+    def poll_inboxes(self) -> tuple[list[tuple[str, str]], int]:
         """Deliver new mailbox messages to the sessions they are addressed to.
 
         Called from the watch loop. Each registered session has one inbox
@@ -400,10 +480,21 @@ class SessionManager:
         session through the normal prompt path, so it reads in the transcript
         like any other instruction -- except the envelope says who sent it.
 
+        Returns the pairs that tripped the loop latch during this poll, and
+        how many messages were delivered, so the watch loop can raise the
+        alert exactly once and tell the phones traffic moved.
+
         A line without its trailing newline is a write in flight: it is held
         for the next poll. A target with no live supervisor is held the same
-        way; its mail is not lost, only waited for.
+        way; its mail is not lost, only waited for. The loop guard adds a
+        third kind of hold: a line the guard will not admit (muted, looping,
+        or rate-limited) is kept in the inbox and re-admitted on a later poll
+        -- the hold ends when a human breaks the loop, unmutes, or the rate
+        window slides. Lines already delivered in the batch advance the
+        offset, so a target that dies mid-batch is not re-typed its own mail.
         """
+        looped: list[tuple[str, str]] = []
+        delivered = 0
         for session_id in list(self._sessions):
             inbox = mailbox_dir() / f"{session_id}.jsonl"
             try:
@@ -439,35 +530,43 @@ class SessionManager:
                 continue  # a write in flight; the rest arrives next poll
 
             complete = data[: last_nl + 1]
-            envelopes: list[str] = []
-            for line in complete.decode("utf-8", "replace").splitlines():
+            new_pos = pos
+            for raw in complete.splitlines(keepends=True):
+                line = raw.decode("utf-8", "replace")
                 message = parse_message_line(line)
                 if message is None:
+                    # Garbage or a stray hand-edit: drop it and advance, or
+                    # the offset would sit behind it forever.
                     logger.debug("Dropping undeliverable mailbox line for %s: %.120s", session_id, line)
+                    new_pos += len(raw)
                     continue
-                envelopes.append(format_envelope(message, self._mailbox_name(message.get("from"))))
 
-            # Advance past torn lines even when there is nothing deliverable,
-            # or the offset would sit behind garbage forever.
-            if not envelopes:
-                self._inbox_pos[session_id] = pos + len(complete)
-                continue
+                from_id = str(message.get("from") or "unknown")
+                admission = self.loop_guard.admit(from_id, session_id)
+                if not admission.deliver:
+                    logger.info(
+                        "Holding mailbox mail for %s: %s from %s",
+                        session_id,
+                        admission.reason,
+                        from_id,
+                    )
+                    break  # held: re-admitted on a later poll
 
-            # The target may stop taking mail (its session died since we looked, or
-            # tmux refused). A batch cut off mid-way would read to the
-            # receiving agent as its colleague's words stopping: if any
-            # envelope does not land, the whole batch is held for the next
-            # poll, and an earlier line may be resent rather than a later
-            # one be lost.
-            landed = True
-            for envelope in envelopes:
+                envelope = format_envelope(message, self._mailbox_name(message.get("from")))
+                # The target may stop taking mail mid-batch (its session died
+                # since we looked, or tmux refused). What did not land stays in
+                # the inbox; what did is not re-sent on the next poll.
                 if not sup.inject_input(envelope):
-                    landed = False
-                    logger.warning("Mailbox delivery to %s refused; holding the batch for retry", session_id)
+                    logger.warning("Mailbox delivery to %s refused; holding the rest for retry", session_id)
                     break
-            if not landed:
-                continue
-            self._inbox_pos[session_id] = pos + len(complete)
+                if self.loop_guard.commit(from_id, session_id):
+                    looped.append((from_id, session_id))
+                delivered += 1
+                new_pos += len(raw)
+
+            self._inbox_pos[session_id] = new_pos
+
+        return looped, delivered
 
     def attach_terminal(self, supervisor: Any) -> None:
         """Mirror a supervised session's screen for clients that cannot see it.
@@ -583,8 +682,26 @@ class SessionManager:
             try:
                 await self.backend.tick(self)
 
-                # Agent-to-agent mail: deliver what the inboxes received
-                self.poll_inboxes()
+                # Agent-to-agent mail: deliver what the inboxes received, and
+                # report what the loop guard latched or moved.
+                looped, delivered = self.poll_inboxes()
+                if looped:
+                    for from_id, to_id in looped:
+                        self._raise_loop_alert(from_id, to_id)
+                if looped or delivered:
+                    await self.broadcast(
+                        {
+                            "event": "agent_traffic",
+                            "data": {
+                                # Every pair the guard knows; the PWA draws
+                                # per-row counters and the header badge from it.
+                                "pairs": self.agent_traffic(),
+                                # The pairs that just latched this poll: the
+                                # PWA says so, and the human sees the alert.
+                                "looped": [{"from": a, "to": b} for a, b in looped],
+                            },
+                        }
+                    )
 
                 # Mirror the terminal, for the panels the transcript never sees
                 await self.broadcast_terminal()

@@ -443,6 +443,17 @@ class RemoteConfig(BaseModel):
     hostname: str = Field(default_factory=get_hostname)
     tls_cert: Path | None = None
     tls_key: Path | None = None
+    #: Agent-to-agent mailbox: at most this many delivered exchanges per pair
+    #: inside the sliding window below. A backstop for fast chatter; the
+    #: ping-pong limit is what catches the slow, polite loop.
+    mailbox_rate_limit: int = 10
+    #: The sliding window (seconds) the mailbox rate limit counts over.
+    mailbox_rate_window_seconds: float = 600.0
+    #: Consecutive agent-to-agent exchanges on one pair, with no human prompt
+    #: into either member, that trip the loop latch and pause the pair until a
+    #: human breaks it. Generous on purpose: real collaboration is bursts with
+    #: a person steering between them.
+    mailbox_ping_pong_limit: int = 20
 
     def model_post_init(self, __context: object) -> None:
         if "tailscale_ip" not in self.model_fields_set:

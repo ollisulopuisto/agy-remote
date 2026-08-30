@@ -298,7 +298,7 @@ def test_a_target_dying_mid_batch_holds_the_rest_and_recovers(maildir: Path):
 
     _append(inbox, _line("one"), _line("two"))
     mgr.poll_inboxes()
-    # "one" landed, "two" was refused: the batch is held, nothing is dropped
+    # "one" landed, "two" was refused: nothing is dropped
     assert sup.injected == ["[message from agy-fe: one]"]
 
     mgr.poll_inboxes()  # the target is dead: nothing is lost, nothing repeated
@@ -306,12 +306,13 @@ def test_a_target_dying_mid_batch_holds_the_rest_and_recovers(maildir: Path):
 
     sup.down = False  # the target is back
     mgr.poll_inboxes()
-    # "one" is resent -- the lesser harm, compared to losing "two"
+    # "two" lands; "one" is NOT re-typed -- the offset advanced past what
+    # already landed, so a flaky target cannot make its colleague's words
+    # (or its own, echoed back) arrive twice.
     assert sup.injected == [
-        "[message from agy-fe: one]",
         "[message from agy-fe: one]",
         "[message from agy-fe: two]",
     ]
 
     mgr.poll_inboxes()
-    assert len(sup.injected) == 3
+    assert len(sup.injected) == 2
