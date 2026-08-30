@@ -20,6 +20,7 @@ from fastapi import WebSocket
 from .backends import AgentBackend, make_backend
 from .config import RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
+from .mailbox import format_envelope, mailbox_dir, parse_message_line
 from .models import (
     ApprovalResponseRequest,
     ConversationSummary,
@@ -65,6 +66,11 @@ class SessionManager:
         self._sessions: dict[str, SessionRecord] = {}
         self._supervisors: dict[str, Any] = {}
         self._terminal_mirrors: dict[str, TerminalMirror] = {}
+        #: Byte offset already delivered from each session's inbox. A session
+        #: is first seen at its inbox's current end: delivery is for what
+        #: agents write while we are watching, and replaying a prompt an agent
+        #: already handled would start a conversation the human never sent.
+        self._inbox_pos: dict[str, int] = {}
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -305,6 +311,7 @@ class SessionManager:
         self._sessions.pop(session_id, None)
         self._supervisors.pop(session_id, None)
         self._terminal_mirrors.pop(session_id, None)
+        self._inbox_pos.pop(session_id, None)
 
     def remove_session(self, session_id: str) -> None:
         """Alias for unregister_session."""
@@ -374,6 +381,93 @@ class SessionManager:
             return None
 
         return self.terminal
+
+    def _mailbox_name(self, from_id: str | None) -> str:
+        """The sender's name for an envelope: a known session's name, else the raw id."""
+        if not from_id:
+            return "unknown"
+        session = self._sessions.get(from_id)
+        if session and session.tmux_name:
+            return session.tmux_name
+        return from_id
+
+    def poll_inboxes(self) -> None:
+        """Deliver new mailbox messages to the sessions they are addressed to.
+
+        Called from the watch loop. Each registered session has one inbox
+        (`<session-id>.jsonl` under the mailbox dir); every line appended
+        since the last poll is wrapped in an envelope and typed into that
+        session through the normal prompt path, so it reads in the transcript
+        like any other instruction -- except the envelope says who sent it.
+
+        A line without its trailing newline is a write in flight: it is held
+        for the next poll. A target with no live supervisor is held the same
+        way; its mail is not lost, only waited for.
+        """
+        for session_id in list(self._sessions):
+            inbox = mailbox_dir() / f"{session_id}.jsonl"
+            try:
+                size = inbox.stat().st_size
+            except OSError:
+                continue
+
+            pos = self._inbox_pos.get(session_id)
+            if pos is None:
+                self._inbox_pos[session_id] = size
+                continue
+            if size < pos:
+                # The file shrank under us (a manual edit or a rotation): the
+                # old offset is nonsense, so resync rather than read garbage.
+                self._inbox_pos[session_id] = size
+                continue
+            if size == pos:
+                continue
+
+            sup = self.get_supervisor(session_id)
+            if sup is None or not hasattr(sup, "inject_input"):
+                continue  # held: delivered once the target is live
+
+            try:
+                with open(inbox, "rb") as f:
+                    f.seek(pos)
+                    data = f.read(size - pos)
+            except OSError:
+                continue
+
+            last_nl = data.rfind(b"\n")
+            if last_nl == -1:
+                continue  # a write in flight; the rest arrives next poll
+
+            complete = data[: last_nl + 1]
+            envelopes: list[str] = []
+            for line in complete.decode("utf-8", "replace").splitlines():
+                message = parse_message_line(line)
+                if message is None:
+                    logger.debug("Dropping undeliverable mailbox line for %s: %.120s", session_id, line)
+                    continue
+                envelopes.append(format_envelope(message, self._mailbox_name(message.get("from"))))
+
+            # Advance past torn lines even when there is nothing deliverable,
+            # or the offset would sit behind garbage forever.
+            if not envelopes:
+                self._inbox_pos[session_id] = pos + len(complete)
+                continue
+
+            # The target may stop taking mail (its session died since we looked, or
+            # tmux refused). A batch cut off mid-way would read to the
+            # receiving agent as its colleague's words stopping: if any
+            # envelope does not land, the whole batch is held for the next
+            # poll, and an earlier line may be resent rather than a later
+            # one be lost.
+            landed = True
+            for envelope in envelopes:
+                if not sup.inject_input(envelope):
+                    landed = False
+                    logger.warning("Mailbox delivery to %s refused; holding the batch for retry", session_id)
+                    break
+            if not landed:
+                continue
+            self._inbox_pos[session_id] = pos + len(complete)
 
     def attach_terminal(self, supervisor: Any) -> None:
         """Mirror a supervised session's screen for clients that cannot see it.
@@ -488,6 +582,9 @@ class SessionManager:
         while self._running:
             try:
                 await self.backend.tick(self)
+
+                # Agent-to-agent mail: deliver what the inboxes received
+                self.poll_inboxes()
 
                 # Mirror the terminal, for the panels the transcript never sees
                 await self.broadcast_terminal()

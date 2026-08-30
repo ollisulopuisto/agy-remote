@@ -20,6 +20,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 #: One message is one line a server tails and an agent appends with bash. Past
 #: this the line stops being a message and becomes a log dump, so the cap is a
@@ -107,3 +108,36 @@ def send_message(target: str, text: str, from_session: str | None = None) -> Pat
     with contextlib.suppress(OSError):
         os.chmod(inbox, 0o600)
     return inbox
+
+
+def parse_message_line(line: str) -> dict[str, Any] | None:
+    """One inbox line as a message, or None if it is not a complete message.
+
+    Inboxes are appended to by bash, so a torn write can leave a half-line,
+    and a curious human can leave a stray one: delivery must never hand a
+    fragment to an agent. The one field that must be present and readable is
+    `text` -- the rest is metadata the sender may or may not have carried.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return data
+
+
+def format_envelope(message: dict[str, Any], from_name: str) -> str:
+    """The prompt a message becomes, typed into the target's TUI.
+
+    The brackets make it unmistakable to the receiving agent -- and to the
+    phone, which mirrors the transcript -- that these words did not come from
+    the human's keyboard.
+    """
+    return f"[message from {from_name}: {message['text']}]"
