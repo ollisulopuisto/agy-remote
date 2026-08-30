@@ -1,5 +1,36 @@
 # Changelog
 
+## v26.08.30.104 — The question reaches the phone, and failure stops being a show
+
+Three PWA fixes, two of them found on the phone.
+
+- **Auto-accept answered the question nobody heard.** The operator's
+  auto-accept switch allowed every approval gate — including `ask_question`,
+  the one gate that exists to put a question in front of a human. The tool was
+  waved through, the agent sat waiting on an answer nobody was asked, and the
+  transcript showed nothing but a collapsed tool card. `autoAcceptDecision`
+  now refuses question gates: `ask_question` always draws its banner, and the
+  banner reads as a question — "Agent asks" plus the question text — instead
+  of "Permission Required" (new `approvalDisplay`).
+- **A failed mermaid diagram fails like code.** The renderer's fallback
+  re-injected the raw DSL into the diagram box, where it clipped mid-word past
+  the right edge of the screen. The fence now keeps its ordinary copy-button
+  code block with the diagram node beside it: success hides the code block,
+  failure removes the empty node, and what is left is a normal code block
+  indistinguishable from any other fence. Mirrors opencode session-ui's
+  `updateMermaidBlock`.
+- **Add to Home Screen pairs again on iOS.** Two bugs, either one enough:
+  the client-built `data:` manifest carried a *relative* `start_url`, which
+  cannot resolve against a `data:` URL and is invalid per spec, so engines
+  fell back to the bare page; and the first-load URL scrub then stripped the
+  credentials from that page, so the captured icon launched unpaired into
+  "no encryption key in this link". `pairedManifest` now emits an absolute
+  `start_url` from `window.location.origin`, and the scrub waits for the
+  installed app (`shouldScrubCredentials`): in the tab the URL keeps the
+  pairing until it has been captured, and the installed app — its own storage
+  container — still scrubs on launch. The tab never emits a Referer for the
+  token now sitting in its query (`no-referrer` meta).
+
 ## v26.08.30.103 — A stale copy refuses to start instead of asking forever
 
 - **Mixed builds are now caught at startup.** The uv tool install drifts

@@ -266,3 +266,52 @@ test('auto-accept answers allow only when enabled and the event is a real approv
   assert.equal(autoAcceptDecision(true, null), null);
   assert.equal(autoAcceptDecision(true, {}), null, 'an event without an id cannot be answered');
 });
+
+test('auto-accept never answers a question gate', () => {
+  const { autoAcceptDecision } = sandbox.window.AgyFormat;
+  // ask_question is not a permission: allowing it answers nothing -- the tool
+  // exists to put a question in front of a human, and an auto-allow swallows
+  // the only dialogue the agent can ever open.
+  assert.equal(autoAcceptDecision(true, { id: 'ap-q', tool_name: 'ask_question' }), null);
+  assert.equal(autoAcceptDecision(true, { id: 'ap-q', tool_name: 'run_command' }), 'allow');
+});
+
+test('a question gate renders as a question, not as a permission warning', () => {
+  const { approvalDisplay } = sandbox.window.AgyFormat;
+  // Cross-realm objects (vm sandbox) fail deepStrictEqual's prototype check,
+  // so fields are compared directly.
+  const display = (app) => {
+    const d = approvalDisplay(app);
+    return { title: d.title, body: d.body };
+  };
+
+  assert.deepEqual(
+    display({ tool_name: 'ask_question', args: { question: 'Publish now or benchmark first?' } }),
+    { title: 'Agent asks', body: 'Publish now or benchmark first?' },
+  );
+  // No question field: any string arg carries it, then the bare tool name.
+  assert.deepEqual(
+    display({ tool_name: 'ask_question', args: 'publish or benchmark?' }),
+    { title: 'Agent asks', body: 'publish or benchmark?' },
+  );
+  assert.deepEqual(display({ tool_name: 'ask_question', args: {} }), {
+    title: 'Agent asks',
+    body: 'ask_question',
+  });
+
+  // An ordinary gate keeps the permission framing and its command text.
+  assert.deepEqual(
+    display({ tool_name: 'run_command', args: { CommandLine: 'du -hd 1 /tmp' } }),
+    { title: 'Permission Required: run_command', body: 'du -hd 1 /tmp' },
+  );
+  assert.equal(display({ tool_name: 'run_command', args: null }).title, 'Permission Required: run_command');
+});
+
+test('credentials are scrubbed from the URL only once the app is installed', () => {
+  const { shouldScrubCredentials } = sandbox.window.AgyFormat;
+  // In the tab the URL is the only thing iOS Add to Home Screen reliably
+  // captures, so it must keep the pairing; the installed app gets its own
+  // storage container and must not keep secrets in its launch URL.
+  assert.equal(shouldScrubCredentials(false), false);
+  assert.equal(shouldScrubCredentials(true), true);
+});

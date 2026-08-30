@@ -234,11 +234,16 @@
   // protection. Built here and handed over as a data: URI, it never leaves
   // the device. Null when either credential is missing: an icon that launches
   // half-paired is worse than the anonymous fallback.
-  function pairedManifest(baseManifest, token, e2eeKey) {
+  function pairedManifest(baseManifest, token, e2eeKey, origin) {
     if (!token || !e2eeKey) return null;
     var m = {};
     for (var k in baseManifest) m[k] = baseManifest[k];
-    m.start_url = '/?token=' + encodeURIComponent(token) + '#key=' + e2eeKey;
+    var start = '/?token=' + encodeURIComponent(token) + '#key=' + e2eeKey;
+    // Absolute when the origin is known. A data: manifest has no URL a
+    // relative start_url could resolve against, so a relative one is invalid
+    // per spec and engines fall back to the bare page -- the unpaired launch.
+    if (origin) start = origin + start;
+    m.start_url = start;
     return JSON.stringify(m);
   }
 
@@ -367,7 +372,48 @@
   function autoAcceptDecision(enabled, approval) {
     if (!enabled) return null;
     if (!approval || !approval.id) return null;
+    // A question gate is not a permission. ask_question exists to put a
+    // question in front of a human; an auto-allow swallows the only dialogue
+    // the agent can ever open, and the session then sits waiting on an answer
+    // that was answered by nobody.
+    if (approval.tool_name === 'ask_question') return null;
     return 'allow';
+  }
+
+  // What the approval banner announces. A question gate reads as a question
+  // ("Agent asks" + the question text); everything else keeps the permission
+  // framing and the command text. Pure so both framings stay pinned by tests.
+  function approvalDisplay(app) {
+    var args = app && app.args;
+    if (app && app.tool_name === 'ask_question') {
+      var question = null;
+      if (typeof args === 'string' && args.trim()) {
+        question = args;
+      } else if (args && typeof args === 'object') {
+        question = args.question || args.prompt || args.text || null;
+      }
+      return { title: 'Agent asks', body: question || app.tool_name };
+    }
+    var cmdText = '';
+    if (args && typeof args === 'object') {
+      cmdText = args.CommandLine || args.TargetFile || args.command || args.title || args.pattern || '';
+    } else if (typeof args === 'string') {
+      cmdText = args;
+    }
+    return {
+      title: 'Permission Required: ' + ((app && app.tool_name) || 'tool'),
+      body: cmdText || (args ? JSON.stringify(args) : '')
+    };
+  }
+
+  // The URL scrub waits for the installed app. In the tab, the URL is the only
+  // thing iOS Add to Home Screen reliably captures -- WebKit does not read the
+  // client-built data: manifest, so scrubbing on first load handed every icon
+  // a bare address and an unpairable app. The installed app gets its own
+  // storage container and no reason to keep the secrets visible, so there the
+  // scrub happens as before.
+  function shouldScrubCredentials(standalone) {
+    return standalone === true;
   }
 
   // Pinch-zoom for diagrams: an absolute scale clamped to the sane range.
@@ -415,6 +461,8 @@
     approvalCountsBySession: approvalCountsBySession,
     approvalsElsewhere: approvalsElsewhere,
     approvalOrigin: approvalOrigin,
+    approvalDisplay: approvalDisplay,
+    shouldScrubCredentials: shouldScrubCredentials,
     peerNotice: peerNotice,
     promptWasDelivered: promptWasDelivered,
     adoptConversationId: adoptConversationId,

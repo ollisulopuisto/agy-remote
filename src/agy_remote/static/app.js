@@ -44,7 +44,7 @@ if (e2eeKeyBase64) {
   if (!link) return;
   try {
     const base = await fetch('/manifest.json').then(r => r.json());
-    const paired = window.AgyFormat.pairedManifest(base, authToken, key);
+    const paired = window.AgyFormat.pairedManifest(base, authToken, key, window.location.origin);
     if (paired) {
       link.href = 'data:application/manifest+json,' + encodeURIComponent(paired);
     }
@@ -54,10 +54,19 @@ if (e2eeKeyBase64) {
   }
 })();
 
-// Both credentials are now in localStorage, so scrub them out of the visible
-// URL: the token would otherwise sit in browser history, in the address bar
-// over someone's shoulder, and in any Referer this page emits.
-if (urlParams.get('token') || window.location.hash.includes('key=')) {
+// Both credentials are in localStorage, but the URL scrub waits for the
+// installed app: in the tab, the URL is the only thing iOS Add to Home Screen
+// reliably captures (WebKit does not read the client-built data: manifest), so
+// scrubbing on first load handed every icon a bare address and an unpairable
+// app. Inside the installed app -- its own storage container, nothing shared
+// with this tab -- the secrets come off the launch URL as before. The tab
+// never emits a Referer (index.html pins no-referrer), so the token in the
+// query stays off the wire.
+const standaloneLaunch =
+  navigator.standalone === true ||
+  (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+if ((urlParams.get('token') || window.location.hash.includes('key='))
+    && window.AgyFormat.shouldScrubCredentials(standaloneLaunch)) {
   try {
     window.history.replaceState({}, document.title, window.location.pathname);
   } catch (e) {
@@ -951,13 +960,9 @@ function renderApprovalBanner(app) {
   banner.id = `approval-${app.id}`;
   banner.className = 'approval-banner';
 
-  const cmdText =
-    app.args?.CommandLine ||
-    app.args?.TargetFile ||
-    app.args?.command ||
-    app.args?.title ||
-    app.args?.pattern ||
-    (typeof app.args === 'string' ? app.args : JSON.stringify(app.args || {}));
+  // A question gate reads as a question, not as a permission warning; the
+  // framing decision is AgyFormat's so both stay pinned by tests.
+  const display = window.AgyFormat.approvalDisplay(app);
 
   // agy has no "approve future matching requests", so there is no Always.
   const alwaysBtn = '';
@@ -974,10 +979,10 @@ function renderApprovalBanner(app) {
   banner.innerHTML = `
     <div class="approval-title">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-      Permission Required: ${escapeHtml(app.tool_name)}
+      ${escapeHtml(display.title)}
     </div>
     ${originRow}
-    <div class="approval-cmd">${escapeHtml(cmdText)}</div>
+    <div class="approval-cmd">${escapeHtml(display.body)}</div>
     <div class="approval-actions">
       <button class="btn-approve" data-approval-id="${escapeHtml(app.id)}" data-decision="allow">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1276,12 +1281,20 @@ function renderMarkdown(text) {
 
   const codeBlocks = [];
   // Stash fenced code first so its contents are never treated as markup.
-  // Mermaid fences become placeholders instead: the diagram renderer takes
-  // the raw text and produces an SVG (see renderMermaidIn).
+  // Mermaid fences keep the ordinary code block and add a diagram node beside
+  // it: the renderer fills the node, hides the code block on success, and on
+  // failure removes the node so what is left is exactly a normal code block --
+  // not a re-injected wall of DSL inside a diagram box (mirrors opencode
+  // session-ui's updateMermaidBlock).
   let out = String(text).replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const cleanCode = code.replace(/\n$/, '');
     if (window.AgyFormat.isMermaidLang(lang)) {
-      const i = codeBlocks.push(`<div class="md-mermaid" data-diagram>${escapeHtml(cleanCode)}</div>`) - 1;
+      const i = codeBlocks.push(
+        `<div class="code-block-wrapper" data-mermaid-code hidden>` +
+        `<button class="copy-code-btn" data-copy="${escapeHtml(cleanCode)}" title="Copy code">Copy</button>` +
+        `<pre class="md-code"><code>${escapeHtml(cleanCode)}</code></pre></div>` +
+        `<div class="md-mermaid" data-diagram data-mermaid-status="pending"></div>`
+      ) - 1;
       return `\u0000CODE${i}\u0000`;
     }
     const i = codeBlocks.push(
@@ -1378,18 +1391,25 @@ async function renderMermaidIn(root) {
   const nodes = root.querySelectorAll('.md-mermaid[data-diagram]');
   for (const node of nodes) {
     node.removeAttribute('data-diagram'); // claimed: a rerender must not redraw it
-    const code = node.textContent;
+    // The source lives in the sibling code block; the diagram node carries
+    // nothing but the rendered SVG.
+    const codeBlock = node.previousElementSibling;
+    const code = codeBlock?.querySelector('code')?.textContent || '';
     try {
       const { svg } = await mermaid.render(`mmd-${++mermaidSeq}`, code);
       // The node may have been detached while the diagram rendered -- a
       // rerender or a switch replaced it mid-await.
-      if (node.isConnected) node.innerHTML = svg;
-    } catch (err) {
-      console.warn('Mermaid render failed:', err);
       if (node.isConnected) {
-        node.classList.add('md-mermaid-failed');
-        node.innerHTML = `<pre class="md-code"><code>${escapeHtml(code)}</code></pre>`;
+        node.innerHTML = svg;
+        node.dataset.mermaidStatus = 'done';
+        if (codeBlock) codeBlock.hidden = true;
       }
+    } catch (err) {
+      // Failed: drop the empty diagram node. The code block beside it was
+      // never hidden, so the fallback is the ordinary code block -- wrapped,
+      // copyable, indistinguishable from any other fence.
+      console.warn('Mermaid render failed:', err);
+      if (node.isConnected) node.remove();
     }
   }
 }

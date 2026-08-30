@@ -179,16 +179,24 @@ test('the paired manifest is built from held credentials, never fetched', () => 
   const { pairedManifest } = sandbox.window.AgyFormat;
   const base = { name: 'Agent Remote', start_url: '/', display: 'standalone' };
 
-  const m = JSON.parse(pairedManifest(base, 'tok+en', 'k=ey'));
+  const m = JSON.parse(pairedManifest(base, 'tok+en', 'k=ey', 'https://mac-studio.ts.net'));
   // The token is query (the server needs it); the key is fragment (the server
   // must never see it -- fragments do not traverse the wire).
-  assert.equal(m.start_url, '/?token=tok%2Ben#key=k=ey');
+  // Absolute: a data: manifest has no URL a relative start_url could resolve
+  // against, so a relative one is invalid per spec and engines fall back to
+  // the bare page -- which is exactly the unpaired-launch bug.
+  assert.equal(m.start_url, 'https://mac-studio.ts.net/?token=tok%2Ben#key=k=ey');
   assert.equal(m.name, 'Agent Remote');
+
+  // No origin (about:blank sandboxes, odd webviews): still build -- relative
+  // is the only thing left to offer.
+  const m2 = JSON.parse(pairedManifest(base, 't', 'k', ''));
+  assert.equal(m2.start_url, '/?token=t#key=k');
 
   // Missing either credential: leave the manifest alone rather than install
   // an icon that launches half-paired.
-  assert.equal(pairedManifest(base, '', 'k'), null);
-  assert.equal(pairedManifest(base, 't', null), null);
+  assert.equal(pairedManifest(base, '', 'k', 'https://x.ts.net'), null);
+  assert.equal(pairedManifest(base, 't', null, 'https://x.ts.net'), null);
 
   // The original object is not mutated -- it may be reused.
   assert.equal(base.start_url, '/');

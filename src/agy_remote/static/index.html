@@ -8,6 +8,10 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Agent Remote">
+  <!-- The pairing URL persists in the tab until the app is installed (iOS
+       Add to Home Screen captures the page URL). The token rides in the
+       query, so the page must never emit a Referer that could carry it. -->
+  <meta name="referrer" content="no-referrer">
   <title>Agent Remote</title>
   <!--
     No third-party origins. This page holds the E2EE key and auth token in

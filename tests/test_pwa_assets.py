@@ -67,6 +67,32 @@ def test_index_html_has_ios_and_android_install_metas():
     assert re.search(r'<meta[^>]+name="mobile-web-app-capable"[^>]+content="yes"', html)
 
 
+def test_index_html_sends_no_referrer():
+    # The pairing URL may legitimately persist in the tab (iOS Add to Home
+    # Screen captures the page URL, so the credentials cannot be scrubbed
+    # until the app is installed). Fragments never reach a Referer, but the
+    # token rides in the query -- so the page must never emit one at all.
+    html = (STATIC_DIR / "index.html").read_text()
+    assert re.search(r'<meta[^>]+name="referrer"[^>]+content="no-referrer"', html), (
+        "a pairing URL that persists in the tab must never leak through Referer"
+    )
+
+
+def test_mermaid_fence_keeps_the_code_block_as_its_own_fallback():
+    # A failed diagram must look like any other code block, not a re-injected
+    # wall of DSL inside a diagram box: the fence emits the ordinary
+    # copy-button code block and a diagram node beside it; the diagram node is
+    # removed on failure and the code block hidden only on success. Mirrors
+    # opencode session-ui's updateMermaidBlock (markdown.tsx).
+    app = (STATIC_DIR / "app.js").read_text()
+    assert 'data-mermaid-status="pending"' in app, "diagram node must announce it is pending"
+    assert "removeChild" in app or ".remove()" in app, "failed diagram must be removed, not re-filled"
+    assert "md-mermaid-failed" not in app, "the re-injecting fallback must go"
+    assert (STATIC_DIR / "style.css").read_text().find(".md-mermaid-failed") == -1, (
+        "the failed-diagram class is dead once the code block is the fallback"
+    )
+
+
 def test_sw_push_notification_uses_png_icon():
     sw = (STATIC_DIR / "sw.js").read_text()
     assert "icons/icon-192.png" in sw

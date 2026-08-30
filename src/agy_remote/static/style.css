@@ -1503,8 +1503,9 @@ details.message-system > summary {
 }
 
 /* Mermaid diagrams: rendered in place of the ```mermaid fence. The SVG is
-   centered and pannable-by-scroll; a failed diagram falls back to the raw
-   DSL in a code block rather than vanishing. */
+   centered and pannable-by-scroll; the fence's ordinary code block sits
+   beside it, hidden on success, so a failed diagram falls back to a normal
+   code block rather than vanishing or overflowing. */
 .md-mermaid {
   margin: 8px 0;
   padding: 10px;
@@ -1521,8 +1522,4 @@ details.message-system > summary {
 .md-mermaid svg {
   max-width: 100%;
   height: auto;
-}
-
-.md-mermaid-failed {
-  text-align: left;
 }
