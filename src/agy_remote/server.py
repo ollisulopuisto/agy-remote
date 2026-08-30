@@ -354,6 +354,26 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         mgr = get_mgr(request)
         return {"pairs": mgr.agent_traffic()}
 
+    @app.get("/api/approvals/{approval_id}")
+    async def get_approval(
+        approval_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """A pending approval's data, for the desktop popup to display.
+
+        `tui-approve` runs inside a tmux popup with only ids in its
+        environment; this is where it learns what it is offering to approve.
+        Answered or unknown ids are 404, so a stale popup cannot re-decide.
+        """
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        info = mgr.pending_approval(approval_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="Unknown or already-resolved approval")
+        return info
+
     @app.post("/api/mailbox/mute")
     async def mute_mailbox(
         req: MuteMailboxRequest,
@@ -647,6 +667,7 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
     async def websocket_endpoint(
         websocket: WebSocket,
         token: str | None = Query(None),
+        device: str | None = Query(None),
     ) -> None:
         """Bidirectional WebSocket for live updates with E2EE envelope support."""
         if cfg.enable_auth and not token_ok(token):
@@ -655,7 +676,10 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
 
         await websocket.accept()
         mgr = session_mgr
-        await mgr.register_client(websocket)
+        # The per-device identity the peer count is deduped by. A client may
+        # hold several sockets (reconnect races, a suspended reload); they are
+        # all one device, and the badge must say so.
+        await mgr.register_client(websocket, device_id=device[:128] if device else None)
 
         raw_key_bytes = decode_key(cfg.e2ee_key) if cfg.e2ee_enabled else None
 

@@ -257,28 +257,100 @@
     };
   }
 
-  // The transcript names host files as [file:///abs/path] -- in prose and in
-  // tool summaries. The server holds those bytes and serves them (within its
+  // The transcript names host files in three shapes, depending on how the
+  // agent was feeling: a markdown link [name](file:///abs/path), the
+  // bracketed shorthand [file:///abs/path], or a bare file:///abs/path in
+  // prose. The server holds those bytes and serves them (within its
   // sanctioned roots), so the phone can offer them as tappable chips; this
   // only has to find the references. Only the empty-host form is a reference
-  // to this machine; `file://host/path` and relative paths never become chips.
+  // to this machine; `file://host/path` and relative paths never become
+  // chips.
+  //
+  // Mirrored from opencode's packages/opencode/src/util/remote-pwa.ts
+  // (parseFileRefs) -- keep the two in sync. The bracketed form here never
+  // lets the bare-path scan swallow the closing bracket, which the original
+  // does; its tests did not cover that shape.
+  function scanFileRefs(value) {
+    var found = [];
+    function collect(re, pathGroup, labelGroup) {
+      var m;
+      re.lastIndex = 0;
+      while ((m = re.exec(value)) !== null) {
+        found.push({ index: m.index, raw: m[0], path: m[pathGroup], label: labelGroup ? m[labelGroup] : null });
+        if (m.index === re.lastIndex) re.lastIndex += 1;
+      }
+    }
+    collect(/\[([^\]\n]+)\]\(file:\/\/\/([^)\s]+)\)/g, 2, 1);
+    collect(/\[file:\/\/(\/[^\]\n]+)\]/g, 1, null);
+    collect(/file:\/\/\/([^\s\)\]"'<>]+)/g, 1, null);
+    // The markdown and bare scans consume all three slashes of `file:///`,
+    // so their capture is missing the leading slash of the path; the
+    // bracketed scan keeps it. Normalize before anything else looks.
+    for (var j = 0; j < found.length; j++) {
+      if (found[j].path.charAt(0) !== '/') found[j].path = '/' + found[j].path;
+    }
+    found.sort(function (a, b) { return a.index - b.index; });
+    return found;
+  }
+
+  function refName(hit, path) {
+    var base = path.slice(path.lastIndexOf('/') + 1) || path;
+    if (hit.label && !/^file:\/\//.test(hit.label)) {
+      return hit.label.replace(/\s+$/, '');
+    }
+    return base;
+  }
+
   function parseFileRefs(text) {
     var value = String(text == null ? '' : text);
     var refs = [];
     var seen = {};
-    var re = /\[file:\/\/(\/[^\]\n]+)\]/g;
-    var m;
-    while ((m = re.exec(value)) !== null) {
-      var path = m[1].replace(/\s+$/, '');
+    var cursor = 0;
+    var scanned = scanFileRefs(value);
+    for (var i = 0; i < scanned.length; i++) {
+      var hit = scanned[i];
+      // A raw earlier in the document already swallowed this match -- the
+      // bare-path scan runs inside every bracketed reference, and without
+      // this guard a path with spaces yields a truncated ghost ref.
+      if (hit.index < cursor) continue;
+      cursor = hit.index + hit.raw.length;
+      var path = hit.path.replace(/\s+$/, '');
       if (seen[path]) continue;
       seen[path] = true;
       refs.push({
-        raw: m[0],
+        raw: hit.raw,
         path: path,
-        name: path.slice(path.lastIndexOf('/') + 1) || path
+        name: refName(hit, path)
       });
     }
     return refs;
+  }
+
+  // The rendering twin of parseFileRefs: every reference is swapped for
+  // render(ref), spliced by hand so no raw match is ever left beside its
+  // chip -- and no chip is emitted twice for one file. The markdown renderer
+  // hands this escaped text; paths are unescaped by the caller.
+  function replaceFileRefs(text, render) {
+    var value = String(text == null ? '' : text);
+    var scanned = scanFileRefs(value);
+    if (scanned.length === 0) return value;
+    var out = '';
+    var cursor = 0;
+    var seen = {};
+    for (var i = 0; i < scanned.length; i++) {
+      var hit = scanned[i];
+      // A raw earlier in the document already swallowed this match (the
+      // label branch of a nested reference); it is spent either way.
+      if (hit.index < cursor) continue;
+      var path = hit.path.replace(/\s+$/, '');
+      if (seen[path]) continue;
+      seen[path] = true;
+      out += value.slice(cursor, hit.index);
+      out += render({ raw: hit.raw, path: path, name: refName(hit, path) });
+      cursor = hit.index + hit.raw.length;
+    }
+    out += value.slice(cursor);
+    return out;
   }
 
   // Whether a fenced code block's language tag marks a mermaid diagram.
@@ -286,6 +358,16 @@
   // else -- including lookalikes like mermaid2 -- stays a plain code block.
   function isMermaidLang(lang) {
     return /^(mermaid|mmd)$/i.test(String(lang == null ? '' : lang).trim());
+  }
+
+  // The auto-accept toggle's decision: 'allow' when the operator turned the
+  // switch on and the event really is an approval an id can answer, null
+  // otherwise -- the caller then falls through to the ordinary banner. Kept
+  // pure so the moment it fires is pinned by tests, not by vibes.
+  function autoAcceptDecision(enabled, approval) {
+    if (!enabled) return null;
+    if (!approval || !approval.id) return null;
+    return 'allow';
   }
 
   // Pinch-zoom for diagrams: an absolute scale clamped to the sane range.
@@ -338,6 +420,8 @@
     adoptConversationId: adoptConversationId,
     applyStepUpdate: applyStepUpdate,
     socketIsStale: socketIsStale,
+    autoAcceptDecision: autoAcceptDecision,
+    replaceFileRefs: replaceFileRefs,
     promptRoute: promptRoute,
     agentIdentity: agentIdentity,
     sessionLabel: sessionLabel,

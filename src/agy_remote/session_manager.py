@@ -9,7 +9,11 @@ or a decision travels to the CLI) lives in a backend, see `backends.py`.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -68,6 +72,11 @@ class SessionManager:
         #: A socket reads open long after its peer is gone; this, not the
         #: socket state, is what the reaper judges liveness by.
         self._client_last_seen: dict[WebSocket, float] = {}
+        #: The per-device identity each socket claims, when it sent one. The
+        #: peer count is devices, not sockets: reconnect races and suspended
+        #: reload zombies can hold several open sockets for one phone, and all
+        #: of them ping, so counting sockets said "20 devices" where one sat.
+        self._client_devices: dict[WebSocket, str | None] = {}
         #: Called before the first client's snapshot when the server is
         #: listening with nothing behind it. An always-on server has no agy
         #: until someone wants one; this is where one appears.
@@ -256,7 +265,7 @@ class SessionManager:
             },
         }
 
-    async def register_client(self, websocket: WebSocket) -> None:
+    async def register_client(self, websocket: WebSocket, device_id: str | None = None) -> None:
         """Register a new WebSocket client and send initial snapshot."""
         if self.ensure_session is not None and not self._connected_clients:
             # Only for the first arrival: later ones join what is already
@@ -268,6 +277,7 @@ class SessionManager:
 
         self._connected_clients.add(websocket)
         self._client_last_seen[websocket] = time.monotonic()
+        self._client_devices[websocket] = device_id
         # Send full snapshot of current state
         init_data = self._init_data()
         try:
@@ -285,8 +295,16 @@ class SessionManager:
         way to revoke one device without revoking them all. That makes an
         unexpected connection the only observable sign that the pairing URL has
         escaped -- and it is only observable if somebody says so.
+
+        The count is devices, not sockets. A phone that reloads mid-suspension
+        can leave several sockets open behind it -- each one legitimately
+        pinged by its own client-side heartbeat -- and a socket count turned
+        the badge into a ratchet. Sockets that claim no device id (an old
+        client, a test) still count, one apiece.
         """
-        await self.broadcast({"event": "peers", "data": {"count": len(self._connected_clients)}})
+        devices = {d for d in self._client_devices.values() if d}
+        anonymous = sum(1 for d in self._client_devices.values() if not d)
+        await self.broadcast({"event": "peers", "data": {"count": len(devices) + anonymous}})
 
     def set_client_focus(self, websocket: WebSocket, focused: bool, conversation_id: str | None = None) -> None:
         """Track whether a client window is actively focused and which conversation it is viewing."""
@@ -311,6 +329,7 @@ class SessionManager:
         """Remove a disconnected WebSocket client."""
         self._connected_clients.discard(websocket)
         self._client_last_seen.pop(websocket, None)
+        self._client_devices.pop(websocket, None)
         self._client_focus.pop(websocket, None)
 
     def note_client_activity(self, websocket: WebSocket) -> None:
@@ -348,6 +367,7 @@ class SessionManager:
         for ws in stale:
             self._connected_clients.discard(ws)
             self._client_last_seen.pop(ws, None)
+            self._client_devices.pop(ws, None)
             self._client_focus.pop(ws, None)
             try:
                 await ws.close(code=1000)  # normal closure: the server moved on
@@ -895,7 +915,76 @@ class SessionManager:
 
         # Broadcast approval request to phone
         await self.broadcast({"event": "approval_request", "data": approval_data})
+        self._surface_in_tui(conversation_id, approval_id, tool_name, args)
         return approval_data
+
+    def pending_approval(self, approval_id: str) -> dict[str, Any] | None:
+        """The pending approval's data, for a desktop that wants to see what
+        it is being asked before it answers. Answered or unknown ids are None.
+        """
+        info = self._pending_approvals.get(approval_id)
+        if info is None or info.get("status") != "pending":
+            return None
+        return info
+
+    def _surface_in_tui(self, conversation_id: str, approval_id: str, tool_name: str, args: dict[str, Any]) -> None:
+        """Mirror a held approval into the terminal agy runs in.
+
+        With no phone connected the hook answers "ask" and agy prompts in its
+        own TUI, so the desktop sees the question. With a phone connected the
+        hook holds and the TUI went silent: agy froze on a question visible
+        only on the phone. This puts the question back in front of whoever is
+        sitting at the terminal -- and lets them answer it there, first answer
+        winning as everywhere else.
+
+        tmux sessions get an overlay popup running `agy-remote tui-approve`
+        (drawn by tmux itself, so agy's screen is never touched). A server-
+        owned pty has no window system to overlay; the console bell rings.
+        """
+        supervisor = self.get_supervisor(conversation_id)
+        if supervisor is None:
+            return
+        session_name = getattr(supervisor, "session_name", None)
+        if not session_name:
+            # No tmux pane to draw on: ring the bell and leave the deciding
+            # to the phone.
+            try:
+                sys.stdout.write("\a")
+                sys.stdout.flush()
+            except Exception as e:  # noqa: BLE001 - a closed console is not fatal
+                logger.debug("Could not ring the console bell: %s", e)
+            return
+
+        env = {
+            "AGY_REMOTE_URL": self.config.local_base_url,
+            "AGY_REMOTE_TOKEN": self.config.auth_token,
+            "AGY_REMOTE_APPROVAL_ID": approval_id,
+            "AGY_REMOTE_TOOL_NAME": tool_name,
+            "AGY_REMOTE_TOOL_ARGS": json.dumps(args, default=str)[:2048],
+        }
+        target = getattr(supervisor, "target", None) or session_name
+        cmd = [
+            "tmux",
+            "display-popup",
+            "-t",
+            target,
+            "-w",
+            "80%",
+            "-h",
+            "12",
+            "-E",
+            "exec agy-remote tui-approve",
+        ]
+        try:
+            subprocess.Popen(  # noqa: S603 - fixed argv, tmux is the point
+                cmd,
+                env={**os.environ, **env},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:  # noqa: BLE001 - the phone still has the banner
+            logger.warning("Could not surface approval %s in the tmux pane: %s", approval_id, e)
 
     async def await_approval(self, approval_id: str, timeout: float = 240.0) -> dict[str, Any]:
         """Wait for the phone's answer to a registered approval.

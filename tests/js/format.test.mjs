@@ -163,6 +163,47 @@ test('file references in the transcript become tappable chips', () => {
   assert.equal(spaced[0].name, 'a.ts');
 });
 
+test('file references written as markdown links and bare paths become chips too', () => {
+  const { parseFileRefs } = sandbox.window.AgyFormat;
+  // Agents answer in markdown: [name](file:///abs/path). That form is the
+  // common one in reports, and it used to render as dead text on the phone.
+  const linked = parseFileRefs(
+    'Implemented [harness/src/project-memory.ts]' +
+    '(file:///Users/dst/x/harness/src/project-memory.ts), verified.'
+  );
+  assert.equal(linked.length, 1);
+  assert.equal(linked[0].path, '/Users/dst/x/harness/src/project-memory.ts');
+  assert.equal(linked[0].name, 'harness/src/project-memory.ts', 'the link label names the chip');
+
+  // A bare file:///abs/path in prose is a reference as well.
+  const bare = parseFileRefs('See file:///Users/dst/x/README.md for details');
+  assert.equal(bare.length, 1);
+  assert.equal(bare[0].path, '/Users/dst/x/README.md');
+  assert.equal(bare[0].name, 'README.md');
+
+  // A label that is itself a file reference falls back to the file name,
+  // instead of naming a chip "file:///...".
+  const selfLabeled = parseFileRefs('[file:///Users/dst/x/a.ts](file:///Users/dst/x/a.ts)');
+  assert.equal(selfLabeled.length, 1);
+  assert.equal(selfLabeled[0].name, 'a.ts');
+
+  // The same file through different forms is one chip.
+  const mixed = parseFileRefs('[file:///a/b.ts] and [b.ts](file:///a/b.ts)');
+  assert.equal(mixed.length, 1);
+
+  // Markdown labels must not swallow prose between two references.
+  const two = parseFileRefs(
+    '[x.ts](file:///a/x.ts) and then [y.ts](file:///a/y.ts)'
+  );
+  assert.equal(two.length, 2);
+  assert.equal(two[0].path, '/a/x.ts');
+  assert.equal(two[1].path, '/a/y.ts');
+
+  // Relative markdown links and file://host links are not host references.
+  assert.deepEqual([...parseFileRefs('[readme](docs/README.md)')], []);
+  assert.deepEqual([...parseFileRefs('[share](file://host/x.txt)')], []);
+});
+
 test('mermaid fences are recognized by their language tag, nothing else', () => {
   const { isMermaidLang } = sandbox.window.AgyFormat;
   // agy writes diagrams as ```mermaid fences; mmd is the classic extension.
@@ -217,3 +258,11 @@ test('mermaid renders from vendored code only, with strict security', () => {
   assert.ok(!/https?:\/\/[^"']*(mermaid|cdn)/.test(app), 'no mermaid CDN may be referenced');
 });
 
+
+test('auto-accept answers allow only when enabled and the event is a real approval', () => {
+  const { autoAcceptDecision } = sandbox.window.AgyFormat;
+  assert.equal(autoAcceptDecision(true, { id: 'ap-1' }), 'allow');
+  assert.equal(autoAcceptDecision(false, { id: 'ap-1' }), null, 'the operator must opt in');
+  assert.equal(autoAcceptDecision(true, null), null);
+  assert.equal(autoAcceptDecision(true, {}), null, 'an event without an id cannot be answered');
+});

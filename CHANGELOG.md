@@ -1,5 +1,50 @@
 # Changelog
 
+## v26.08.30.101 — The count counts devices, the gate shows in both places, and text stays selected
+
+- **The device badge counts devices, not sockets.** A phone can legitimately
+  hold several open sockets — a suspended reload, a reconnect race — and every
+  one of them pings, so no server-side reaping could stop the badge from
+  ratcheting toward "20 devices" where one sat. Each client now presents a
+  per-install device id; the peer count is deduped by it. The client also
+  closes superseded sockets instead of abandoning them, and a late close
+  event from an old socket can no longer schedule a phantom reconnect.
+- **A held permission gate shows in the terminal too.** With a phone
+  connected, the hook held and agy froze on a question visible only on the
+  phone. Now the server surfaces the gate where agy runs: tmux sessions get
+  an overlay popup (`tmux display-popup`, so agy's screen is never touched)
+  running the new `agy-remote tui-approve` — the tool call is shown, `a`
+  allows, `d` denies, any other key leaves it to the phone, first answer
+  wins. A server-owned pty has no pane to overlay; the console bell rings.
+  A new `GET /api/approvals/{id}` lets the popup read what it offers to
+  approve.
+- **File chips now catch every shape the agent writes.** The transcript
+  parser only knew `[file:///path]`, so a markdown answer's
+  `[name](file:///path)` links rendered as dead text. All three forms —
+  markdown link, bracketed, bare — become tappable chips, deduplicated and
+  spliced without overlaps. Mirrored with opencode's `remote-pwa.ts`, which
+  grew a sync note in return.
+- **Selecting text survives streaming.** A redraw of the step under the
+  reader's thumb threw the selection away, and streaming steps redraw every
+  few hundred characters. Redraws are now held while a selection is live in
+  the transcript and applied the moment the reader lets go.
+- **Auto-accept toggle.** A shield button in the session drawer: on, every
+  arriving tool approval is answered allow without asking (per-device
+  persisted); off, everything asks as before.
+
+## v26.08.30.100 — Slash commands without typing a slash
+
+- **A drill-down menu for agy's slash commands.** "/" sits behind a long-press
+  on iOS and a symbol layer elsewhere, so a new menu (the "/" chip, left of
+  Screen) lists every command agy knows — Session, Planning & tasks, Context
+  & usage, Model & speed, Agents & tools, Help — navigated in two taps, each
+  command with a line on what it does. Tapping sends it, like the chips do.
+  Commands that answer in a transient TUI panel (`/model`, `/permissions`,
+  `/resume`) open the terminal mirror with the send, since the transcript
+  never shows those panels; `/rename` prefills the composer so only the
+  argument is typed. The command tree is data (`commands.js`, `AgyCommands`)
+  with its own test suite, ready to grow dynamic discovery later.
+
 ## v26.08.30.99 — Icons the home screen can actually install
 
 - **Real PNG icons, so the PWA installs on iOS.** The manifest shipped only an

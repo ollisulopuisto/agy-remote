@@ -129,6 +129,12 @@ body {
   transform: scale(0.94);
 }
 
+/* A toggled icon button (auto-accept): lit while its behavior is on. */
+.icon-btn.active {
+  color: #fff;
+  background-color: var(--primary);
+}
+
 /* Chat Canvas & Messages */
 .chat-container {
   flex: 1;
@@ -1266,6 +1272,91 @@ details.message-system > summary {
 .sheet-actions {
   display: flex;
   gap: 10px;
+}
+
+/* Slash-command menu: a drill-down list, categories first, then commands.
+   Rows are full-width buttons — the tap targets phones expect. */
+.sheet-tall {
+  max-height: min(85dvh, 640px);
+}
+
+.cmd-menu-body {
+  gap: 8px;
+}
+
+.cmd-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cmd-row:active {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.cmd-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cmd-cat-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.cmd-cat-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cmd-name {
+  font-size: 14px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--primary);
+}
+
+.cmd-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.cmd-flags {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.cmd-flag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.cmd-chevron {
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .btn-primary {

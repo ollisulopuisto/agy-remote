@@ -615,6 +615,118 @@ async def test_a_second_device_connecting_is_announced(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_zombie_sockets_of_one_device_count_once(tmp_path: Path):
+    """The badge counts devices, not sockets.
+
+    iOS suspends the PWA, drops its socket without a close frame, and the
+    reload reconnects -- and a reconnect race can leave several sockets open
+    for the same phone. Every socket the client keeps pinging is legitimately
+    alive, so no amount of server-side reaping explains a badge that says
+    twenty devices where one exists. What cannot lie is a per-device identity:
+    the same device id on ten sockets is one phone.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    phone_a = _FakeWebSocket()
+    phone_a_zombie = _FakeWebSocket()
+    phone_b = _FakeWebSocket()
+    await mgr.register_client(phone_a, device_id="phone-a")
+    await mgr.register_client(phone_a_zombie, device_id="phone-a")
+    await mgr.register_client(phone_b, device_id="phone-b")
+
+    peers = [f for f in phone_a.sent if f["event"] == "peers"]
+    assert peers[-1]["data"]["count"] == 2, "three sockets from two devices must announce two devices"
+
+    # A zombie reaped must not change the device count.
+    mgr.unregister_client(phone_a_zombie)
+    await mgr.announce_peers()
+    assert [f for f in phone_a.sent if f["event"] == "peers"][-1]["data"]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sockets_without_a_device_id_each_count_as_one_device(tmp_path: Path):
+    """Old clients (and tests) send no device id; they still count, once each."""
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    identified = _FakeWebSocket()
+    anonymous = _FakeWebSocket()
+    await mgr.register_client(identified, device_id="phone-a")
+    await mgr.register_client(anonymous)
+
+    peers = [f for f in identified.sent if f["event"] == "peers"]
+    assert peers[-1]["data"]["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_an_approval_while_a_phone_watches_also_surfaces_in_the_tui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """A permission gate must be visible where agy runs, not only on the phone.
+
+    With no client connected the hook answers "ask" and agy prompts in its own
+    terminal, exactly as if the hook did not exist. With a client connected the
+    hook holds -- and the desktop terminal went silent: agy sat frozen on a
+    question only the phone could see. Whoever was sitting at the terminal had
+    no idea anything was waiting.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _FakeWebSocket()
+    await mgr.register_client(ws)
+
+    spawned = []
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, **kwargs):
+            spawned.append((cmd, env))
+
+    monkeypatch.setattr("agy_remote.session_manager.subprocess.Popen", _FakePopen)
+
+    class _TmuxSupervisor:
+        session_name = "agy-remote-8090"
+        target = "agy-remote-8090:0.0"
+
+    mgr._supervisors["conv-1"] = _TmuxSupervisor()
+    await mgr.register_approval("ap-1", "conv-1", "bash", {"command": "rm -rf /"})
+
+    assert spawned, "the tmux pane showed nothing while the hook held"
+    cmd, env = spawned[0]
+    assert cmd[0] == "tmux" and "display-popup" in cmd
+    assert "agy-remote tui-approve" in " ".join(cmd)
+    assert env["AGY_REMOTE_APPROVAL_ID"] == "ap-1"
+    assert env["AGY_REMOTE_TOKEN"] == "token"
+
+    # A session without tmux (a server-owned pty) cannot host a popup; the
+    # console still has to hear something, so the terminal bell rings.
+    spawned.clear()
+
+    class _PtySupervisor:
+        running = True
+
+    mgr._supervisors["conv-2"] = _PtySupervisor()
+    await mgr.register_approval("ap-2", "conv-2", "bash", {"command": "ls"})
+    assert not spawned, "a pty session must not be handed a tmux popup"
+    assert "\a" in capsys.readouterr().out, "the console was not rung"
+
+
+@pytest.mark.asyncio
+async def test_a_pending_approval_can_be_polled_for_the_tui(tmp_path: Path):
+    """The desktop popup needs to read what it is offering to approve."""
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+
+    assert mgr.pending_approval("nope") is None
+
+    await mgr.register_approval("ap-1", "conv-1", "bash", {"command": "ls"})
+    info = mgr.pending_approval("ap-1")
+    assert info is not None
+    assert info["tool_name"] == "bash"
+    assert info["status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_an_approval_nobody_can_see_is_not_held(tmp_path: Path):
     """A server must not hold an agy hostage for a banner nobody was shown.
 

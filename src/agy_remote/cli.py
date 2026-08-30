@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import logging
 import math
+import os
 import select
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import click
@@ -897,6 +901,100 @@ def setup_hooks(project: bool) -> None:
 def hook_pre_tool() -> None:
     """Internal handler invoked by Antigravity CLI PreToolUse hook."""
     run_pre_tool_hook()
+
+
+def _read_keypress(timeout_seconds: float) -> str:
+    """One raw keypress from the terminal, or '' once the timeout passes.
+
+    The popup runs this on a real tty, so cbreak mode gives the key as it
+    lands -- no Enter needed on a phone-sized decision. With no tty (tests,
+    pipes) there is nothing to read and '' is the honest answer.
+    """
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    try:
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+    except termios.error:
+        return ""
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
+        if not ready:
+            return ""
+        return sys.stdin.read(1) or ""
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _post_approval_decision(base_url: str, approval_id: str, token: str, decision: str) -> str:
+    """POST the decision; the wording covers losing the race to the phone."""
+    req = urllib.request.Request(
+        f"{base_url}/api/approvals/{approval_id}/respond",
+        data=json.dumps({"decision": decision}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-Auth-Token": token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5):
+            return f"{decision.upper()} sent."
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 409):
+            return "Already answered on the phone."
+        raise
+
+
+@cli.command("tui-approve")
+@click.option(
+    "--timeout",
+    "-t",
+    default=120,
+    show_default=True,
+    help="Seconds to wait for a keypress before leaving the decision to the phone.",
+)
+def tui_approve(timeout: int) -> None:
+    """Answer a tool approval from the desktop, inside a tmux popup.
+
+    The server opens this in `tmux display-popup` when a phone is holding a
+    permission gate: what agy wants is shown here, one keypress decides it,
+    and no keypress leaves the decision to the phone. First answer wins, as
+    everywhere else.
+    """
+    approval_id = os.environ.get("AGY_REMOTE_APPROVAL_ID", "")
+    base_url = os.environ.get("AGY_REMOTE_URL", "").rstrip("/")
+    token = os.environ.get("AGY_REMOTE_TOKEN", "")
+    tool_name = os.environ.get("AGY_REMOTE_TOOL_NAME", "")
+    tool_args = os.environ.get("AGY_REMOTE_TOOL_ARGS", "")
+
+    if not approval_id or not base_url:
+        click.echo("No approval in flight (AGY_REMOTE_* is unset) — nothing to answer.")
+        return
+
+    click.echo("agy-remote — permission required")
+    click.echo("")
+    click.echo(f"  tool:  {tool_name or '?'}")
+    if tool_args:
+        try:
+            pretty = json.dumps(json.loads(tool_args), indent=2)[:1200]
+        except ValueError:
+            pretty = tool_args[:1200]
+        click.echo("  args:")
+        for line in pretty.splitlines():
+            click.echo(f"    {line}")
+    click.echo("")
+    click.echo("  [a] allow   [d] deny   [any other key] decide on the phone")
+    click.echo("")
+
+    key = _read_keypress(timeout)
+    if key not in ("a", "d"):
+        click.echo("Left to the phone.")
+        return
+
+    try:
+        click.echo(_post_approval_decision(base_url, approval_id, token, "allow" if key == "a" else "deny"))
+    except Exception as e:  # noqa: BLE001 - the popup must close either way
+        click.echo(f"Could not reach the server: {e}")
 
 
 def main() -> None:

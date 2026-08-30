@@ -312,7 +312,10 @@ Two things worth knowing for an always-on setup:
   one key: no per-device identity, no revoking a single phone. The header shows
   a device count whenever more than one is connected — with no identity to
   audit, that count is the only sign your pairing URL has escaped. To revoke,
-  restart with `--rotate-token` and re-pair everything.
+  restart with `--rotate-token` and re-pair everything. The count is devices,
+  not sockets: each PWA install presents a per-install id and the count is
+  deduped by it, so a suspended reload's zombie sockets cannot ratchet the
+  badge toward numbers that nobody can walk across the room and verify.
 
 The tmux session outlives the server: stop `agy-remote` and `agy` keeps working;
 start it again and it re-adopts the same session.
@@ -413,6 +416,23 @@ that can explain itself: the server decides at 240s, the hook gives up on the
 socket at 270s, and `agy` kills the hook at 300s. Reversed, a slow answer
 surfaces as `signal: killed` rather than "approval timed out on mobile remote".
 
+**The gate shows where agy runs, too.** With a phone connected the hook holds —
+and the terminal agy sits in used to go silent. The server now surfaces the
+gate there as well: tmux sessions get an overlay popup (`tmux display-popup`,
+drawn by tmux itself, so agy's screen is never touched) running
+`agy-remote tui-approve` — the tool call is shown, `a` allows, `d` denies, any
+other key leaves the decision to the phone. First answer wins, whichever
+surface it comes from. A server-owned pty has no pane to overlay; the console
+bell rings instead. The popup reads what it offers to approve from
+`GET /api/approvals/{id}`.
+
+**Auto-accept, if you want nothing to ask.** The shield button in the session
+drawer toggles auto-accept for that device (persisted in the PWA). On, every
+arriving approval is answered `allow` the moment it arrives — no banner, no
+push. Off, everything asks as before. It is deliberately opt-in per device and
+never remembered from a banner tap: the fastest way to auto-allow `rm -rf /`
+should not be the same gesture as allowing it once.
+
 ### For Google Antigravity (`agy`):
 Install the Antigravity PreToolUse lifecycle hooks:
 
@@ -439,6 +459,15 @@ via `POST /api/key` with `{"key": "shift_tab"}`. Only names from the allowlist i
 `keys.py` are accepted — never raw bytes, since the pty is wired to a live agent
 session. Both supervisors implement it: the PTY path writes the escape sequence,
 the tmux path calls `tmux send-keys`.
+
+**Slash commands without typing a slash.** The `/` chip at the left of the
+quick-action row opens a drill-down menu of every command agy knows — Session,
+Planning & tasks, Context & usage, Model & speed, Agents & tools, Help — two
+taps to send, no symbol keyboard required. Commands that answer in a transient
+TUI panel (`/model`, `/permissions`, `/resume`) open the terminal mirror with
+the send, since the transcript never shows those panels; `/rename` prefills the
+composer so only the argument needs typing. The tree is data in
+`static/commands.js`, ready to grow dynamic discovery later.
 
 | Key | Name | Use |
 | :--- | :--- | :--- |
@@ -566,6 +595,7 @@ The tunnel terminates at the router. That last LAN hop is unencrypted HTTP, so t
 | `agy-remote qr --port N` | Pairing QR for the instance on port `N` (a second instance does not own the shared runtime state). |
 | `agy-remote run --rotate-token` | Issue a new token and encryption key, revoking every paired phone. |
 | `agy-remote setup-hooks` | Install Antigravity lifecycle hooks for remote tool approvals (`agy` only). |
+| `agy-remote tui-approve` | Answer a tool approval from the desktop (run inside a `tmux display-popup` by the server; not meant for hands-on use). |
 | `agy-remote push-test [msg]` | Send a test Web Push notification to registered mobile devices. |
 
 ### CLI Options

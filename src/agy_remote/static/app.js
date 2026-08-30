@@ -380,24 +380,58 @@ function removeAttachment(idx) {
 // ----------------------------------------------------------------------------
 // WebSocket Connection
 // ----------------------------------------------------------------------------
+
+// One identity per install. The server counts devices, not sockets, so the
+// reconnect races and suspended reloads this page leaves behind cannot
+// inflate the peer badge; the id survives reloads in localStorage, and only
+// a fresh install counts as a new device -- which is what the badge means.
+function getDeviceId() {
+  let id = null;
+  try {
+    id = localStorage.getItem('agy-device-id');
+  } catch (e) { /* private mode: an id is minted that just never persists */ }
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID())
+      || ('d' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+    try {
+      localStorage.setItem('agy-device-id', id);
+    } catch (e) { /* the id lives for this page load only */ }
+  }
+  return id;
+}
+
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
-  const wsUrl = `${protocol}//${window.location.host}/ws${tokenParam}`;
+  const params = new URLSearchParams();
+  if (authToken) params.set('token', authToken);
+  params.set('device', getDeviceId());
+  const wsUrl = `${protocol}//${window.location.host}/ws?${params.toString()}`;
 
   statusBadge.className = 'status-badge disconnected';
   statusText.textContent = 'Connecting...';
 
-  ws = new WebSocket(wsUrl);
+  // A previous socket is closed, not abandoned, and its handlers are
+  // detached: a late close event from it must not schedule a second
+  // reconnect behind this one -- that race was one way the device count
+  // used to climb.
+  if (ws) {
+    const prev = ws;
+    prev.onclose = null;
+    prev.onopen = null;
+    try { prev.close(); } catch (e) { /* already gone */ }
+  }
 
-  ws.onopen = () => {
+  const socket = new WebSocket(wsUrl);
+  ws = socket;
+
+  socket.onopen = () => {
     statusBadge.className = 'status-badge';
     statusText.textContent = cryptoKey ? 'E2EE Live' : 'Live';
-    startHeartbeat(ws);
+    startHeartbeat(socket);
     reportFocusState();
   };
 
-  ws.onmessage = async (event) => {
+  socket.onmessage = async (event) => {
     try {
       let payload = JSON.parse(event.data);
       if (payload.encrypted) {
@@ -412,7 +446,10 @@ function connectWebSocket() {
     }
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    // A newer connection owns the status bar and the reconnect; this socket
+    // was superseded while it was still coming up.
+    if (ws !== socket) return;
     stopHeartbeat();
     statusBadge.className = 'status-badge disconnected';
     statusText.textContent = 'Disconnected';
@@ -573,6 +610,16 @@ function handleServerEvent(event) {
   } else if (type === 'terminal_screen') {
     applyTerminal(data);
   } else if (type === 'approval_request') {
+    // Auto-accept, when the operator switched it on: the gate is answered
+    // allow the instant it arrives, no banner, no buzz-fit. The id guard
+    // keeps a re-broadcast from answering twice.
+    if (window.AgyFormat.autoAcceptDecision(autoAccept, data) && !autoAcceptedIds.has(data.id)) {
+      autoAcceptedIds.add(data.id);
+      respondApproval(data.id, 'allow');
+      triggerVibrate([40, 30, 40]);
+      statusText.textContent = `Auto-accepted ${data.tool_name || 'tool'}`;
+      return;
+    }
     // Every session's approvals arrive here so nothing is missed, but a banner
     // belongs to the session that raised it: drawn into another transcript it
     // reads as belonging to the work in front of you. Elsewhere it counts.
@@ -630,8 +677,40 @@ function stepNodes(step) {
 
 // Redraw a step already on screen: for a backend that fills a message in after
 // creating it empty, this is what carries the actual answer.
+//
+// Rebuilding the node while the reader drags a selection across it throws the
+// selection away -- and a streaming step redraws every few hundred characters,
+// which made long answers nearly impossible to select on a phone. While a
+// selection is live inside the transcript, redraws are held and applied the
+// moment the reader lets go; the newest content of each held step wins.
+let heldStepUpdates = null;
+
+function selectionHoldsTranscript() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return false;
+  return chatContainer.contains(sel.anchorNode) && chatContainer.contains(sel.focusNode);
+}
+
+function flushHeldSteps() {
+  if (!heldStepUpdates || selectionHoldsTranscript()) return;
+  const held = heldStepUpdates;
+  heldStepUpdates = null;
+  held.forEach(applyReplaceStep);
+}
+
+document.addEventListener('selectionchange', flushHeldSteps);
+
 function replaceStep(step) {
   if (!step.id) return;
+  if (selectionHoldsTranscript()) {
+    heldStepUpdates = heldStepUpdates || new Map();
+    heldStepUpdates.set(step.id, step);
+    return;
+  }
+  applyReplaceStep(step);
+}
+
+function applyReplaceStep(step) {
   const existing = Array.from(chatContainer.children).filter(n => n.dataset.stepId === step.id);
   const nodes = stepNodes(step);
   if (existing.length === 0) {
@@ -829,6 +908,41 @@ function renderDiff(target, replacement, filepath) {
 }
 
 // Render Interactive Tool Approval Banner
+
+// Auto-accept: the operator's switch, persisted on the device. On, every
+// arriving approval is answered allow the moment it arrives (see the
+// `approval_request` branch); the id set keeps a re-broadcast from deciding
+// twice. A tool called `rm -rf /` does not care which device answered it,
+// which is exactly why the switch lives behind an explicit toggle and not a
+// one-tap banner button.
+let autoAccept = false;
+try {
+  autoAccept = localStorage.getItem('agy-auto-accept') === '1';
+} catch (e) { /* private mode: the switch just does not persist */ }
+const autoAcceptedIds = new Set();
+
+const autoAcceptBtn = document.getElementById('autoAcceptBtn');
+
+function applyAutoAcceptUI() {
+  if (!autoAcceptBtn) return;
+  autoAcceptBtn.classList.toggle('active', autoAccept);
+  autoAcceptBtn.title = autoAccept
+    ? 'Auto-accept is ON: tool approvals are allowed without asking. Tap to turn off.'
+    : 'Auto-accept is OFF: every tool approval asks. Tap to allow all without asking.';
+}
+
+if (autoAcceptBtn) {
+  autoAcceptBtn.addEventListener('click', () => {
+    autoAccept = !autoAccept;
+    try {
+      localStorage.setItem('agy-auto-accept', autoAccept ? '1' : '0');
+    } catch (e) { /* still works for this page load */ }
+    applyAutoAcceptUI();
+    statusText.textContent = autoAccept ? 'Auto-accept ON' : 'Auto-accept OFF';
+  });
+  applyAutoAcceptUI();
+}
+
 function renderApprovalBanner(app) {
   const existing = document.getElementById(`approval-${app.id}`);
   if (existing) return;
@@ -1208,13 +1322,16 @@ function renderMarkdown(text) {
     return `<a href="${escapeHtml(clean)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
   });
 
-  // File references -- [file:///abs/path] -- become chips that open the file
-  // viewer. Built after escaping, like every other markup here; the path is
-  // stashed in a data attribute (never an href), so nothing is fetched until
-  // a chip is tapped, and the server still refuses anything outside its roots.
-  out = out.replace(/\[file:\/\/(\/[^\]\n]+)\]/g, (_, escapedPath) => {
-    const path = escapedPath.replace(/&amp;/g, '&').replace(/\s+$/, '');
-    const name = path.slice(path.lastIndexOf('/') + 1) || path;
+  // File references -- [name](file:///abs/path), [file:///abs/path] or a
+  // bare file:///abs/path -- become chips that open the file viewer. The
+  // matcher lives in AgyFormat (parseFileRefs' rendering twin), so finding
+  // and drawing can never drift apart. Built after escaping, like every
+  // other markup here; the path is stashed in a data attribute (never an
+  // href), so nothing is fetched until a chip is tapped, and the server
+  // still refuses anything outside its roots.
+  out = window.AgyFormat.replaceFileRefs(out, (ref) => {
+    const path = ref.path.replace(/&amp;/g, '&');
+    const name = ref.name.replace(/&amp;/g, '&');
     return `<button class="file-ref-chip" type="button" data-file-path="${escapeHtml(path)}">` +
       `${escapeHtml(name)}</button>`;
   });
@@ -1741,6 +1858,110 @@ newSessionTask.addEventListener('keydown', (e) => {
     e.preventDefault();
     startNewSession();
   }
+});
+
+// ----------------------------------------------------------------------------
+// Slash-Command Menu
+//
+// "/" sits behind a long-press on iOS and a symbol layer elsewhere, so the
+// commands live in a drill-down sheet instead: categories first, then
+// commands with a line of what each does. The tree itself is AgyCommands
+// (commands.js); this section only renders it and acts on a tap:
+//
+//   plain command   -> sent as a prompt, like the chips do
+//   panel command   -> sent, and the terminal mirror opens, because
+//                      /model /permissions /resume answer in a transient TUI
+//                      panel the transcript never sees
+//   argument command-> the composer is prefilled (`/rename `), and only the
+//                      argument needs typing
+// ----------------------------------------------------------------------------
+const cmdMenuBtn = document.getElementById('cmdMenuBtn');
+const cmdMenuSheet = document.getElementById('cmdMenuSheet');
+const cmdMenuBackdrop = document.getElementById('cmdMenuBackdrop');
+const cmdMenuTitle = document.getElementById('cmdMenuTitle');
+const cmdMenuBody = document.getElementById('cmdMenuBody');
+const cmdMenuBackBtn = document.getElementById('cmdMenuBackBtn');
+const cmdMenuCloseBtn = document.getElementById('cmdMenuCloseBtn');
+
+let cmdMenuCategory = null;
+
+function openCmdMenu() {
+  closeDrawer();
+  cmdMenuCategory = null;
+  renderCmdMenu();
+  cmdMenuSheet.hidden = false;
+  cmdMenuBackdrop.classList.add('open');
+  requestAnimationFrame(() => cmdMenuSheet.classList.add('open'));
+}
+
+function closeCmdMenu() {
+  cmdMenuSheet.classList.remove('open');
+  cmdMenuBackdrop.classList.remove('open');
+  setTimeout(() => {
+    cmdMenuSheet.hidden = true;
+    cmdMenuCategory = null;
+    renderCmdMenu();
+  }, 220);
+}
+
+function renderCmdMenu() {
+  const categories = window.AgyCommands.categories();
+  if (cmdMenuCategory === null) {
+    cmdMenuTitle.textContent = 'Slash commands';
+    cmdMenuBackBtn.hidden = true;
+    cmdMenuBody.innerHTML = '';
+    for (const cat of categories) {
+      const row = document.createElement('button');
+      row.className = 'cmd-row';
+      row.innerHTML = `<span class="cmd-row-main"><span class="cmd-cat-title">${cat.title}</span>` +
+        `<span class="cmd-cat-count">${cat.commands.length} commands</span></span>` +
+        '<span class="cmd-chevron">&#8250;</span>';
+      row.addEventListener('click', () => {
+        cmdMenuCategory = cat.id;
+        renderCmdMenu();
+      });
+      cmdMenuBody.appendChild(row);
+    }
+    return;
+  }
+  const cat = categories.find((c) => c.id === cmdMenuCategory);
+  if (!cat) { cmdMenuCategory = null; renderCmdMenu(); return; }
+  cmdMenuTitle.textContent = cat.title;
+  cmdMenuBackBtn.hidden = false;
+  cmdMenuBody.innerHTML = '';
+  for (const cmd of cat.commands) {
+    const row = document.createElement('button');
+    row.className = 'cmd-row';
+    const flags = [
+      cmd.panel ? '<span class="cmd-flag" title="Answers in a terminal panel — the Screen mirror opens with it">panel</span>' : '',
+      cmd.arg ? '<span class="cmd-flag" title="Needs an argument — the composer is prefilled">arg</span>' : '',
+    ].join('');
+    row.innerHTML = `<span class="cmd-row-main"><span class="cmd-name">${cmd.name}</span>` +
+      `<span class="cmd-desc">${cmd.desc}</span></span><span class="cmd-flags">${flags}</span>`;
+    row.addEventListener('click', () => runCommand(cmd));
+    cmdMenuBody.appendChild(row);
+  }
+}
+
+function runCommand(cmd) {
+  closeCmdMenu();
+  if (cmd.arg) {
+    // Only the argument is typed: the command word itself came from the menu.
+    promptInput.value = `${cmd.name} `;
+    autoResizeInput();
+    promptInput.focus();
+    return;
+  }
+  if (cmd.panel && terminalPanel.hidden) toggleTerminal();
+  sendPrompt(cmd.name);
+}
+
+cmdMenuBtn.addEventListener('click', openCmdMenu);
+cmdMenuCloseBtn.addEventListener('click', closeCmdMenu);
+cmdMenuBackdrop.addEventListener('click', closeCmdMenu);
+cmdMenuBackBtn.addEventListener('click', () => {
+  cmdMenuCategory = null;
+  renderCmdMenu();
 });
 
 // Mobile Visual Viewport Handling (iOS & Android virtual keyboard)
