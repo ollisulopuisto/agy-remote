@@ -31,8 +31,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: payload.body,
-    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="25" fill="%232563eb"/><path d="M30 65 L50 25 L70 65 L50 50 Z" fill="white"/></svg>',
-    badge: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="50" fill="%232563eb"/></svg>',
+    icon: '/static/icons/icon-192.png',
+    badge: '/static/icons/favicon-96x96.png',
     vibrate: [100, 50, 100],
     data: payload.data,
     actions: [

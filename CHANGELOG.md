@@ -1,5 +1,15 @@
 # Changelog
 
+## v26.08.30.99 — Icons the home screen can actually install
+
+- **Real PNG icons, so the PWA installs on iOS.** The manifest shipped only an
+  SVG data-URI icon, which iOS ignores: the installed app landed on the home
+  screen as a browser-screenshot tile. Now the manifest (and the push
+  notifications, and the browser tab) use full-bleed PNG renders of the same
+  logo — maskable 192/512 for Android, a 180×180 `apple-touch-icon` for iOS,
+  and a 96×96 favicon. The manifest also gained the `id` and `scope` fields,
+  and the page gained the `mobile-web-app-capable` meta.
+
 ## v26.08.30.98 — Diagrams you can pinch
 
 - **Mermaid diagrams are zoomable.** A two-finger pinch scales the rendered
