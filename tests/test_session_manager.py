@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from agy_remote.config import RemoteConfig
-from agy_remote.models import ApprovalResponseRequest
+from agy_remote.models import ApprovalResponseRequest, SessionRecord
 from agy_remote.session_manager import SessionManager
 
 
@@ -795,3 +795,182 @@ async def test_answered_approvals_do_not_accumulate_forever(tmp_path: Path):
     # The most recent answers survive: a client resolving one twice, or a late
     # `approval_resolved` arriving, must still find it rather than 404.
     assert "a59" in mgr._pending_approvals
+
+
+# ---------------------------------------------------------------------------
+# Zombie clients: iOS suspends the page mid-connection, kills the socket
+# without a close frame, and the reload on return arrives as a brand-new
+# connection. The old one reads open from the server side -- writes buffer
+# successfully into a dead peer -- so the count in `peers` claimed six devices
+# where two existed, and every sleep/reload cycle ratcheted it further.
+# Liveness has to be judged by what the client last *said*, not by whether
+# the socket is open.
+# ---------------------------------------------------------------------------
+
+
+class _ReapableWebSocket:
+    def __init__(self):
+        self.sent = []
+        self.closed = []
+
+    async def send_json(self, data):
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000):
+        self.closed.append(code)
+
+
+@pytest.mark.asyncio
+async def test_a_silent_client_is_reaped_and_the_count_corrects(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    live = _ReapableWebSocket()
+    zombie = _ReapableWebSocket()
+    await mgr.register_client(live)
+    await mgr.register_client(zombie)
+    assert len(mgr._connected_clients) == 2
+
+    # The heartbeats from one of them stopped -- Safari slept the page and the
+    # socket was never closed -- while the other keeps talking.
+    now = time.monotonic()
+    mgr._client_last_seen[zombie] = now - 120.0
+    mgr._client_last_seen[live] = now - 5.0
+
+    removed = await mgr.reap_stale_clients()
+
+    assert removed == 1
+    assert zombie not in mgr._connected_clients
+    assert live in mgr._connected_clients
+    assert zombie.closed, "a reaped client is told why its socket went away"
+    peers = [f for f in live.sent if f["event"] == "peers"]
+    assert peers and peers[-1]["data"]["count"] == 1, "the survivors hear the corrected count"
+
+
+@pytest.mark.asyncio
+async def test_any_inbound_frame_counts_as_liveness(tmp_path: Path):
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _ReapableWebSocket()
+    await mgr.register_client(ws)
+    mgr._client_last_seen[ws] = time.monotonic() - 120.0
+
+    mgr.note_client_activity(ws)
+    await mgr.reap_stale_clients()
+
+    assert ws in mgr._connected_clients
+
+
+@pytest.mark.asyncio
+async def test_an_unstamped_client_is_not_reaped_on_sight(tmp_path: Path):
+    """A client with no liveness stamp yet gets the benefit of the doubt.
+
+    Reaping on first sight would drop every connection registered before the
+    liveness tracking existed (and every test that adds a socket directly) --
+    the stamp is recorded fresh on the first sweep, and the *next* sweep
+    judges it.
+    """
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    ws = _ReapableWebSocket()
+    mgr._connected_clients.add(ws)
+
+    assert await mgr.reap_stale_clients() == 0
+    assert ws in mgr._connected_clients
+
+    # Enough silence after the first stamp, and it goes.
+    stamp = mgr._client_last_seen[ws]
+    mgr._client_last_seen[ws] = stamp - 120.0
+    assert await mgr.reap_stale_clients() == 1
+    assert ws not in mgr._connected_clients
+
+
+# ---------------------------------------------------------------------------
+# Host files for the phone: the transcript names files as
+# [file:///abs/path], and the server runs on the machine that has them. A
+# read endpoint is only safe if it refuses everything outside the sanctioned
+# roots -- the registered sessions' workdirs and the projects root -- so a
+# crafted reference can never read /etc/passwd or the operator's home dir.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def workdir_mgr(tmp_path: Path) -> SessionManager:
+    cfg = RemoteConfig(brain_dir=tmp_path / "brain", auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "classifier.ts").write_text("export const tiers = ['TRIAL'];\n")
+    mgr.register_session(SessionRecord(id="s1", conversation_id="c1", workdir=str(repo)))
+    return mgr
+
+
+def test_host_file_reads_inside_a_registered_workdir(workdir_mgr: SessionManager, tmp_path: Path):
+    result = workdir_mgr.read_host_file(f"{tmp_path}/repo/src/classifier.ts")
+    assert result["name"] == "classifier.ts"
+    assert result["content"] == "export const tiers = ['TRIAL'];\n"
+    assert result["truncated"] is False
+    assert result["path"].endswith("src/classifier.ts")
+
+
+def test_file_uri_form_is_accepted(workdir_mgr: SessionManager, tmp_path: Path):
+    result = workdir_mgr.read_host_file(f"file://{tmp_path}/repo/src/classifier.ts")
+    assert result["name"] == "classifier.ts"
+
+
+def test_host_file_refuses_paths_outside_every_root(workdir_mgr: SessionManager):
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file("/etc/hosts")
+
+
+def test_host_file_refuses_traversal(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(f"{tmp_path}/repo/src/../../../etc/hosts")
+
+
+def test_host_file_refuses_symlink_escape(workdir_mgr: SessionManager, tmp_path: Path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    (tmp_path / "repo" / "src" / "link.ts").symlink_to(secret)
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(str(tmp_path / "repo" / "src" / "link.ts"))
+
+
+def test_host_file_reports_missing_files(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        workdir_mgr.read_host_file(f"{tmp_path}/repo/src/nope.ts")
+
+
+def test_host_file_refuses_binary(workdir_mgr: SessionManager, tmp_path: Path):
+    (tmp_path / "repo" / "src" / "blob.bin").write_bytes(b"\x00\x01\x02binary")
+    with pytest.raises(ValueError):
+        workdir_mgr.read_host_file(f"{tmp_path}/repo/src/blob.bin")
+
+
+def test_host_file_truncates_large_files(workdir_mgr: SessionManager, tmp_path: Path):
+    big = tmp_path / "repo" / "src" / "big.log"
+    big.write_text("x" * (256 * 1024))
+    result = workdir_mgr.read_host_file(str(big))
+    assert result["truncated"] is True
+    assert len(result["content"]) < 256 * 1024
+
+
+def test_host_file_refuses_directories(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(ValueError):
+        workdir_mgr.read_host_file(f"{tmp_path}/repo/src")
+
+
+def test_projects_root_is_also_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The supervised session's own repo lives under the projects root."""
+    monkeypatch.setenv("AGY_REMOTE_PROJECTS_DIR", str(tmp_path / "projects"))
+    root = tmp_path / "projects" / "harness"
+    root.mkdir(parents=True)
+    (root / "runner.ts").write_text("ready\n")
+
+    cfg = RemoteConfig(brain_dir=tmp_path / "brain", auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    result = mgr.read_host_file(str(root / "runner.ts"))
+    assert result["content"] == "ready\n"
+
+    # A sibling of the projects root is still nobody's business.
+    with pytest.raises(PermissionError):
+        mgr.read_host_file(str(tmp_path / "brain" / "transcript.jsonl"))

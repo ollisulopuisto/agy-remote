@@ -257,6 +257,30 @@
     };
   }
 
+  // The transcript names host files as [file:///abs/path] -- in prose and in
+  // tool summaries. The server holds those bytes and serves them (within its
+  // sanctioned roots), so the phone can offer them as tappable chips; this
+  // only has to find the references. Only the empty-host form is a reference
+  // to this machine; `file://host/path` and relative paths never become chips.
+  function parseFileRefs(text) {
+    var value = String(text == null ? '' : text);
+    var refs = [];
+    var seen = {};
+    var re = /\[file:\/\/(\/[^\]\n]+)\]/g;
+    var m;
+    while ((m = re.exec(value)) !== null) {
+      var path = m[1].replace(/\s+$/, '');
+      if (seen[path]) continue;
+      seen[path] = true;
+      refs.push({
+        raw: m[0],
+        path: path,
+        name: path.slice(path.lastIndexOf('/') + 1) || path
+      });
+    }
+    return refs;
+  }
+
   // The mailbox pairs one session is part of, addressed as peers.
   function trafficForSession(pairs, sessionKey) {
     if (!pairs || !Array.isArray(pairs) || !sessionKey) return [];
@@ -300,6 +324,7 @@
     isCollapsible: isCollapsible,
     firstLine: firstLine,
     parseEnvelope: parseEnvelope,
+    parseFileRefs: parseFileRefs,
     trafficForSession: trafficForSession,
     formatTrafficPill: formatTrafficPill
   };

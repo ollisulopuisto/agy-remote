@@ -83,6 +83,12 @@ const drawerBackdrop = document.getElementById('drawerBackdrop');
 const drawerList = document.getElementById('drawerList');
 const menuBtn = document.getElementById('menuBtn');
 const closeDrawerBtn = document.getElementById('closeDrawerBtn');
+const fileViewer = document.getElementById('fileViewer');
+const fileViewerBackdrop = document.getElementById('fileViewerBackdrop');
+const fileViewerName = document.getElementById('fileViewerName');
+const fileViewerPath = document.getElementById('fileViewerPath');
+const fileViewerBody = document.getElementById('fileViewerBody');
+const fileViewerClose = document.getElementById('fileViewerClose');
 
 // ----------------------------------------------------------------------------
 // Web Crypto API (AES-256-GCM payload encryption)
@@ -928,11 +934,64 @@ chatContainer.addEventListener('click', async (e) => {
     toggleThinking(header);
     return;
   }
+  const fileChip = e.target.closest('.file-ref-chip');
+  if (fileChip && fileChip.dataset.filePath) {
+    openFileViewer(fileChip.dataset.filePath);
+    return;
+  }
   const btn = e.target.closest('[data-approval-id]');
   if (btn) {
     respondApproval(btn.dataset.approvalId, btn.dataset.decision);
   }
 });
+
+// -- file viewer -------------------------------------------------------------
+//
+// The transcript references host files as [file:///...]; the server reads them
+// for the phone within its sanctioned roots (GET /api/file, same token as
+// everything else). A chip opens this overlay; nothing is fetched until then.
+
+let fileViewerTicket = 0;
+
+async function openFileViewer(path) {
+  const ticket = ++fileViewerTicket;
+  fileViewer.hidden = false;
+  fileViewerBackdrop.hidden = false;
+  requestAnimationFrame(() => {
+    fileViewer.classList.add('open');
+    fileViewerBackdrop.classList.add('open');
+  });
+  fileViewerName.textContent = path.slice(path.lastIndexOf('/') + 1) || path;
+  fileViewerPath.textContent = path;
+  fileViewerBody.textContent = 'Loading…';
+  try {
+    const res = await fetch(`/api/file?path=${encodeURIComponent(path)}&token=${encodeURIComponent(authToken)}`);
+    if (ticket !== fileViewerTicket) return;
+    const data = await res.json();
+    if (!res.ok) {
+      fileViewerBody.textContent = data && data.detail
+        ? `Could not read file: ${data.detail}`
+        : `Could not read file (HTTP ${res.status})`;
+      return;
+    }
+    fileViewerName.textContent = data.name;
+    fileViewerPath.textContent = data.truncated ? `${data.path} · truncated` : data.path;
+    fileViewerBody.textContent = data.content;
+  } catch (err) {
+    if (ticket === fileViewerTicket) fileViewerBody.textContent = 'Could not reach the server.';
+  }
+}
+
+function closeFileViewer() {
+  fileViewerTicket++;
+  fileViewer.classList.remove('open');
+  fileViewerBackdrop.classList.remove('open');
+  fileViewer.hidden = true;
+  fileViewerBackdrop.hidden = true;
+}
+
+if (fileViewerClose) fileViewerClose.addEventListener('click', closeFileViewer);
+if (fileViewerBackdrop) fileViewerBackdrop.addEventListener('click', closeFileViewer);
 
 // Send Prompt
 async function sendPrompt(text) {
@@ -1140,6 +1199,17 @@ function renderMarkdown(text) {
     const clean = href.replace(/&#x2F;/g, '/');
     if (!/^https?:\/\//i.test(clean)) return m;
     return `<a href="${escapeHtml(clean)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+
+  // File references -- [file:///abs/path] -- become chips that open the file
+  // viewer. Built after escaping, like every other markup here; the path is
+  // stashed in a data attribute (never an href), so nothing is fetched until
+  // a chip is tapped, and the server still refuses anything outside its roots.
+  out = out.replace(/\[file:\/\/(\/[^\]\n]+)\]/g, (_, escapedPath) => {
+    const path = escapedPath.replace(/&amp;/g, '&').replace(/\s+$/, '');
+    const name = path.slice(path.lastIndexOf('/') + 1) || path;
+    return `<button class="file-ref-chip" type="button" data-file-path="${escapeHtml(path)}">` +
+      `${escapeHtml(name)}</button>`;
   });
 
   out = out.replace(/\n/g, '<br/>');

@@ -167,6 +167,17 @@
     </div>
   </footer>
 
+  <!-- File viewer: a transcript chip fetches the host file it names -->
+  <div class="file-viewer-backdrop" id="fileViewerBackdrop" hidden></div>
+  <div class="file-viewer" id="fileViewer" hidden>
+    <div class="file-viewer-header">
+      <span class="file-viewer-name" id="fileViewerName"></span>
+      <button class="file-viewer-close" id="fileViewerClose" title="Close">&#10005;</button>
+    </div>
+    <div class="file-viewer-path" id="fileViewerPath"></div>
+    <pre class="file-viewer-body" id="fileViewerBody"></pre>
+  </div>
+
   <script src="/static/format.js"></script>
   <script src="/static/sessions.js"></script>
   <script src="/static/app.js"></script>

@@ -376,3 +376,73 @@ def test_focus_state_and_push_suppression(tmp_path: Path, monkeypatch):
         assert "Bash" in sent_pushes[0]["title"]
         assert sent_pushes[0]["data"]["approval_id"]
         assert sent_pushes[0]["data"]["conversation_id"] == "default"
+
+
+def test_file_endpoint_serves_only_sanctioned_roots(tmp_path: Path):
+    """The transcript names host files; the phone may read them, and only them.
+
+    The agent's references -- [file:///...] in prose and tool arguments -- point
+    into the repo it works on. The server holds those bytes, so a read endpoint
+    is the cheapest way to put them on the phone, but it must refuse everything
+    outside the registered sessions' workdirs and the projects root.
+    """
+    from agy_remote.models import SessionRecord
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "classifier.ts").write_text("export const tiers = [];\n")
+
+    cfg = RemoteConfig(brain_dir=tmp_path / "brain", auth_token="secret123", enable_auth=True)
+    app = create_app(cfg)
+    app.state.session_manager.register_session(SessionRecord(id="s1", workdir=str(repo)))
+    client = TestClient(app)
+
+    # No token, no file.
+    assert client.get("/api/file", params={"path": str(repo / "src" / "classifier.ts")}).status_code == 401
+
+    ok = client.get("/api/file", params={"path": str(repo / "src" / "classifier.ts"), "token": "secret123"})
+    assert ok.status_code == 200
+    assert ok.json()["content"] == "export const tiers = [];\n"
+    assert ok.json()["name"] == "classifier.ts"
+
+    # The operator's machine is not the phone's filesystem.
+    outside = client.get("/api/file", params={"path": "/etc/hosts", "token": "secret123"})
+    assert outside.status_code == 403
+
+    missing = client.get("/api/file", params={"path": str(repo / "src" / "nope.ts"), "token": "secret123"})
+    assert missing.status_code == 404
+
+
+def test_ws_traffic_refreshes_client_liveness(tmp_path: Path):
+    """A client the server can hear is alive, whatever its socket looks like.
+
+    The reaper judges by the last thing a client *said*; every inbound frame --
+    not just the heartbeat -- has to refresh that stamp, or a chatty client
+    could be dropped mid-conversation.
+    """
+    import time
+
+    from agy_remote.crypto import decode_key, decrypt_payload, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    app = create_app(cfg)
+    key = decode_key(cfg.e2ee_key)
+    client = TestClient(app)
+
+    with client.websocket_connect(f"/ws?token={cfg.auth_token}") as ws:
+        ws.receive_json()  # sealed init snapshot
+        ws.receive_json()  # the connect announces the peer count
+
+        mgr = app.state.session_manager
+        stamps = mgr._client_last_seen
+        assert len(stamps) == 1
+        for sock in stamps:
+            stamps[sock] -= 120.0  # pretend it went silent two minutes ago
+
+        ws.send_json(encrypt_payload({"action": "ping"}, key))
+        while True:
+            reply = decrypt_payload(ws.receive_json(), key)
+            if reply.get("event") == "pong":
+                break
+
+        assert any(v > time.monotonic() - 120.0 for v in stamps.values()), "the ping proved liveness"

@@ -125,3 +125,41 @@ test('formatTrafficPill formats display label, peer, and status states', () => {
   assert.equal(muted.muted, true);
 });
 
+test('file references in the transcript become tappable chips', () => {
+  const { parseFileRefs } = sandbox.window.AgyFormat;
+  // agy writes absolute paths wrapped as [file:///abs/path] -- in prose and in
+  // tool summaries. The server holds those bytes, so the phone can show the
+  // file; the parser only has to find the references.
+  const text =
+    'Implemented ([file:///Users/dst/x/harness/src/classifier.ts] and ' +
+    '[file:///Users/dst/x/harness/tests/ts/classifier.ts])';
+  const refs = parseFileRefs(text);
+  assert.equal(refs.length, 2);
+  assert.equal(refs[0].path, '/Users/dst/x/harness/src/classifier.ts');
+  assert.equal(refs[0].name, 'classifier.ts');
+  assert.equal(refs[1].path, '/Users/dst/x/harness/tests/ts/classifier.ts');
+
+  // The same reference twice is deduplicated, so a long answer yields one chip
+  // per file, not one per mention.
+  const dupes = parseFileRefs('[file:///a/b.ts] then [file:///a/b.ts] again');
+  assert.equal(dupes.length, 1);
+
+  // No references, or nothing to parse: no chips. (Spread: arrays built
+  // inside the vm sandbox carry a foreign Array prototype.)
+  assert.deepEqual([...parseFileRefs('no refs here')], []);
+  assert.deepEqual([...parseFileRefs('')], []);
+  assert.deepEqual([...parseFileRefs(null)], []);
+
+  // Only absolute paths can be served: file://host/path has a host part, and
+  // file://relative is just a malformed reference. Neither becomes a chip that
+  // asks the server for something it would have to refuse.
+  assert.deepEqual([...parseFileRefs('[file://host/share/x.txt]')], []);
+  assert.deepEqual([...parseFileRefs('[file://relative/path.txt]')], []);
+
+  // Paths with spaces survive -- repos have them.
+  const spaced = parseFileRefs('[file:///Users/dst/My Repo/src/a.ts]');
+  assert.equal(spaced.length, 1);
+  assert.equal(spaced[0].path, '/Users/dst/My Repo/src/a.ts');
+  assert.equal(spaced[0].name, 'a.ts');
+});
+

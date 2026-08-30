@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -29,8 +30,19 @@ from .models import (
     TranscriptStep,
 )
 from .screen import TerminalMirror
+from .spawner import projects_root
 
 logger = logging.getLogger("agy_remote.session")
+
+#: A client that has said nothing for this long is gone, whatever its socket
+#: claims. The PWA heartbeats every 15 s, so this tolerates three missed beats;
+#: a suspended iOS Safari kills its socket without a close frame, and a write
+#: into the dead peer buffers successfully -- only silence reveals it.
+STALE_CLIENT_SECONDS = 45.0
+
+#: The most of a file /api/file will put in one JSON response. A transcript
+#: reference can name a build log; the phone wants the top of it, not all of it.
+MAX_FILE_BYTES = 128 * 1024
 
 
 class SessionManager:
@@ -52,6 +64,10 @@ class SessionManager:
         self.follow_latest: bool = True
         self.active_steps: list[TranscriptStep] = []
         self._connected_clients: set[WebSocket] = set()
+        #: The last time each client said anything the server could hear.
+        #: A socket reads open long after its peer is gone; this, not the
+        #: socket state, is what the reaper judges liveness by.
+        self._client_last_seen: dict[WebSocket, float] = {}
         #: Called before the first client's snapshot when the server is
         #: listening with nothing behind it. An always-on server has no agy
         #: until someone wants one; this is where one appears.
@@ -251,6 +267,7 @@ class SessionManager:
                 logger.warning("Could not start a session for the arriving client: %s", e)
 
         self._connected_clients.add(websocket)
+        self._client_last_seen[websocket] = time.monotonic()
         # Send full snapshot of current state
         init_data = self._init_data()
         try:
@@ -293,7 +310,55 @@ class SessionManager:
     def unregister_client(self, websocket: WebSocket) -> None:
         """Remove a disconnected WebSocket client."""
         self._connected_clients.discard(websocket)
+        self._client_last_seen.pop(websocket, None)
         self._client_focus.pop(websocket, None)
+
+    def note_client_activity(self, websocket: WebSocket) -> None:
+        """Record that this client just said something the server heard.
+
+        Every inbound frame proves liveness -- not only the heartbeat -- so a
+        chatty client is never reaped mid-conversation.
+        """
+        self._client_last_seen[websocket] = time.monotonic()
+
+    async def reap_stale_clients(self) -> int:
+        """Drop clients whose heartbeats stopped, and correct the peer count.
+
+        iOS suspends a backgrounded PWA and kills its socket without a close
+        frame; the reload on return arrives as a brand-new connection while the
+        old one still reads open here, and writes into the dead peer buffer
+        successfully rather than failing. Judging by socket state alone let the
+        device count ratchet upward with every sleep/reload cycle -- the badge
+        said six devices where two existed.
+
+        A client with no stamp yet (registered before liveness tracking, or a
+        socket added directly in tests) is stamped fresh on the first sweep and
+        judged on the next one.
+        """
+        now = time.monotonic()
+        stale: list[WebSocket] = []
+        for ws in list(self._connected_clients):
+            last = self._client_last_seen.get(ws)
+            if last is None:
+                self._client_last_seen[ws] = now
+                continue
+            if now - last > STALE_CLIENT_SECONDS:
+                stale.append(ws)
+
+        for ws in stale:
+            self._connected_clients.discard(ws)
+            self._client_last_seen.pop(ws, None)
+            self._client_focus.pop(ws, None)
+            try:
+                await ws.close(code=1000)  # normal closure: the server moved on
+            except Exception as e:  # noqa: BLE001 - the socket was the problem
+                logger.debug("Closing reaped client failed: %s", e)
+
+        if stale:
+            logger.info("Reaped %d silent client(s): no frame for %.0fs", len(stale), STALE_CLIENT_SECONDS)
+            # The count is the alarm; the survivors must hear the correction.
+            await self.announce_peers()
+        return len(stale)
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
         """Send JSON payload to all active WebSocket clients."""
@@ -649,6 +714,70 @@ class SessionManager:
         await self.switch_conversation(newest_id)
         return True
 
+    # -------------------------------------------------------------------------
+    # Host files for the phone
+    # -------------------------------------------------------------------------
+
+    def _file_roots(self) -> list[Path]:
+        """The directories a file reference may name, resolved.
+
+        The registered sessions' workdirs plus the projects root: the places
+        the operator's agents are sanctioned to work. Anything else -- the
+        operator's home, the brain dir, /etc -- is refused by `read_host_file`.
+        """
+        roots: list[Path] = []
+        for record in self._sessions.values():
+            if record.workdir:
+                roots.append(Path(str(record.workdir)).resolve())
+        roots.append(projects_root().resolve())
+        return roots
+
+    def read_host_file(self, raw_path: str) -> dict[str, Any]:
+        """Read a file the transcript named, for the phone to display.
+
+        Accepts the `[file:///abs/path]` form the agent writes and bare
+        absolute paths. The path is resolved (which collapses `..` and follows
+        symlinks) and must land inside a sanctioned root, so a crafted
+        reference cannot read a file the agent could not have. Binary files and
+        directories are refused; large files are truncated, not streamed.
+
+        Raises PermissionError outside the roots, FileNotFoundError for a
+        missing file, ValueError for a binary file or a directory.
+        """
+        requested = raw_path.strip()
+        if requested.startswith("file://"):
+            requested = requested[len("file://") :]
+            # `file://host/path` names another machine's share; only the
+            # empty-host form, `file:///path`, refers to this one.
+            if not requested.startswith("/"):
+                raise PermissionError(f"not an absolute file reference: {raw_path!r}")
+
+        resolved = Path(requested).resolve()
+        if not any(resolved == root or root in resolved.parents for root in self._file_roots()):
+            raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
+
+        if not resolved.exists():
+            raise FileNotFoundError(resolved.name)
+        if not resolved.is_file():
+            raise ValueError(f"not a regular file: {resolved.name}")
+
+        with open(resolved, "rb") as fh:
+            data = fh.read(MAX_FILE_BYTES + 1)
+        # A NUL in the first kilobytes is the classic binary tell; decoding
+        # one into the phone's <pre> produces garbage either way.
+        if b"\x00" in data[:8192]:
+            raise ValueError(f"binary file: {resolved.name}")
+
+        truncated = len(data) > MAX_FILE_BYTES
+        content = data[:MAX_FILE_BYTES].decode("utf-8", errors="replace")
+        return {
+            "path": str(resolved),
+            "name": resolved.name,
+            "content": content,
+            "truncated": truncated,
+            "size": resolved.stat().st_size,
+        }
+
     async def disconnect_expired_clients(self) -> int:
         """Close live connections once the pairing deadline passes.
 
@@ -708,6 +837,10 @@ class SessionManager:
 
                 # End sessions whose pairing has expired mid-connection
                 await self.disconnect_expired_clients()
+
+                # Drop clients that went silent -- a suspended Safari never
+                # sends the close frame, so the socket alone proves nothing.
+                await self.reap_stale_clients()
 
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:

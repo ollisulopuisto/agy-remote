@@ -1,5 +1,21 @@
 # Changelog
 
+## v26.08.30.96 — The device count stops counting ghosts, and transcript file references open on the phone
+
+- **Zombie connections no longer inflate the device count.** iOS suspends the
+  page mid-connection and kills its socket without a close frame; the reload
+  on return arrived as a brand-new connection while the old one still read
+  open server-side, so every sleep/reload cycle ratcheted the "N devices
+  connected" badge upward. The server now tracks the last frame each client
+  actually sent, reaps clients silent past three missed heartbeats, and
+  announces the corrected count to the survivors.
+- **Host files referenced in the transcript open on the phone.** The agent
+  names files as `[file:///abs/path]`; these now render as tappable chips that
+  fetch the file via a new `GET /api/file` and show it in a bottom-sheet
+  viewer. The endpoint reads only within the registered sessions' workdirs and
+  the projects root — paths are resolved first, so `..` and symlink escapes
+  are refused — and truncates large files rather than streaming them.
+
 ## v26.08.30.95 — Mailbox REST control surface and PWA loop visibility (W2 2.3)
 
 - **Mailbox REST API (`GET /api/mailbox`, `POST /api/mailbox/mute`, `DELETE /api/mailbox/mute`).**

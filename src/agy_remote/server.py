@@ -407,6 +407,31 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         mirror = mgr.get_screen_mirror(conversation_id)
         return {"terminal": mirror.snapshot() if mirror else None}
 
+    @app.get("/api/file")
+    async def get_file(
+        request: Request,
+        path: str = Query(...),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Read a host file the transcript named, for the phone to display.
+
+        The agent references files as [file:///abs/path]; the server runs on
+        the machine that has them. `read_host_file` does the security work --
+        resolved paths, sanctioned roots only, size-capped -- so the endpoint
+        only maps its verdicts onto status codes.
+        """
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            return mgr.read_host_file(path)
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=f"File not found: {e}") from e
+        except ValueError as e:
+            raise HTTPException(status_code=415, detail=str(e)) from e
+
     def _press_key(key: str, conversation_id: str | None = None) -> str:
         """Deliver a key to whichever supervisor is live, if any."""
         sup = session_mgr.get_supervisor(conversation_id)
@@ -637,6 +662,9 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         try:
             while True:
                 raw_msg = await websocket.receive_json()
+                # Whatever this frame turns out to be, it proves the client is
+                # alive -- the reaper judges by the last thing it said.
+                mgr.note_client_activity(websocket)
 
                 async def reject(reason: str) -> None:
                     """Say so, rather than dropping the frame in silence.
