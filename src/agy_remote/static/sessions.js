@@ -69,10 +69,33 @@
     return s.isActive ? 'active' : 'idle';
   }
 
+  // The same rule applied to one drawer row: the server sends an ISO
+  // `updated_at` (the transcript's last write) and the row knows whether it is
+  // the session on screen. `liveActivityMs` is a second source: a step this
+  // client has seen since the snapshot, and the fresher of the two wins.
+  // Anything that is not a time the Date constructor accepts is treated as no
+  // activity at all, not as a time.
+  function sessionStatusOf(conversation, currentId, pending, now, liveActivityMs) {
+    var c = conversation || {};
+    var updatedAt = null;
+    if (c.updated_at) {
+      var t = new Date(c.updated_at).getTime();
+      if (!isNaN(t)) updatedAt = t;
+    }
+    if (liveActivityMs != null && (!updatedAt || liveActivityMs > updatedAt)) updatedAt = liveActivityMs;
+    return sessionStatus({
+      pending: pending > 0 ? pending : 0,
+      lastActivityAt: updatedAt,
+      isActive: !!(c.id && currentId && c.id === currentId),
+      now: now
+    });
+  }
+
   global.AgySessions = {
     buildSpawnRequest: buildSpawnRequest,
     spawnStageLabel: spawnStageLabel,
     spawnEventMatches: spawnEventMatches,
-    sessionStatus: sessionStatus
+    sessionStatus: sessionStatus,
+    sessionStatusOf: sessionStatusOf
   };
 })(typeof window !== 'undefined' ? window : this);

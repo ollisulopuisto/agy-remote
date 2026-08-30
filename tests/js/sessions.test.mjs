@@ -12,7 +12,7 @@ const source = readFileSync(new URL('../../src/agy_remote/static/sessions.js', i
 const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus } = sandbox.window.AgySessions;
+const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus, sessionStatusOf } = sandbox.window.AgySessions;
 
 // Objects built inside the vm sandbox carry the sandbox's Object.prototype,
 // which deepStrictEqual rejects; a JSON round-trip gives them this realm's.
@@ -123,4 +123,52 @@ test('a session with no activity at all is just active or idle', () => {
 
 test('a caller may tighten the busy window for tests', () => {
   assert.equal(sessionStatus({ pending: 0, lastActivityAt: 99900, now: 100000, isActive: false, busyWindowMs: 50 }), 'idle');
+});
+
+// -- sessionStatusOf: a drawer row, from what the server actually sends ------
+//
+// The row carries an ISO `updated_at` (the transcript's mtime), the id of the
+// session on screen, and the row's own pending-approval count.
+
+const NOW = 100000;
+const iso = (ms) => new Date(ms).toISOString();
+
+test('a row updated inside the window is busy', () => {
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(90000) }, 'b', 0, NOW), 'busy');
+});
+
+test('the row on screen is still busy while it works', () => {
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(90000) }, 'a', 0, NOW), 'busy');
+});
+
+test('a quiet row is active on screen and idle away from it', () => {
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'a', 0, NOW), 'active');
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'b', 0, NOW), 'idle');
+});
+
+test('a pending gate makes the row approval even when it is quiet', () => {
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'b', 2, NOW), 'approval');
+});
+
+test('a row with no timestamp is just active or idle', () => {
+  assert.equal(sessionStatusOf({ id: 'a' }, 'a', 0, NOW), 'active');
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: null }, 'b', 0, NOW), 'idle');
+});
+
+test('a timestamp the server cannot send is no activity at all', () => {
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: 'not a date' }, 'b', 0, NOW), 'idle');
+});
+
+test('a step this client just saw beats the drawer snapshot', () => {
+  // The drawer fetched a quiet timestamp; a step arrived since.
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'a', 0, NOW, 95000), 'busy');
+});
+
+test('the fresher of the two sources wins, in either direction', () => {
+  // Server says recent, the client last saw it a while ago: still busy.
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(90000) }, 'a', 0, NOW, 10000), 'busy');
+  // Both quiet: no source rescues it.
+  assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'b', 0, NOW, 5000), 'idle');
+  // A sighting with no server timestamp is activity.
+  assert.equal(sessionStatusOf({ id: 'a' }, 'b', 0, NOW, 95000), 'busy');
 });

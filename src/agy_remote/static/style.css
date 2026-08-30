@@ -575,6 +575,28 @@ body {
   background-color: rgba(255, 255, 255, 0.15);
 }
 
+.btn-stop {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.1s ease, background-color 0.15s ease;
+}
+
+.btn-stop:active {
+  transform: scale(0.92);
+  background-color: rgba(239, 68, 68, 0.3);
+}
+
 .btn-mic.recording {
   background-color: var(--danger);
   color: #fff;
@@ -957,6 +979,39 @@ details.message-system > summary {
   background-color: rgba(239, 68, 68, 0.2);
   color: #fca5a5;
   white-space: nowrap;
+}
+
+/* One dot, four truths: the shared rule from AgySessions.sessionStatus. */
+.session-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background-color: var(--text-muted);
+  vertical-align: middle;
+}
+
+.session-dot.status-approval {
+  background-color: #ef4444;
+}
+
+.session-dot.status-busy {
+  background-color: #f59e0b;
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+.session-dot.status-active {
+  background-color: #22c55e;
+}
+
+@keyframes dot-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .highlight-pulse {

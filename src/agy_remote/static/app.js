@@ -500,6 +500,7 @@ function handleServerEvent(event) {
       document.querySelectorAll('.session-item[data-conversation-id]').forEach(item => {
         item.classList.toggle('active', item.dataset.conversationId === currentConversationId);
       });
+      updateSessionDots();
     }
     updateApprovalIndicators();
     checkUrlNavigation();
@@ -538,6 +539,12 @@ function handleServerEvent(event) {
     }
   } else if (type === 'step_added' || type === 'step_updated') {
     currentConversationId = window.AgyFormat.adoptConversationId(currentConversationId, data.conversation_id);
+    // A step is activity, whatever the drawer's snapshot says: remember it so
+    // the row's dot can go busy before the next /api/conversations refresh.
+    if (data.conversation_id) {
+      lastSightings[data.conversation_id] = Date.now();
+      updateSessionDots();
+    }
     // `step_updated` used to fall through to nothing. A backend that revises
     // a step as its text, tools and thinking arrive would leave an empty card
     // on screen until a session switch reloaded the transcript.
@@ -1173,6 +1180,7 @@ function updateApprovalIndicators() {
     }
     dot.textContent = waiting > 1 ? `${waiting} waiting` : 'waiting';
   });
+  updateSessionDots();
 }
 
 function applyPeerCount(count) {
@@ -1207,6 +1215,7 @@ function updateHeader() {
 }
 
 function renderConversations(convs) {
+  drawerConversations = convs;
   drawerList.innerHTML = '';
   convs.forEach(c => {
     const item = document.createElement('div');
@@ -1232,11 +1241,71 @@ function renderConversations(convs) {
     drawerList.appendChild(item);
   });
   updateApprovalIndicators();
+  updateSessionDots();
+}
+
+// -- session status dots (W1, item 1.4) --
+//
+// One rule, drawn where it belongs: the drawer row. The rule is the shared
+// `AgySessions.sessionStatus` applied to what the server sent (the
+// transcript's `updated_at`) and what this client has seen since the drawer's
+// snapshot (a step that arrived in the meantime); the fresher wins. The
+// drawer is static markup, so while it is open a tick keeps the dot honest:
+// a session that goes quiet has to settle busy -> active/idle on its own.
+let drawerConversations = [];
+let lastSightings = {};
+let drawerDotTimer = null;
+const DOT_TITLES = {
+  approval: 'Waiting for approval',
+  busy: 'Working',
+  active: 'Active session',
+  idle: 'Idle'
+};
+
+function updateSessionDots() {
+  const counts = window.AgyFormat.approvalCountsBySession(pendingApprovals);
+  const now = Date.now();
+  const byId = {};
+  drawerConversations.forEach(c => { byId[c.id] = c; });
+  document.querySelectorAll('.session-item[data-conversation-id]').forEach(item => {
+    const conv = byId[item.dataset.conversationId];
+    if (!conv) return;
+    const title = item.querySelector('.session-item-title');
+    if (!title) return;
+    const status = window.AgySessions.sessionStatusOf(
+      conv,
+      currentConversationId,
+      counts[conv.id] || 0,
+      now,
+      lastSightings[conv.id] || null
+    );
+    let dot = title.querySelector('.session-dot');
+    if (!dot) {
+      dot = document.createElement('span');
+      title.prepend(dot);
+    }
+    dot.className = `session-dot status-${status}`;
+    dot.title = DOT_TITLES[status] || '';
+  });
+}
+
+function startDrawerDotTimer() {
+  if (drawerDotTimer !== null) clearInterval(drawerDotTimer);
+  drawerDotTimer = setInterval(updateSessionDots, 5000);
+}
+
+function stopDrawerDotTimer() {
+  if (drawerDotTimer !== null) {
+    clearInterval(drawerDotTimer);
+    drawerDotTimer = null;
+  }
 }
 
 async function openDrawer() {
   drawer.classList.add('open');
   drawerBackdrop.classList.add('open');
+  updateSessionDots();
+  startDrawerDotTimer();
   try {
     const res = await fetch(`/api/conversations?token=${encodeURIComponent(authToken)}`);
     if (res.ok) {
@@ -1251,6 +1320,7 @@ async function openDrawer() {
 function closeDrawer() {
   drawer.classList.remove('open');
   drawerBackdrop.classList.remove('open');
+  stopDrawerDotTimer();
 }
 
 // ----------------------------------------------------------------------------
@@ -1493,6 +1563,12 @@ document.querySelectorAll('.chip-btn').forEach(btn => {
     if (cmd) sendPrompt(cmd);
   });
 });
+
+// Stop the turn: Esc halts agy's active stream. It is the safe interrupt --
+// Ctrl+C ("interrupt") is the key agy maps to *exit*, and a phone that
+// mistypes its way out of an agent session is a lost session.
+const stopBtn = document.getElementById('stopBtn');
+if (stopBtn) stopBtn.addEventListener('click', () => sendKey('escape'));
 
 // Register Service Worker
 if ('serviceWorker' in navigator) {
