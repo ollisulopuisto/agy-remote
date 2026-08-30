@@ -101,6 +101,26 @@ def test_child_env_points_at_this_server_and_carries_no_secret(tmp_path: Path):
     assert "shared-token" not in " ".join(env.values())
 
 
+def test_child_env_of_a_skip_permissions_launch_tells_the_hook_to_allow(tmp_path: Path):
+    """`--dangerously-skip-permissions` must survive the hop through the hook.
+
+    The flag only silences agy's built-in checks; the PreToolUse hook fires
+    regardless and re-implements the gate. The supervised launch therefore
+    exports a marker the hook can see, or every tool call still ends in a
+    prompt the user explicitly asked never to see.
+    """
+    env = cli_mod.agy_child_env(_cfg(tmp_path, 8766), skip_permissions=True)
+
+    assert env["AGY_REMOTE_SKIP_PERMISSIONS"] == "1"
+
+
+def test_child_env_stays_secret_free_and_marker_free_by_default(tmp_path: Path):
+    env = cli_mod.agy_child_env(_cfg(tmp_path, 8766))
+
+    assert "AGY_REMOTE_SKIP_PERMISSIONS" not in env
+    assert not any("token" in k.lower() for k in env)
+
+
 def test_child_env_uses_the_tls_name_so_the_hook_can_verify_the_certificate(tmp_path: Path):
     cfg = _cfg(tmp_path, 8766, tailscale_dns_name="host.ts.net")
     cfg.tls_cert = tmp_path / "cert.pem"

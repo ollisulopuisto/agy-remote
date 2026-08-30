@@ -411,6 +411,12 @@ reach the phone, but a banner is drawn only in its own transcript: the header
 carries one badge saying how many are waiting elsewhere and where, and each row
 of the session drawer shows its own count. Open that session to answer.
 
+**Running with `--dangerously-skip-permissions`.** That flag silences `agy`'s
+built-in checks, but the hook fires regardless — so `agy-remote run
+--dangerously-skip-permissions` also exports `AGY_REMOTE_SKIP_PERMISSIONS=1`
+into the `agy` it spawns, and the hook then allows every tool call immediately.
+A hand-started `agy` never carries the marker and keeps the full approval flow.
+
 **Three timeouts, nested inward**, so the layer that gives up first is the one
 that can explain itself: the server decides at 240s, the hook gives up on the
 socket at 270s, and `agy` kills the hook at 300s. Reversed, a slow answer

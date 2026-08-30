@@ -1,5 +1,17 @@
 # Changelog
 
+## v26.08.30.102 — --dangerously-skip-permissions survives its own hook
+
+- **A supervised agy launched with `--dangerously-skip-permissions` no longer
+  prompts on every tool call.** The flag only silences agy's built-in checks;
+  the PreToolUse hook agy-remote installs fires regardless and re-implemented
+  the very gate the user asked to remove — with no phone connected, every call
+  came back "ask" and agy prompted in its own TUI. `run` now recognizes the
+  flag in its passthrough args and exports `AGY_REMOTE_SKIP_PERMISSIONS=1`
+  into the agy it spawns; the hook sees the marker and allows immediately,
+  before any network I/O. A hand-started agy never carries the marker and
+  keeps the full approval flow, so the phone still sees what it always saw.
+
 ## v26.08.30.101 — The count counts devices, the gate shows in both places, and text stays selected
 
 - **The device badge counts devices, not sockets.** A phone can legitimately

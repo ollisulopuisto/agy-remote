@@ -16,6 +16,13 @@ from .tmux_runner import session_id_from_env
 
 DEFAULT_PORT = 8765
 
+#: Exported by a server that launched agy with `--dangerously-skip-permissions`.
+#: That flag silences agy's built-in checks but not PreToolUse hooks, so without
+#: this marker the hook would prompt for every tool call the user asked to run
+#: unattended. The environment is the one channel the hook inherits from the
+#: agy its server spawned; a hand-started agy never carries it and keeps asking.
+SKIP_PERMISSIONS_ENV = "AGY_REMOTE_SKIP_PERMISSIONS"
+
 #: agy kills this hook process at the `timeout` written into hooks.json (300s).
 #: These have to nest strictly inward -- server < hook < agy -- or the outermost
 #: layer wins and the user sees `signal: killed` instead of being told the
@@ -154,8 +161,20 @@ def resolve_hook_command() -> str:
     return f"{shlex.quote(sys.executable)} -m agy_remote.cli hook-pre-tool"
 
 
+def _skip_permissions_requested() -> bool:
+    """Whether the supervised launch asked for no permission gating at all."""
+    return os.environ.get(SKIP_PERMISSIONS_ENV, "").lower() in ("1", "true", "yes")
+
+
 def run_pre_tool_hook() -> None:
     """Invoked by Antigravity CLI PreToolUse hook on stdin."""
+    if _skip_permissions_requested():
+        # Decided before any network I/O: the launching server already told us
+        # the user wants no gate, and a server round trip here could only hang
+        # the tool call or reintroduce the prompt the flag was meant to remove.
+        print(json.dumps({"decision": "allow", "reason": "agy-remote: launched with --dangerously-skip-permissions"}))
+        return
+
     try:
         raw_input = sys.stdin.read()
         if not raw_input.strip():

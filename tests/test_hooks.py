@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from agy_remote.hooks import install_hooks_config
 
 
@@ -229,6 +231,77 @@ def test_a_stable_argv0_is_used_directly_as_before(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(sys, "argv", [str(stable)])
 
     assert resolve_hook_command() == f"{stable} hook-pre-tool"
+
+
+# ---------------------------------------------------------------------------
+# A supervised launch with --dangerously-skip-permissions must actually skip.
+# The flag turns off agy's built-in checks, but PreToolUse hooks still fire --
+# without a marker from the launching server the hook re-implements the very
+# gate the user asked to remove.
+# ---------------------------------------------------------------------------
+
+
+def _run_hook(monkeypatch, stdin_payload: str = '{"toolCall": {"name": "run_command"}}') -> str:
+    """Run the hook with stdin mocked; returns what it printed for agy."""
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(stdin_payload))
+    import contextlib
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        from agy_remote.hooks import run_pre_tool_hook
+
+        run_pre_tool_hook()
+    return out.getvalue()
+
+
+def test_a_skip_permissions_launch_allows_every_tool_call_without_the_server(monkeypatch):
+    """The marker comes from the supervised launch, so no server round trip --
+    and no prompt -- is needed. The endpoint would 401 or hang on nothing."""
+    import agy_remote.hooks as hooks_mod
+
+    monkeypatch.setenv("AGY_REMOTE_SKIP_PERMISSIONS", "1")
+
+    def explode(*a, **kw):
+        raise AssertionError("the hook must not contact the server under skip-permissions")
+
+    monkeypatch.setattr(hooks_mod.urllib.request, "urlopen", explode)
+
+    decision = json.loads(_run_hook(monkeypatch))
+    assert decision["decision"] == "allow"
+
+
+@pytest.mark.parametrize("value", ["0", "", "false", "yes-but-typo"])
+def test_without_the_marker_the_hook_does_not_auto_allow(monkeypatch, value):
+    """Only an explicit marker from the supervised launch skips; a hand-started
+    agy or a stale env must keep the approval flow intact."""
+    import agy_remote.hooks as hooks_mod
+
+    if value:
+        monkeypatch.setenv("AGY_REMOTE_SKIP_PERMISSIONS", value)
+    else:
+        monkeypatch.delenv("AGY_REMOTE_SKIP_PERMISSIONS", raising=False)
+
+    def unreachable(req, timeout=0):
+        raise hooks_mod.urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(hooks_mod.urllib.request, "urlopen", unreachable)
+
+    decision = json.loads(_run_hook(monkeypatch))
+    assert decision["decision"] == "ask"
+
+
+def test_run_recognizes_the_skip_permissions_flag_in_its_passthrough_args():
+    from agy_remote.cli import _wants_skip_permissions
+
+    assert _wants_skip_permissions(["--dangerously-skip-permissions"])
+    assert _wants_skip_permissions(["--model", "x", "--dangerously-skip-permissions"])
+    assert _wants_skip_permissions(["--dangerously-skip-permissions=true"])
+    assert not _wants_skip_permissions([])
+    assert not _wants_skip_permissions(["--model", "x"])
+    # A different flag that merely contains the words must not match.
+    assert not _wants_skip_permissions(["--dangerously-skip-permissions-nothing"])
 
 
 def test_the_timeouts_are_nested_so_the_server_answers_first():

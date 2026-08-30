@@ -530,7 +530,7 @@ class RemoteConfig(BaseModel):
 config_instance: RemoteConfig | None = None
 
 
-def agy_child_env(cfg: RemoteConfig, session_id: str | None = None) -> dict[str, str]:
+def agy_child_env(cfg: RemoteConfig, session_id: str | None = None, skip_permissions: bool = False) -> dict[str, str]:
     """What a supervised agy needs to know about the server supervising it.
 
     Its PreToolUse hook otherwise resolves the endpoint from a host-wide state
@@ -541,6 +541,13 @@ def agy_child_env(cfg: RemoteConfig, session_id: str | None = None) -> dict[str,
 
     `session_id` is the tmux session name the agy was spawned in: it is how
     that agent signs itself when it talks to another session over the mailbox.
+
+    `skip_permissions` mirrors a launch with `--dangerously-skip-permissions`.
+    That flag silences agy's built-in checks but not PreToolUse hooks, so the
+    hook would otherwise re-implement the gate the user asked to remove. The
+    marker travels through the environment -- the one channel the hook
+    inherits from the agy this server launched -- and nowhere else: a
+    hand-started agy never sees it and keeps asking.
     """
     env = {
         "AGY_REMOTE_URL": cfg.local_base_url,
@@ -548,6 +555,8 @@ def agy_child_env(cfg: RemoteConfig, session_id: str | None = None) -> dict[str,
     }
     if session_id:
         env["AGY_REMOTE_SESSION_ID"] = session_id
+    if skip_permissions:
+        env["AGY_REMOTE_SKIP_PERMISSIONS"] = "1"
     return env
 
 

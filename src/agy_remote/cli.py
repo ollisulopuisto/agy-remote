@@ -685,7 +685,7 @@ def run(
     app = create_app(cfg)
     _serve_in_background_or_exit(cfg, app)
 
-    child_env = agy_child_env(cfg)
+    child_env = agy_child_env(cfg, skip_permissions=_wants_skip_permissions(ctx.args))
     if tmux:
         session_name = session_name_for_port(cfg.port)
         supervisor = TmuxSupervisor(session_name=session_name, cmd=child_cmd, env=child_env)
@@ -770,6 +770,20 @@ def wait_for_keypress_or_timeout(
     finally:
         with contextlib.suppress(Exception):
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
+def _wants_skip_permissions(extra_args: list[str]) -> bool:
+    """Whether the passthrough args ask agy to skip its permission checks.
+
+    The flag is forwarded verbatim, but on its own it does not survive the
+    PreToolUse hook agy-remote installs: the hook fires regardless of the
+    flag and would re-implement the gate. `run` translates it into the
+    environment marker the hook recognizes instead.
+    """
+    return any(
+        arg == "--dangerously-skip-permissions" or arg.startswith("--dangerously-skip-permissions=")
+        for arg in extra_args
+    )
 
 
 def _warn_if_hooks_unwired() -> None:
