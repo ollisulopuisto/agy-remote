@@ -1,5 +1,13 @@
 # Changelog
 
+## v26.08.30.98 — Diagrams you can pinch
+
+- **Mermaid diagrams are zoomable.** A two-finger pinch scales the rendered
+  SVG (1×–5×, clamped), one finger still scrolls the box, and a double-tap
+  snaps back to natural size. On a Mac trackpad, ctrl+wheel does the same.
+  Zoom is applied as width, so panning a zoomed diagram uses the container's
+  native scroll instead of hand-rolled transform math.
+
 ## v26.08.30.97 — Mermaid diagrams render on the phone
 
 - **```mermaid fences render as diagrams.** agy writes its plans and

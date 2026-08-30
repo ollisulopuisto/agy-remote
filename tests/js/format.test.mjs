@@ -178,6 +178,28 @@ test('mermaid fences are recognized by their language tag, nothing else', () => 
   assert.equal(isMermaidLang(null), false);
 });
 
+test('diagram zoom is clamped, never inverting or exploding', () => {
+  const { clampZoom } = sandbox.window.AgyFormat;
+  // A pinch multiplies an absolute scale; the result must stay within bounds.
+  assert.equal(clampZoom(2, 1, 5), 2);
+  assert.equal(clampZoom(0.4, 1, 5), 1, 'never smaller than the natural size');
+  assert.equal(clampZoom(12, 1, 5), 5, 'never so large the phone gives up rendering it');
+  assert.equal(clampZoom(5, 1, 5), 5);
+  assert.equal(clampZoom(1, 1, 5), 1);
+  // A lost or corrupt state falls back to natural size, not NaN.
+  assert.equal(clampZoom(NaN, 1, 5), 1);
+  assert.equal(clampZoom(undefined, 1, 5), 1);
+});
+
+test('a second quick tap on a diagram is a double-tap', () => {
+  const { isDoubleTap } = sandbox.window.AgyFormat;
+  assert.equal(isDoubleTap(1000, 1000 + 200, 300), true);
+  assert.equal(isDoubleTap(1000, 1000 + 299, 300), true);
+  assert.equal(isDoubleTap(1000, 1000 + 301, 300), false, 'a slow second tap is just a tap');
+  assert.equal(isDoubleTap(null, 1000, 300), false, 'no previous tap yet');
+  assert.equal(isDoubleTap(undefined, 1000, 300), false);
+});
+
 test('mermaid renders from vendored code only, with strict security', () => {
   // The page holds the E2EE key, so the CSP permits no remote script origins;
   // mermaid must be vendored and served same-origin. It parses

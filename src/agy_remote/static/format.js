@@ -288,6 +288,21 @@
     return /^(mermaid|mmd)$/i.test(String(lang == null ? '' : lang).trim());
   }
 
+  // Pinch-zoom for diagrams: an absolute scale clamped to the sane range.
+  // Below 1x is pointless (the SVG already fits its box) and above the max a
+  // phone stops rendering the path usefully anyway. A lost or corrupt state
+  // falls back to natural size rather than NaN.
+  function clampZoom(scale, min, max) {
+    var value = typeof scale === 'number' && isFinite(scale) ? scale : min;
+    return Math.min(max, Math.max(min, value));
+  }
+
+  // Whether this tap is the second of a double-tap (used to reset a zoomed
+  // diagram back to natural size).
+  function isDoubleTap(lastTapAt, now, maxGapMs) {
+    return typeof lastTapAt === 'number' && (now - lastTapAt) < maxGapMs;
+  }
+
   // The mailbox pairs one session is part of, addressed as peers.
   function trafficForSession(pairs, sessionKey) {
     if (!pairs || !Array.isArray(pairs) || !sessionKey) return [];
@@ -333,6 +348,8 @@
     parseEnvelope: parseEnvelope,
     parseFileRefs: parseFileRefs,
     isMermaidLang: isMermaidLang,
+    clampZoom: clampZoom,
+    isDoubleTap: isDoubleTap,
     trafficForSession: trafficForSession,
     formatTrafficPill: formatTrafficPill
   };

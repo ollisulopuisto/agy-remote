@@ -1422,6 +1422,9 @@ details.message-system > summary {
   border-radius: 10px;
   overflow: auto;
   text-align: center;
+  /* One finger scrolls the box; the two-finger pinch is claimed by the
+     app's own zoom handler, not the browser's page zoom. */
+  touch-action: pan-x pan-y;
 }
 
 .md-mermaid svg {

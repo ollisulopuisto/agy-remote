@@ -1277,6 +1277,93 @@ async function renderMermaidIn(root) {
   }
 }
 
+// Diagram pinch-zoom: a two-finger pinch scales the SVG (width, so the
+// container's native scroll pans it), a double-tap resets. One finger keeps
+// scrolling normally -- only the two-finger gesture is claimed.
+const DIAGRAM_ZOOM_MIN = 1;
+const DIAGRAM_ZOOM_MAX = 5;
+const DIAGRAM_DOUBLE_TAP_MS = 300;
+
+let diagramPinchStartDist = 0;
+let diagramPinchStartScale = 1;
+let diagramLastTap = { at: null, el: null };
+
+function diagramTouchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+function setDiagramZoom(container, scale) {
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  const next = AgyFormat.clampZoom(scale, DIAGRAM_ZOOM_MIN, DIAGRAM_ZOOM_MAX);
+  container.dataset.zoom = String(next);
+  if (next === 1) {
+    delete container.dataset.baseWidth;
+    svg.style.maxWidth = '';
+    svg.style.width = '';
+    return;
+  }
+  if (!container.dataset.baseWidth) {
+    // The natural width, captured before any transform touched it.
+    container.dataset.baseWidth = String(container.clientWidth);
+  }
+  svg.style.maxWidth = 'none';
+  svg.style.width = Number(container.dataset.baseWidth) * next + 'px';
+}
+
+function resetDiagramZoom(container) {
+  setDiagramZoom(container, 1);
+}
+
+chatContainer.addEventListener('touchstart', (e) => {
+  const container = e.target.closest('.md-mermaid');
+  if (!container) return;
+  if (e.touches.length === 2) {
+    diagramPinchStartDist = diagramTouchDist(e.touches);
+    diagramPinchStartScale = parseFloat(container.dataset.zoom || '1');
+  }
+}, { passive: true });
+
+chatContainer.addEventListener('touchmove', (e) => {
+  const container = e.target.closest('.md-mermaid');
+  if (!container || e.touches.length !== 2 || diagramPinchStartDist <= 0) return;
+  // Ours now: without this the page zooms instead of the diagram.
+  e.preventDefault();
+  const factor = diagramTouchDist(e.touches) / diagramPinchStartDist;
+  setDiagramZoom(container, diagramPinchStartScale * factor);
+}, { passive: false });
+
+chatContainer.addEventListener('touchend', (e) => {
+  const container = e.target.closest('.md-mermaid');
+  if (!container) return;
+  if (e.touches.length > 0) return; // a finger is still down: the pinch continues
+  if (diagramPinchStartDist > 0) {
+    diagramPinchStartDist = 0; // the pinch just ended; not a tap
+    return;
+  }
+  // Trackpad/pointer pinch is not the only zoom; a double-tap resets.
+  const now = Date.now();
+  if (diagramLastTap.el === container && AgyFormat.isDoubleTap(diagramLastTap.at, now, DIAGRAM_DOUBLE_TAP_MS)) {
+    resetDiagramZoom(container);
+    diagramLastTap = { at: null, el: null };
+    return;
+  }
+  diagramLastTap = { at: now, el: container };
+}, { passive: true });
+
+// Desktop/trackpad equivalent: ctrl+wheel (the pinch gesture on a Mac
+// trackpad) zooms the hovered diagram, plain scroll stays untouched.
+chatContainer.addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return;
+  const container = e.target.closest('.md-mermaid');
+  if (!container) return;
+  e.preventDefault();
+  const current = parseFloat(container.dataset.zoom || '1');
+  setDiagramZoom(container, current * (e.deltaY < 0 ? 1.1 : 0.9));
+}, { passive: false });
+
 function triggerVibrate(pattern = [60, 40, 80]) {
   if (navigator.vibrate) {
     try { navigator.vibrate(pattern); } catch (e) {}
