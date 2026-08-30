@@ -42,6 +42,7 @@ config.yaml
 # IDE & backups
 .idea/
 .vscode/
+.opencode/
 *.swp
 *.swo
 *~

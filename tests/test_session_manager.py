@@ -433,6 +433,45 @@ async def test_the_envelope_is_stripped_before_it_reaches_a_client(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_rename_overrides_titles_and_survives_a_restart(tmp_path: Path):
+    """A user-chosen name wins over the derived one, and outlives the server.
+
+    Titles are derived from transcripts, so two sessions that started the
+    same way read identically in the drawer. The override is applied after
+    the backend builds its summaries -- whatever the agent names things, the
+    human's name is what the phone shows -- and persists in a small JSON
+    store so a server restart does not take the names with it.
+    """
+    conv_id = "rename-me"
+    log = tmp_path / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_INPUT", "content": "Hello agy"}) + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token")
+    store = tmp_path / "titles.json"
+    mgr = SessionManager(cfg, title_store=store)
+
+    renamed = mgr.rename_conversation(conv_id, "My own name")
+    assert renamed is not None
+    assert renamed["title"] == "My own name"
+
+    # The drawer list and the switch snapshot both name it the user's way.
+    assert mgr.list_conversations()[0].title == "My own name"
+    await mgr.switch_conversation(conv_id)
+    assert mgr._summary_of(conv_id)["title"] == "My own name"
+
+    # Unknown conversations have nothing to rename.
+    assert mgr.rename_conversation("nope", "x") is None
+
+    # A restart keeps the names the user chose.
+    fresh = SessionManager(cfg, title_store=store)
+    assert fresh.list_conversations()[0].title == "My own name"
+
+
+@pytest.mark.asyncio
 async def test_steps_carry_whether_they_are_scaffolding(tmp_path: Path):
     conv_id = "with-checkpoint"
     log = tmp_path / conv_id / ".system_generated" / "logs" / "transcript.jsonl"

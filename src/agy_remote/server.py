@@ -48,6 +48,7 @@ from .models import (
     KeyPressRequest,
     MuteMailboxRequest,
     NewSessionRequest,
+    RenameConversationRequest,
     UserPromptRequest,
 )
 from .pty_runner import get_pty_supervisor
@@ -307,6 +308,47 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Could not switch conversation")
         return {"status": "ok", "active_conversation_id": conversation_id}
 
+    @app.post("/api/conversations/{conversation_id}/rename")
+    async def rename_conversation_endpoint(
+        conversation_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Rename a conversation from the phone, so sessions can be told apart.
+
+        The same sealing rule as the other content endpoints: with E2EE on, an
+        unsealed body is never legitimate. The new name goes to every connected
+        client as `session_renamed`, so open drawers and headers redraw.
+        """
+        verify_auth(request, token, token_header)
+
+        mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        try:
+            req = RenameConversationRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        summary = mgr.rename_conversation(conversation_id, req.title)
+        if summary is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        await mgr.broadcast(
+            {
+                "event": "session_renamed",
+                "data": {"conversation_id": conversation_id, "conversation": summary},
+            }
+        )
+        return {"status": "ok", "conversation": summary}
+
     @app.post("/api/sessions", status_code=status.HTTP_202_ACCEPTED)
     async def create_session(
         request: Request,
@@ -452,6 +494,30 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(status_code=415, detail=str(e)) from e
 
+    @app.get("/api/git-diff")
+    async def git_diff(
+        request: Request,
+        conversation_id: str | None = Query(None),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """The named session's git working-tree diff, for the phone's pane.
+
+        The workdir is whatever the session registry holds -- the request
+        names a session, never a path -- and `working_tree_diff` does the
+        security and sanity work. Verdicts map like /api/file's do.
+        """
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            return mgr.working_tree_diff(conversation_id)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     def _press_key(key: str, conversation_id: str | None = None) -> str:
         """Deliver a key to whichever supervisor is live, if any."""
         sup = session_mgr.get_supervisor(conversation_id)
@@ -514,18 +580,15 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         # A prompt without a target goes to the session on screen, so that is
         # whose loop this one breaks.
         mgr.note_human_prompt(req.conversation_id or mgr.active_conversation_id)
-        delivered_via = await mgr.backend.send_prompt(mgr, req.prompt, req.conversation_id)
-
-        await mgr.broadcast(
-            {
-                "event": "prompt_sent",
-                "data": {
-                    "prompt": req.prompt,
-                    "conversation_id": req.conversation_id or mgr.active_conversation_id,
-                    "delivered_via": delivered_via,
-                },
+        result = await mgr.submit_prompt(req.prompt, req.conversation_id)
+        if result["status"] == "queued":
+            return {
+                "status": "queued",
+                "prompt_id": result["prompt_id"],
+                "message": "Agent is mid-turn; prompt queued and will be delivered when it finishes.",
             }
-        )
+
+        delivered_via = result["delivered_via"]
         if delivered_via == "broadcast":
             return {
                 "status": "ok",
@@ -753,17 +816,14 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                         # caught in is broken (a bare prompt targets the
                         # session on screen).
                         mgr.note_human_prompt(data.get("conversation_id") or mgr.active_conversation_id)
-                        # Say how it went out. "broadcast" means no supervisor
-                        # took it -- the prompt was typed nowhere, and a client
-                        # that hears only `prompt_sent` cannot tell that apart
-                        # from one that landed.
-                        delivered_via = await mgr.backend.send_prompt(mgr, prompt_text, data.get("conversation_id"))
-                        await mgr.broadcast(
-                            {
-                                "event": "prompt_sent",
-                                "data": {"prompt": prompt_text, "delivered_via": delivered_via},
-                            }
-                        )
+                        # submit_prompt is the one door both entry points use:
+                        # idle conversations go straight out (prompt_sent), a
+                        # conversation mid-turn queues (prompt_queued).
+                        await mgr.submit_prompt(prompt_text, data.get("conversation_id"))
+                elif action == "cancel_prompt":
+                    prompt_id = data.get("prompt_id")
+                    if isinstance(prompt_id, str):
+                        await mgr.cancel_queued_prompt(prompt_id)
                 elif action == "request_screen":
                     # A client revealing the panel wants the screen now, not at
                     # the next redraw -- a still terminal never sends one.

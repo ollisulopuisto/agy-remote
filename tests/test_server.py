@@ -307,6 +307,78 @@ def test_a_prompt_nothing_received_says_so(tmp_path: Path):
     assert announced["data"]["delivered_via"] == "broadcast"
 
 
+def _write_transcript(tmp_path: Path, conv_id: str, prompt: str = "Test prompt") -> None:
+    conv_dir = tmp_path / conv_id / ".system_generated" / "logs"
+    conv_dir.mkdir(parents=True)
+    (conv_dir / "transcript.jsonl").write_text(
+        json.dumps({"step_index": 0, "type": "USER_INPUT", "source": "USER_INPUT", "content": prompt}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_rename_conversation(tmp_path: Path):
+    """The phone renames a session so its sessions can be told apart."""
+    conv_id = "test-conv-rename"
+    _write_transcript(tmp_path, conv_id)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, e2ee_enabled=False)
+    client = TestClient(create_app(cfg))
+
+    # Unauthenticated rename is refused.
+    resp = client.post(f"/api/conversations/{conv_id}/rename", json={"title": "New name"})
+    assert resp.status_code == 401
+
+    # Renaming sticks: the drawer list reports the new title.
+    resp = client.post(f"/api/conversations/{conv_id}/rename?token=secret123", json={"title": "  New name  "})
+    assert resp.status_code == 200
+    titles = {c["id"]: c["title"] for c in client.get("/api/conversations?token=secret123").json()}
+    assert titles[conv_id] == "New name"
+
+    # A blank title is refused before it can blank a session's name.
+    resp = client.post(f"/api/conversations/{conv_id}/rename?token=secret123", json={"title": "   "})
+    assert resp.status_code == 422
+
+    # An unknown conversation is a 404.
+    resp = client.post("/api/conversations/nope/rename?token=secret123", json={"title": "x"})
+    assert resp.status_code == 404
+
+
+def test_rename_broadcasts_and_accepts_sealed_body(tmp_path: Path):
+    """The rename reaches every connected phone as `session_renamed`.
+
+    The same sealing rule as the other content endpoints applies: with E2EE
+    on, an unsealed body is never legitimate.
+    """
+    from agy_remote.crypto import decode_key, decrypt_payload, encrypt_payload
+
+    conv_id = "test-conv-sealed"
+    _write_transcript(tmp_path, conv_id)
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    key = decode_key(cfg.e2ee_key)
+    client = TestClient(create_app(cfg))
+
+    # E2EE on: a bare body is refused, not silently accepted.
+    resp = client.post(f"/api/conversations/{conv_id}/rename?token=secret123", json={"title": "Bare"})
+    assert resp.status_code == 400
+
+    with client.websocket_connect(f"/ws?token={cfg.auth_token}") as ws:
+        init = decrypt_payload(ws.receive_json(), key)
+        assert init["event"] == "init"
+        resp = client.post(
+            f"/api/conversations/{conv_id}/rename?token=secret123",
+            json=encrypt_payload({"title": "Renamed over the wire"}, key),
+        )
+        assert resp.status_code == 200
+        event = decrypt_payload(ws.receive_json(), key)
+        while event.get("event") == "peers":
+            event = decrypt_payload(ws.receive_json(), key)
+
+    assert event["event"] == "session_renamed"
+    assert event["data"]["conversation_id"] == conv_id
+    assert event["data"]["conversation"]["title"] == "Renamed over the wire"
+
+
 def test_the_manifest_never_carries_credentials(tmp_path: Path):
     """The E2EE key must not exist in any HTTP response, for anyone.
 

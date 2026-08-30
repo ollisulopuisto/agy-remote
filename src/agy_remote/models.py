@@ -88,6 +88,21 @@ class UserPromptRequest(BaseModel):
     conversation_id: str | None = None
 
 
+class RenameConversationRequest(BaseModel):
+    """The phone renames a session so it can tell its sessions apart."""
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _usable_title(cls, value: str) -> str:
+        """Whitespace-only names and runaway lengths are refused, trimmed."""
+        title = value.strip()
+        if not title:
+            raise ValueError("title must not be blank")
+        return title[:200]
+
+
 class NewSessionRequest(BaseModel):
     """The phone asks the server to clone a repo and start an agy on it.
 

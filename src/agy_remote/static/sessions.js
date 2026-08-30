@@ -91,11 +91,59 @@
     });
   }
 
+  // A rename tapped in the drawer: trim what the operator typed, refuse to
+  // send a blank one (a blank title would blank a session's name), and hand
+  // back the /rename body. The server re-checks everything; this is the fast,
+  // kind refusal that keeps the round-trip for real mistakes only.
+  function renameRequestPayload(rawTitle) {
+    var title = String(rawTitle == null ? '' : rawTitle).trim();
+    if (!title) {
+      return { ok: false, error: 'A name is required to rename a session.' };
+    }
+    return { ok: true, payload: { title: title } };
+  }
+
+  // A `/rename <name>` typed in the composer. The session names are the
+  // server's -- they live in its title store and reach every phone through
+  // `session_renamed` -- so this command belongs to the rename API, not to
+  // the agent. A prompt starting with the command is intercepted here: null
+  // means it is not a rename and travels untouched, ok carries the trimmed
+  // name, and a bare `/rename` is refused with the drawer's own wording.
+  function parseRenameCommand(rawPrompt) {
+    var prompt = String(rawPrompt == null ? '' : rawPrompt).trim();
+    if (!prompt.startsWith('/rename')) return null;
+    var tail = prompt.slice('/rename'.length);
+    if (tail && !/^\s/.test(tail)) return null;
+    var payload = renameRequestPayload(tail);
+    if (!payload.ok) return { ok: false, error: payload.error };
+    return { ok: true, title: payload.payload.title };
+  }
+
+  // A `session_renamed` event applied to the drawer's snapshot: the matching
+  // row takes the new name, every other row is untouched, and the array the
+  // caller passed is not mutated in place. Unknown ids change nothing.
+  function applyRenameEvent(conversations, conversationId, title) {
+    var convs = Array.isArray(conversations) ? conversations : [];
+    var changed = false;
+    var next = convs.map(function (c) {
+      if (c && c.id === conversationId && c.title !== title) {
+        changed = true;
+        var renamed = Object.assign({}, c, { title: title });
+        return renamed;
+      }
+      return c;
+    });
+    return changed ? next : convs;
+  }
+
   global.AgySessions = {
     buildSpawnRequest: buildSpawnRequest,
     spawnStageLabel: spawnStageLabel,
     spawnEventMatches: spawnEventMatches,
     sessionStatus: sessionStatus,
-    sessionStatusOf: sessionStatusOf
+    sessionStatusOf: sessionStatusOf,
+    renameRequestPayload: renameRequestPayload,
+    parseRenameCommand: parseRenameCommand,
+    applyRenameEvent: applyRenameEvent
   };
 })(typeof window !== 'undefined' ? window : this);

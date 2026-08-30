@@ -1,5 +1,47 @@
 # Changelog
 
+## v26.08.30.105 — Sessions get names, follow-ups queue, the working tree shows
+
+- **Sessions take names, and `/rename` means the phone's rename.** Derived
+  titles come from transcripts, where two sessions started the same way read
+  identically, so the server now keeps a title store
+  (`agy-remote-titles.json`, owner-only) that survives restarts.
+  `POST /api/conversations/{id}/rename` writes it and broadcasts
+  `session_renamed`, which redraws the header on the phone that asked and
+  every connected drawer. Sessions get a ✎ affordance in the drawer, and
+  `/rename <name>` typed in the composer is intercepted client-side and sent
+  to the rename API instead of the agent — where it used to sit in the
+  transcript as a first prompt and never move the sidebar. A bare `/rename`
+  is refused with the drawer's own wording; the API rejects blank titles and
+  truncates runaway ones (200 chars), sealed bodies only under E2EE.
+- **Prompts typed mid-turn queue instead of landing behind the agent's
+  back.** Typing into a running stream used to drop the text into agy's
+  input box with nothing telling the phone. Every prompt now goes through
+  one door (`submit_prompt`, WS and REST alike): an idle conversation
+  behaves exactly as before, a busy one — steps streaming inside a 30 s
+  busy window, or a pending approval holding the turn — queues the prompt
+  and answers `prompt_queued`. The queue is a per-conversation FIFO on the
+  server; the head is delivered when the turn ends and a supervisor exists
+  (`prompt_delivered`), and a chip in the composer carries its own cancel
+  (`prompt_cancelled`). Server-injected prompts never extend the busy
+  window, so a fast turn cannot busy-lock against its own follow-up.
+- **A Diff chip shows what the agent's edits add up to.** The new pane asks
+  `/api/git-diff`, which runs `git diff HEAD` in the session's registered
+  workdir — never a path from the request, and only inside the sanctioned
+  roots — plus `git ls-files --others`, because untracked files are usually
+  the most interesting work in the tree and `git diff HEAD` cannot see
+  them. Chunks render per file with add/del counts, ten-second timeout,
+  size-capped; binary untracked files are named, not shipped. The typed
+  parser (`parseUnifiedDiff`) returns data, not HTML: the renderer escapes
+  the text like everything else.
+- **Approval and completion chimes, synthesized in the browser.** The PWA
+  ships no binary assets, so the sounds are tiny note sequences played by
+  WebAudio's own oscillator — two rising tones for an approval gate, falling
+  for a finished session, a low buzz for a rejected frame. A toggle in the
+  drawer silences them (the switch persists); without an AudioContext the
+  player degrades to a no-op, because a missing sound must never break an
+  approval.
+
 ## v26.08.30.104 — The question reaches the phone, and failure stops being a show
 
 Three PWA fixes, two of them found on the phone.

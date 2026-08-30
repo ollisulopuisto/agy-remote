@@ -223,6 +223,11 @@ class AgyBackend:
             return
 
         new_steps, self._last_file_pos = self._read_file(path, self._last_file_pos)
+        if new_steps:
+            # The turn is streaming: this is what the prompt queue's busy
+            # window judges quiescence by. Only agent output counts here --
+            # prompts we injected ourselves must never extend the window.
+            mgr.note_conversation_activity(mgr.active_conversation_id)
         for step in new_steps:
             # Keep the view, not just the frame. A step that is only broadcast
             # lives in the messages already sent: reconnect, reload the PWA or

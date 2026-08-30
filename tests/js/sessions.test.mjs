@@ -12,7 +12,7 @@ const source = readFileSync(new URL('../../src/agy_remote/static/sessions.js', i
 const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus, sessionStatusOf } = sandbox.window.AgySessions;
+const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus, sessionStatusOf, renameRequestPayload, parseRenameCommand, applyRenameEvent } = sandbox.window.AgySessions;
 
 // Objects built inside the vm sandbox carry the sandbox's Object.prototype,
 // which deepStrictEqual rejects; a JSON round-trip gives them this realm's.
@@ -171,4 +171,66 @@ test('the fresher of the two sources wins, in either direction', () => {
   assert.equal(sessionStatusOf({ id: 'a', updated_at: iso(10000) }, 'b', 0, NOW, 5000), 'idle');
   // A sighting with no server timestamp is activity.
   assert.equal(sessionStatusOf({ id: 'a' }, 'b', 0, NOW, 95000), 'busy');
+});
+
+// -- renaming a session from the drawer --------------------------------------
+
+test('a rename is trimmed and refused when blank', () => {
+  assert.deepEqual(
+    inThisRealm(renameRequestPayload('  Fresh name ')),
+    { ok: true, payload: { title: 'Fresh name' } },
+  );
+  for (const title of ['', '   ', null, undefined]) {
+    const result = renameRequestPayload(title);
+    assert.equal(result.ok, false);
+    assert.equal(result.payload, undefined);
+  }
+});
+
+// -- /rename typed in the composer: the name is the server's, not the agent's -
+//
+// A `/rename <name>` sent as a prompt reached the agent and the transcript,
+// while the drawer's names live in the server's title store -- so the sidebar
+// never moved. The composer hands the command to the rename API instead.
+
+test('a /rename prompt is intercepted and its argument becomes the title', () => {
+  assert.deepEqual(
+    inThisRealm(parseRenameCommand('/rename Fresh name')),
+    { ok: true, title: 'Fresh name' },
+  );
+  assert.deepEqual(
+    inThisRealm(parseRenameCommand('  /rename   Fresh name  ')),
+    { ok: true, title: 'Fresh name' },
+  );
+});
+
+test('a bare /rename is refused before anything is sent', () => {
+  for (const prompt of ['/rename', '/rename   ']) {
+    const result = parseRenameCommand(prompt);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /name is required/i);
+    assert.equal(result.title, undefined);
+  }
+});
+
+test('anything else is not a rename and goes to the agent untouched', () => {
+  assert.equal(parseRenameCommand('rename the file please'), null);
+  assert.equal(parseRenameCommand('/renamified stuff'), null);
+  assert.equal(parseRenameCommand('/model'), null);
+  assert.equal(parseRenameCommand(''), null);
+  assert.equal(parseRenameCommand(null), null);
+});
+
+test('a rename event updates the matching row and only that row', () => {
+  const convs = [
+    { id: 'a', title: 'Old A' },
+    { id: 'b', title: 'B' },
+  ];
+  const updated = applyRenameEvent(convs, 'a', 'New A');
+  assert.equal(updated[0].title, 'New A');
+  assert.equal(updated[1].title, 'B');
+  // The drawer's own array is not mutated in place.
+  assert.equal(convs[0].title, 'Old A');
+  // An id no row carries changes nothing.
+  assert.deepEqual(inThisRealm(applyRenameEvent(convs, 'zzz', 'X')), inThisRealm(convs));
 });

@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .backends import AgentBackend, make_backend
-from .config import RemoteConfig, get_config
+from .config import RUNTIME_STATE_FILE, RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
 from .loop_guard import LoopGuard
 from .mailbox import format_envelope, mailbox_dir, parse_message_line
@@ -48,6 +49,21 @@ STALE_CLIENT_SECONDS = 45.0
 #: reference can name a build log; the phone wants the top of it, not all of it.
 MAX_FILE_BYTES = 128 * 1024
 
+#: Where the user's session names live. Derived titles come and go with the
+#: transcripts; a name the operator typed should outlive the server.
+DEFAULT_TITLE_STORE = RUNTIME_STATE_FILE.parent / "agy-remote-titles.json"
+
+#: How long after a session's last transcript step it still counts as busy.
+#: The PWA's own drawer uses the same window (`busyWindowMs`), so the chip and
+#: the dot cannot disagree. A tool that runs in silence for longer than this
+#: looks like a finished turn; that is the honest failure mode of a
+#: quiescence heuristic, and typing one prompt into a still-running turn is
+#: what every terminal agent absorbs anyway.
+BUSY_WINDOW_SECONDS = 30.0
+
+#: How long one `git diff` may take before the phone gets an error instead.
+GIT_DIFF_TIMEOUT_SECONDS = 10.0
+
 
 class SessionManager:
     """Manages active agent conversations and real-time streaming."""
@@ -57,6 +73,7 @@ class SessionManager:
         config: RemoteConfig | None = None,
         backend: AgentBackend | None = None,
         push_manager: Any = None,
+        title_store: Path | None = None,
     ) -> None:
         self.config = config or get_config()
         self.backend = backend or make_backend(self.config)
@@ -111,6 +128,22 @@ class SessionManager:
             window_seconds=self.config.mailbox_rate_window_seconds,
             ping_pong_limit=self.config.mailbox_ping_pong_limit,
         )
+        #: Titles the user typed, keyed by conversation id. The backend derives
+        #: titles from transcripts -- two sessions started the same way read
+        #: identically in the drawer -- so a name the operator chose is stored
+        #: here and applied after every summary the backend builds.
+        self.title_store = Path(title_store) if title_store else DEFAULT_TITLE_STORE
+        self._title_overrides: dict[str, str] = {}
+        self._load_title_overrides()
+        #: The last time each conversation streamed a step (`time.monotonic()`).
+        #: A prompt arriving while a session is mid-turn must not be typed into
+        #: a running stream -- it queues, like opencode's follow-up dock.
+        self._last_activity: dict[str, float] = {}
+        #: Per-conversation FIFO of prompts waiting for the agent's turn to
+        #: end. Head delivers first; cancel removes by id.
+        self._prompt_queues: dict[str, list[dict[str, Any]]] = {}
+        #: Overridable in tests; production uses the module default.
+        self.busy_window_seconds: float = BUSY_WINDOW_SECONDS
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -162,8 +195,55 @@ class SessionManager:
         await self.backend.stop()
 
     def list_conversations(self) -> list[ConversationSummary]:
-        """All known conversations, newest first."""
-        return self.backend.list_conversations(self)
+        """All known conversations, newest first, under the user's names."""
+        summaries = self.backend.list_conversations(self)
+        for summary in summaries:
+            if summary.id in self._title_overrides:
+                summary.title = self._title_overrides[summary.id]
+        return summaries
+
+    def _load_title_overrides(self) -> None:
+        """Read the stored names back, tolerating a missing or damaged file."""
+        try:
+            data = json.loads(self.title_store.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as e:  # noqa: BLE001 - a bad store must not kill startup
+            logger.warning("Could not read the session titles store %s: %s", self.title_store, e)
+            return
+        if isinstance(data, dict):
+            self._title_overrides = {str(k): str(v) for k, v in data.items() if str(v).strip()}
+
+    def _save_title_overrides(self) -> None:
+        """Persist the names, owner-only like the rest of the runtime state."""
+        try:
+            self.title_store.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.title_store, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._title_overrides, f, indent=2)
+        except Exception as e:  # noqa: BLE001 - a failed save must not fail the rename
+            logger.warning("Could not save the session titles store %s: %s", self.title_store, e)
+
+    def rename_conversation(self, conversation_id: str, title: str) -> dict[str, Any] | None:
+        """Record the user's name for a conversation and return its summary.
+
+        None means there was nothing to rename: an unknown conversation, or a
+        title that is only whitespace. The stored name is what every later
+        summary reports -- derived titles carry on changing underneath, but the
+        phone shows the name its operator chose.
+        """
+        title = title.strip()
+        if not title or not self.backend.is_known_conversation(conversation_id):
+            return None
+
+        self._title_overrides[conversation_id] = title
+        self._save_title_overrides()
+
+        summary = self._summary_of(conversation_id)
+        if summary is None:
+            summary = {"id": conversation_id, "title": title}
+        summary["title"] = title
+        return summary
 
     def get_latest_conversation_id(self) -> str | None:
         """The most recently updated conversation ID, cheaply."""
@@ -213,7 +293,10 @@ class SessionManager:
 
     def _summary_of(self, conversation_id: str | None) -> dict[str, Any] | None:
         """The summary for one conversation, as clients need it to name a session."""
-        return self.backend.summary_of(self, conversation_id)
+        summary = self.backend.summary_of(self, conversation_id)
+        if summary and conversation_id in self._title_overrides:
+            summary["title"] = self._title_overrides[conversation_id]
+        return summary
 
     def _forget_old_answers(self) -> None:
         """Drop the oldest answered approvals, keeping the recent ones.
@@ -653,6 +736,135 @@ class SessionManager:
 
         return looped, delivered
 
+    # -------------------------------------------------------------------------
+    # Prompt queue: follow-ups typed mid-turn wait, like opencode's dock
+    # -------------------------------------------------------------------------
+
+    def note_conversation_activity(self, conversation_id: str | None) -> None:
+        """Record that a conversation streamed a step right now.
+
+        The backend's tick calls this whenever new transcript steps arrive, so
+        quiescence -- the busy window lapsing -- means the turn ended. Prompts
+        the server itself injected deliberately do *not* count: a fast turn
+        that ends inside the window would otherwise keep the session busy
+        against its own follow-up.
+        """
+        if conversation_id:
+            self._last_activity[conversation_id] = time.monotonic()
+
+    def is_conversation_busy(self, conversation_id: str | None) -> bool:
+        """Whether the agent in this conversation is mid-turn.
+
+        Two signals, either of which is enough: a pending tool approval (the
+        turn is paused, not finished) or transcript steps inside the busy
+        window (the turn is streaming). A conversation with no activity on
+        record is never busy -- an idle session must accept a prompt exactly
+        as before the queue existed.
+        """
+        if not conversation_id:
+            return False
+        if any(
+            app.get("conversation_id") == conversation_id
+            for app in self._pending_approvals.values()
+            if app.get("status") == "pending"
+        ):
+            return True
+        last = self._last_activity.get(conversation_id)
+        return last is not None and (time.monotonic() - last) < self.busy_window_seconds
+
+    def queued_prompts(self, conversation_id: str) -> list[dict[str, Any]]:
+        """The FIFO waiting for this conversation, oldest first."""
+        return list(self._prompt_queues.get(conversation_id, []))
+
+    async def queue_prompt(self, prompt: str, conversation_id: str) -> dict[str, Any]:
+        """Hold a prompt until the conversation's turn ends.
+
+        Broadcasts `prompt_queued` so every connected phone draws the chip;
+        the id is what a cancel tap carries back.
+        """
+        entry = {
+            "id": uuid.uuid4().hex[:12],
+            "prompt": prompt,
+            "conversation_id": conversation_id,
+            "queued_at": datetime.now().isoformat(),
+        }
+        self._prompt_queues.setdefault(conversation_id, []).append(entry)
+        await self.broadcast({"event": "prompt_queued", "data": dict(entry)})
+        return {"status": "queued", "prompt_id": entry["id"], "conversation_id": conversation_id}
+
+    async def cancel_queued_prompt(self, prompt_id: str) -> bool:
+        """Remove a queued prompt by id, announcing it so the chip comes down."""
+        for conversation_id, queue in self._prompt_queues.items():
+            for index, entry in enumerate(queue):
+                if entry["id"] == prompt_id:
+                    queue.pop(index)
+                    await self.broadcast(
+                        {"event": "prompt_cancelled", "data": {"id": prompt_id, "conversation_id": conversation_id}}
+                    )
+                    return True
+        return False
+
+    async def submit_prompt(self, prompt: str, conversation_id: str | None = None) -> dict[str, Any]:
+        """The one door every user prompt goes through, WS or REST.
+
+        Idle conversations get exactly the old behavior -- backend delivery,
+        a `prompt_sent` broadcast, the same response shape. A conversation
+        mid-turn with a live supervisor queues instead: typing into a running
+        stream used to drop the text into agy's input box behind the agent's
+        back, and nothing told the phone.
+        """
+        target = conversation_id or self.active_conversation_id
+        if target and self.is_conversation_busy(target) and self.get_supervisor(target) is not None:
+            return await self.queue_prompt(prompt, target)
+
+        delivered_via = await self.backend.send_prompt(self, prompt, conversation_id)
+        await self.broadcast(
+            {
+                "event": "prompt_sent",
+                "data": {
+                    "prompt": prompt,
+                    "conversation_id": conversation_id or self.active_conversation_id,
+                    "delivered_via": delivered_via,
+                },
+            }
+        )
+        return {"status": "ok", "delivered_via": delivered_via}
+
+    async def deliver_due_prompts(self) -> int:
+        """Deliver queued prompts whose turns have ended; called per watch tick.
+
+        At most one head per conversation per tick, and only when the
+        conversation is no longer busy *and* a supervisor exists to type
+        into -- a queue without a pane is held, not dropped, exactly like
+        mailbox mail whose target died. Delivery is announced once, with the
+        prompt included, so the phone renders the row and takes the chip down
+        from the same event.
+        """
+        delivered = 0
+        for conversation_id in list(self._prompt_queues):
+            queue = self._prompt_queues.get(conversation_id)
+            if not queue:
+                continue
+            if self.is_conversation_busy(conversation_id):
+                continue
+            if self.get_supervisor(conversation_id) is None:
+                continue
+            entry = queue.pop(0)
+            delivered_via = await self.backend.send_prompt(self, entry["prompt"], conversation_id)
+            await self.broadcast(
+                {
+                    "event": "prompt_delivered",
+                    "data": {
+                        "id": entry["id"],
+                        "prompt": entry["prompt"],
+                        "conversation_id": conversation_id,
+                        "delivered_via": delivered_via,
+                    },
+                }
+            )
+            delivered += 1
+        return delivered
+
     def attach_terminal(self, supervisor: Any) -> None:
         """Mirror a supervised session's screen for clients that cannot see it.
 
@@ -751,6 +963,102 @@ class SessionManager:
                 roots.append(Path(str(record.workdir)).resolve())
         roots.append(projects_root().resolve())
         return roots
+
+    def working_tree_diff(self, key: str | None = None) -> dict[str, Any]:
+        """The session's git working-tree state, for the phone's diff pane.
+
+        Runs `git diff HEAD` in the session's registered workdir -- staged and
+        unstaged in one pass, like opencode's working-tree viewer -- and hands
+        back per-file chunks with addition/deletion counts. The workdir comes
+        from the session registry, never from the request, and must sit inside
+        the sanctioned roots; the request only *names* a session.
+
+        Raises LookupError when the named session has no workdir, ValueError
+        when the directory is not a git repository (and on git failure or
+        timeout), PermissionError when the workdir somehow left the roots.
+        """
+        from .gitdiff import MAX_DIFF_BYTES, split_git_diff
+
+        session = self.get_session(key)
+        if session is None or not session.workdir:
+            raise LookupError("no supervised session workdir for this conversation")
+
+        resolved = Path(str(session.workdir)).resolve()
+        roots = self._file_roots()
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            raise PermissionError(f"outside the sanctioned project directories: {resolved}")
+
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "HEAD", "--"],
+                cwd=resolved,
+                capture_output=True,
+                text=True,
+                timeout=GIT_DIFF_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise ValueError(f"git diff timed out after {GIT_DIFF_TIMEOUT_SECONDS:.0f}s") from e
+        except FileNotFoundError as e:
+            raise ValueError("git is not available on this host") from e
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip()
+            if "not a git repository" in stderr.lower():
+                raise ValueError(f"not a git repository: {resolved.name}")
+            raise ValueError(f"git diff failed: {stderr[:200]}")
+
+        stdout = proc.stdout
+        # `git diff HEAD` cannot see untracked files -- the ones an agent has
+        # just written and not staged. opencode's viewer shows them, and they
+        # are usually the most interesting work in the tree, so collect them
+        # as synthesized new-file chunks. Binary content is named, not shipped.
+        listing = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=resolved,
+            capture_output=True,
+            text=True,
+            timeout=GIT_DIFF_TIMEOUT_SECONDS,
+            check=False,
+        )
+        if listing.returncode == 0:
+            for name in listing.stdout.splitlines():
+                if not name or ".." in Path(name).parts:
+                    continue
+                path = resolved / name
+                try:
+                    if not path.is_file():
+                        continue
+                    data = path.read_bytes()[:65536]
+                except OSError:
+                    continue
+                if b"\x00" in data:
+                    stdout += (
+                        f"\ndiff --git a/{name} b/{name}\n"
+                        "new file mode 100644\n"
+                        f"Binary files /dev/null and b/{name} differ\n"
+                    )
+                    continue
+                lines = data.decode("utf-8", "replace").splitlines()
+                shown = min(len(lines), 1000)
+                body = "".join(f"+{line}\n" for line in lines[:shown])
+                stdout += (
+                    f"\ndiff --git a/{name} b/{name}\n"
+                    "new file mode 100644\n"
+                    f"--- /dev/null\n+++ b/{name}\n"
+                    f"@@ -0,0 +1,{shown} @@\n{body}"
+                )
+
+        truncated = len(stdout.encode("utf-8", "replace")) > MAX_DIFF_BYTES
+        if truncated:
+            stdout = stdout[:MAX_DIFF_BYTES]
+        files = split_git_diff(stdout)
+        return {
+            "workdir": str(resolved),
+            "clean": not files,
+            "files": files,
+            "truncated": truncated,
+        }
 
     def read_host_file(self, raw_path: str) -> dict[str, Any]:
         """Read a file the transcript named, for the phone to display.
@@ -854,6 +1162,9 @@ class SessionManager:
 
                 # Mirror the terminal, for the panels the transcript never sees
                 await self.broadcast_terminal()
+
+                # Queued follow-ups whose turns have ended go in now
+                await self.deliver_due_prompts()
 
                 # End sessions whose pairing has expired mid-connection
                 await self.disconnect_expired_clients()

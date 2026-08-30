@@ -576,6 +576,7 @@ function handleServerEvent(event) {
     }
   } else if (type === 'session_created') {
     if (!activeSpawn || !window.AgySessions.spawnEventMatches(data, activeSpawn)) return;
+    window.AgySound.play('complete');
     finishSpawn(data);
   } else if (type === 'prompt_sent') {
     // The server took it but nothing was there to receive it: keep the text
@@ -588,11 +589,21 @@ function handleServerEvent(event) {
       reportUndelivered('Nothing received it — no agent session is attached.');
     }
   } else if (type === 'session_renamed') {
-    // An agent that names a session after its first exchange leaves the
-    // header on a placeholder for good without this.
+    // A rename -- the agent naming a session after its first exchange, or the
+    // operator renaming one from this or another phone -- redraws both places
+    // the name shows: the header when it is the session on screen, and the
+    // drawer row for every phone that is connected.
     if (data.conversation_id === currentConversationId) {
       currentConversation = data.conversation || currentConversation;
       updateHeader();
+    }
+    if (data.conversation_id && data.conversation && data.conversation.title) {
+      const renamed = window.AgySessions.applyRenameEvent(
+        drawerConversations,
+        data.conversation_id,
+        data.conversation.title
+      );
+      if (renamed !== drawerConversations) renderConversations(renamed);
     }
   } else if (type === 'step_added' || type === 'step_updated') {
     currentConversationId = window.AgyFormat.adoptConversationId(currentConversationId, data.conversation_id);
@@ -635,6 +646,7 @@ function handleServerEvent(event) {
     if (!pendingApprovals.some(a => a.id === data.id)) {
       pendingApprovals.push(data);
       triggerVibrate([80, 40, 100]);
+      window.AgySound.play('approval');
       if (data.conversation_id === currentConversationId) {
         renderApprovalBanner(data);
         scrollToBottom();
@@ -643,7 +655,17 @@ function handleServerEvent(event) {
     }
   } else if (type === 'frame_rejected') {
     // The server threw our frame away. Without this the prompt just vanished.
+    window.AgySound.play('error');
     reportUndelivered(`Server rejected the message: ${data && data.reason ? data.reason : 'unknown reason'}`);
+  } else if (type === 'prompt_queued') {
+    // The agent is mid-turn; the prompt waits in the server's queue. The chip
+    // carries its own cancel, so a changed mind costs one tap.
+    renderQueuedChip(data);
+  } else if (type === 'prompt_delivered') {
+    removeQueuedChip(data && data.id);
+    if (data && data.conversation_id === currentConversationId) scrollToBottom();
+  } else if (type === 'prompt_cancelled') {
+    removeQueuedChip(data && data.id);
   } else if (type === 'approval_resolved') {
     pendingApprovals = pendingApprovals.filter(a => a.id !== data.id);
     updateApprovalIndicators();
@@ -952,6 +974,30 @@ if (autoAcceptBtn) {
   applyAutoAcceptUI();
 }
 
+// Alert sounds: the synthesized chimes in sounds.js. Off means off -- no
+// tone plays anywhere -- and the switch persists like auto-accept does.
+const soundToggleBtn = document.getElementById('soundToggleBtn');
+
+function applySoundUI() {
+  if (!soundToggleBtn) return;
+  const on = window.AgySound.enabled();
+  soundToggleBtn.classList.toggle('active', on);
+  soundToggleBtn.title = on
+    ? 'Alert sounds are ON: approval and completion chimes play. Tap to silence.'
+    : 'Alert sounds are OFF. Tap to hear approval and completion chimes.';
+}
+
+if (soundToggleBtn) {
+  soundToggleBtn.addEventListener('click', () => {
+    const on = !window.AgySound.enabled();
+    window.AgySound.setEnabled(on);
+    applySoundUI();
+    if (on) window.AgySound.play('complete');
+    statusText.textContent = on ? 'Alert sounds ON' : 'Alert sounds OFF';
+  });
+  applySoundUI();
+}
+
 function renderApprovalBanner(app) {
   const existing = document.getElementById(`approval-${app.id}`);
   if (existing) return;
@@ -1118,6 +1164,25 @@ async function sendPrompt(text) {
   let prompt = (text || promptInput.value).trim();
   if (!prompt && attachedFiles.length === 0) return;
 
+  // /rename is the phone's own command: the session names are the server's
+  // (its title store, redrawn everywhere via `session_renamed`), so the
+  // command is answered by the rename API instead of reaching the agent and
+  // the transcript -- where it would sit as a first prompt and never move
+  // the sidebar.
+  const rename = window.AgySessions.parseRenameCommand(prompt);
+  if (rename) {
+    promptInput.value = '';
+    autoResizeInput();
+    if (!rename.ok) {
+      reportUndelivered(rename.error);
+    } else if (currentConversationId) {
+      await postRename(currentConversationId, rename.title);
+    } else {
+      reportUndelivered('Nothing to rename — no session is on screen.');
+    }
+    return;
+  }
+
   if (attachedFiles.length > 0) {
     prompt += `\n\n[Attached files: ${attachedFiles.join(', ')}]`;
     attachedFiles = [];
@@ -1162,12 +1227,59 @@ async function sendPrompt(text) {
   scrollToBottom();
 }
 
-// The same server, over a request that reports its own failure. Used when the
-// socket is not open, and as the fallback when writing to it throws. Sealed
-// with the same envelope as the socket when a key is loaded -- this path
-// exists for a dead socket, not for stepping around payload encryption, and
-// the server refuses a bare body under E2EE for exactly that reason. The
-// token rides in a header, not the query string.
+// A prompt the server refused, or one that never reached it, has to say so --
+// silence reads exactly like success.
+function reportUndelivered(reason) {
+  statusText.textContent = reason;
+  triggerVibrate([40, 60, 40]);
+}
+
+// ---------------------------------------------------------------------------
+// Queued prompts: the agent is mid-turn, the prompt waits, the chip says so.
+// The queue itself lives on the server; these chips mirror it and carry the
+// cancel that takes a prompt back out.
+// ---------------------------------------------------------------------------
+
+const queuedContainer = document.getElementById('queuedPrompts');
+
+async function cancelQueuedPrompt(promptId) {
+  triggerVibrate(25);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = { action: 'cancel_prompt', data: { prompt_id: promptId } };
+    const msg = cryptoKey ? await encryptData(payload) : payload;
+    ws.send(JSON.stringify(msg));
+  }
+}
+
+function renderQueuedChip(entry) {
+  if (!queuedContainer || !entry || !entry.id) return;
+  if (document.getElementById(`queued-${entry.id}`)) return;
+  const chip = document.createElement('div');
+  chip.className = 'queued-chip';
+  chip.id = `queued-${entry.id}`;
+  chip.innerHTML = `
+    <span class="queued-text">${escapeHtml(window.AgyFormat.firstLine(entry.prompt))}</span>
+    <button class="queued-cancel" title="Cancel this queued prompt">&#10005;</button>
+  `;
+  chip.querySelector('.queued-cancel').addEventListener('click', () => cancelQueuedPrompt(entry.id));
+  queuedContainer.hidden = false;
+  queuedContainer.appendChild(chip);
+}
+
+function removeQueuedChip(promptId) {
+  if (!queuedContainer || !promptId) return;
+  const chip = document.getElementById(`queued-${promptId}`);
+  if (chip) chip.remove();
+  queuedContainer.hidden = queuedContainer.children.length === 0;
+}
+
+// A queued prompt submitted over the REST fallback cannot hear the server's
+// `prompt_queued` broadcast -- the socket is dead, which is why this path
+// exists -- so the response itself draws the chip. Sealed with the same
+// envelope as the socket when a key is loaded -- this path exists for a dead
+// socket, not for stepping around payload encryption, and the server refuses
+// a bare body under E2EE for exactly that reason. The token rides in a
+// header, not the query string.
 async function sendPromptOverRest(prompt) {
   try {
     const payload = { prompt: prompt, conversation_id: currentConversationId };
@@ -1177,18 +1289,94 @@ async function sendPromptOverRest(prompt) {
       headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
       body: JSON.stringify(body)
     });
-    return res.ok;
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => ({}));
+    if (data && data.status === 'queued' && data.prompt_id) {
+      renderQueuedChip({ id: data.prompt_id, prompt: prompt, conversation_id: currentConversationId });
+      statusText.textContent = 'Agent is mid-turn — prompt queued.';
+    }
+    return true;
   } catch (e) {
     return false;
   }
 }
 
-// A prompt the server refused, or one that never reached it, has to say so --
-// silence reads exactly like success.
-function reportUndelivered(reason) {
-  statusText.textContent = reason;
-  triggerVibrate([40, 60, 40]);
+// ---------------------------------------------------------------------------
+// The working-tree diff pane: what the agent's edits add up to, from the
+// session's own git repository. opencode's PWA ships the same viewer; here
+// the server runs `git diff HEAD` in the session's workdir and this renders
+// the chunks with the same escape-first discipline as everything else.
+// ---------------------------------------------------------------------------
+
+const diffPane = document.getElementById('diffPane');
+const diffPaneBackdrop = document.getElementById('diffPaneBackdrop');
+const diffPaneBody = document.getElementById('diffPaneBody');
+const diffPanePath = document.getElementById('diffPanePath');
+let diffPaneTicket = 0;
+
+function renderDiffFile(file) {
+  const lines = window.AgyFormat.parseUnifiedDiff(file.diff);
+  const body = lines
+    .map((l) => {
+      const cls = l.type === 'add' ? 'diff-add' : l.type === 'del' ? 'diff-del' : l.type === 'hunk' ? 'diff-hunk' : 'diff-ctx';
+      return `<div class="diff-line ${cls}">${escapeHtml(l.text)}</div>`;
+    })
+    .join('');
+  const stats = `+${file.additions} −${file.deletions}`;
+  return `
+    <details class="diff-file">
+      <summary>
+        <span class="diff-file-name">${escapeHtml(file.path)}</span>
+        <span class="diff-file-stats"><span class="diff-stat-add">+${file.additions}</span> <span class="diff-stat-del">−${file.deletions}</span></span>
+      </summary>
+      <div class="diff-container">${body || `<div class="diff-line diff-ctx">${stats}</div>`}</div>
+    </details>
+  `;
 }
+
+async function openDiffPane() {
+  const ticket = ++diffPaneTicket;
+  diffPane.hidden = false;
+  diffPaneBackdrop.hidden = false;
+  requestAnimationFrame(() => {
+    diffPane.classList.add('open');
+    diffPaneBackdrop.classList.add('open');
+  });
+  diffPanePath.textContent = 'Loading…';
+  try {
+    const cid = currentConversationId ? `&conversation_id=${encodeURIComponent(currentConversationId)}` : '';
+    const res = await fetch(`/api/git-diff?token=${encodeURIComponent(authToken)}${cid}`);
+    if (ticket !== diffPaneTicket) return;
+    const data = await res.json();
+    if (!res.ok) {
+      diffPanePath.textContent = data && data.detail ? String(data.detail) : `Could not read the diff (HTTP ${res.status})`;
+      diffPaneBody.innerHTML = '';
+      return;
+    }
+    diffPanePath.textContent = data.truncated ? `${data.workdir} · truncated` : data.workdir;
+    diffPaneBody.innerHTML = data.clean
+      ? '<div class="diff-clean">Working tree clean — nothing changed yet.</div>'
+      : data.files.map(renderDiffFile).join('');
+  } catch (err) {
+    if (ticket === diffPaneTicket) diffPanePath.textContent = 'Could not reach the server.';
+  }
+}
+
+function closeDiffPane() {
+  diffPaneTicket++;
+  diffPane.classList.remove('open');
+  diffPaneBackdrop.classList.remove('open');
+  diffPane.hidden = true;
+  diffPaneBackdrop.hidden = true;
+}
+
+const diffToggleBtn = document.getElementById('diffToggle');
+if (diffToggleBtn) diffToggleBtn.addEventListener('click', openDiffPane);
+const diffPaneRefresh = document.getElementById('diffPaneRefresh');
+if (diffPaneRefresh) diffPaneRefresh.addEventListener('click', openDiffPane);
+const diffPaneClose = document.getElementById('diffPaneClose');
+if (diffPaneClose) diffPaneClose.addEventListener('click', closeDiffPane);
+if (diffPaneBackdrop) diffPaneBackdrop.addEventListener('click', closeDiffPane);
 
 // The mirrored terminal. The server runs the emulator and sends a grid of
 // plain text, so the panels agy draws -- pickers, confirmations, the mode in
@@ -1620,9 +1808,27 @@ function renderConversations(convs) {
 
     const timeStr = c.updated_at ? new Date(c.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
     item.innerHTML = `
-      <div class="session-item-title">${escapeHtml(c.title || c.id)}</div>
+      <div class="session-item-title"><span class="session-item-name">${escapeHtml(c.title || c.id)}</span></div>
       <div class="session-item-meta">${timeStr} • ${c.step_count} steps</div>
     `;
+
+    // Rename affordance: sessions derive identical-looking titles from their
+    // transcripts, and only the operator can say which is which. The tap must
+    // not switch sessions, so it stops propagation.
+    const titleRow = item.querySelector('.session-item-title');
+    if (titleRow) {
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'session-rename-btn';
+      renameBtn.title = 'Rename session';
+      renameBtn.setAttribute('aria-label', 'Rename session');
+      renameBtn.textContent = '✎';
+      renameBtn.onclick = (e) => {
+        e.stopPropagation();
+        renameSession(c);
+      };
+      titleRow.appendChild(renameBtn);
+    }
 
     // Agent mailbox traffic badges (W2, item 2.3)
     const matchingPairs = [];
@@ -1662,6 +1868,49 @@ function renderConversations(convs) {
   });
   updateApprovalIndicators();
   updateSessionDots();
+}
+
+// Rename a session: the typed name goes to /api/conversations/{id}/rename --
+// the same server, sealed like a prompt when a key is loaded -- and the
+// `session_renamed` broadcast that comes back is what redraws the header and
+// every connected drawer. Used by the drawer's pencil and by `/rename` typed
+// in the composer; returns whether the server accepted it.
+async function postRename(conversationId, title) {
+  const result = window.AgySessions.renameRequestPayload(title);
+  if (!result.ok) {
+    reportUndelivered(result.error);
+    return false;
+  }
+  triggerVibrate(20);
+  try {
+    const body = cryptoKey ? await encryptData(result.payload) : result.payload;
+    const res = await fetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}/rename?token=${encodeURIComponent(authToken)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+        body: JSON.stringify(body)
+      }
+    );
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      reportUndelivered(detail && detail.detail ? `Rename refused: ${detail.detail}` : `Rename refused (HTTP ${res.status}).`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    reportUndelivered('Rename failed — no connection to the server.');
+    return false;
+  }
+}
+
+async function renameSession(conversation) {
+  if (!conversation || !conversation.id) return;
+  const result = window.AgySessions.renameRequestPayload(
+    window.prompt('Rename session', conversation.title || conversation.id)
+  );
+  if (!result.ok) return;
+  await postRename(conversation.id, result.payload.title);
 }
 
 // -- session status dots (W1, item 1.4) --

@@ -431,6 +431,56 @@
     return typeof lastTapAt === 'number' && (now - lastTapAt) < maxGapMs;
   }
 
+  // One chunk of unified diff (what /api/git-diff serves per file) typed for
+  // rendering: 'meta' headers, 'hunk' @@ markers, 'add'/'del' bodies, 'ctx'
+  // context. format.js returns data, not HTML -- the renderer escapes the text
+  // and picks the classes; this only decides which is which. The b/ side of
+  // the header names the file, so a rename shows its new name.
+  function parseUnifiedDiff(diffText) {
+    var raw = String(diffText == null ? '' : diffText);
+    // A chunk without a header is not a diff: refuse to invent typed lines
+    // from arbitrary text, so a stray body renders as nothing rather than
+    // as a wall of context.
+    if (!raw || raw.indexOf('diff --git ') === -1) return [];
+    var out = [];
+    var parts = raw.split('\n');
+    for (var i = 0; i < parts.length; i++) {
+      var line = parts[i];
+      if (line.indexOf('diff --git ') === 0) {
+        var rest = line.slice('diff --git '.length);
+        var m = rest.match(/^a\/(.+) b\/(.+)$/);
+        out.push({ type: 'meta', text: line, path: m ? m[2] : rest });
+      } else if (line.indexOf('@@') === 0) {
+        out.push({ type: 'hunk', text: line });
+      } else if (
+        line.indexOf('+++') === 0 ||
+        line.indexOf('---') === 0 ||
+        line.indexOf('index ') === 0 ||
+        line.indexOf('new file') === 0 ||
+        line.indexOf('deleted file') === 0 ||
+        line.indexOf('old mode') === 0 ||
+        line.indexOf('new mode') === 0 ||
+        line.indexOf('rename ') === 0 ||
+        line.indexOf('copy ') === 0 ||
+        line.indexOf('similarity ') === 0 ||
+        line.indexOf('Binary files') === 0
+      ) {
+        out.push({ type: 'meta', text: line });
+      } else if (line.indexOf('+') === 0) {
+        out.push({ type: 'add', text: line });
+      } else if (line.indexOf('-') === 0) {
+        out.push({ type: 'del', text: line });
+      } else {
+        out.push({ type: 'ctx', text: line });
+      }
+    }
+    // A trailing newline is not a context line.
+    if (out.length && out[out.length - 1].type === 'ctx' && out[out.length - 1].text === '') {
+      out.pop();
+    }
+    return out;
+  }
+
   // The mailbox pairs one session is part of, addressed as peers.
   function trafficForSession(pairs, sessionKey) {
     if (!pairs || !Array.isArray(pairs) || !sessionKey) return [];
@@ -483,7 +533,8 @@
     clampZoom: clampZoom,
     isDoubleTap: isDoubleTap,
     trafficForSession: trafficForSession,
-    formatTrafficPill: formatTrafficPill
+    formatTrafficPill: formatTrafficPill,
+    parseUnifiedDiff: parseUnifiedDiff
   };
 })(typeof window !== 'undefined' ? window : this);
 

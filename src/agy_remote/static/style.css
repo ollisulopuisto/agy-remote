@@ -746,12 +746,39 @@ body {
 
 .session-item-title {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   font-weight: 600;
   color: #fff;
+}
+
+/* The name itself keeps the one-line ellipsis the title used to carry; the
+   row also holds the rename button, so the truncation moves onto the span. */
+.session-item-name {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-rename-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.session-rename-btn:active {
+  color: #fff;
+  background-color: var(--bg-card-hover);
 }
 
 .session-item-meta {
@@ -839,6 +866,112 @@ body {
 .diff-del {
   background-color: rgba(239, 68, 68, 0.15);
   color: #fca5a5;
+}
+
+/* Working-tree diff pane (the Diff chip): per-file chunks from
+   /api/git-diff, rendered from parsed lines, never raw HTML. */
+.diff-pane-body {
+  overflow-y: auto;
+  padding: 8px;
+  white-space: normal;
+}
+
+.diff-file {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background-color: #0b1120;
+  overflow: hidden;
+}
+
+.diff-file summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-color);
+  list-style: none;
+}
+
+.diff-file summary::-webkit-details-marker {
+  display: none;
+}
+
+.diff-file-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.diff-file-stats {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.diff-stat-add {
+  color: #6ee7b7;
+}
+
+.diff-stat-del {
+  color: #fca5a5;
+}
+
+.diff-hunk {
+  color: #93c5fd;
+  background-color: rgba(59, 130, 246, 0.08);
+}
+
+.diff-ctx {
+  color: var(--text-muted);
+}
+
+.diff-clean {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 24px 8px;
+}
+
+/* Queued prompts: chips for prompts the server holds while the agent is
+   mid-turn, each with its own cancel. */
+.queued-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.queued-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: rgba(250, 204, 21, 0.08);
+  font-size: 12px;
+  color: var(--text-color);
+}
+
+.queued-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-cancel {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: pointer;
 }
 
 /* Attachments Preview */
