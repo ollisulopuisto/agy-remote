@@ -936,6 +936,73 @@ body {
   padding: 24px 8px;
 }
 
+/* File tree pane (the Files chip): /api/files listings, dirs first, each
+   row a plain button so the tap target is the whole line. */
+.tree-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px;
+}
+
+.tree-crumb {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 12px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.tree-crumb-sep {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.tree-entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 6px;
+  border: none;
+  border-bottom: 1px solid #1e293b;
+  background: transparent;
+  color: var(--text-color);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-entry-icon {
+  flex-shrink: 0;
+  width: 14px;
+  color: var(--text-muted);
+}
+
+.tree-entry.tree-dir .tree-entry-icon {
+  color: var(--primary);
+}
+
+.tree-entry-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-entry.tree-dir .tree-entry-name {
+  font-weight: 600;
+}
+
+.tree-entry-size {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Queued prompts: chips for prompts the server holds while the agent is
    mid-turn, each with its own cancel. */
 .queued-prompts {

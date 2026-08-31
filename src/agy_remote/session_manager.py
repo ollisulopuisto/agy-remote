@@ -1061,6 +1061,49 @@ class SessionManager:
             "truncated": truncated,
         }
 
+    def list_host_dir(self, raw_path: str | None, key: str | None = None) -> dict[str, Any]:
+        """List one directory of the session's project, for the phone's file tree.
+
+        With no path this is the registered session's workdir -- the tree's
+        root, so the request never has to know where the project lives. Every
+        path is resolved and must land inside the sanctioned roots, exactly
+        like `read_host_file`; the listing itself is safe to hand over, and a
+        symlinked entry that escapes the roots is still stopped at open time
+        by the viewer's own check. Entries are directories first, then
+        case-insensitive by name, each carrying its absolute path so the
+        client never builds one.
+
+        Raises LookupError when the named session has no workdir,
+        PermissionError outside the roots, FileNotFoundError for a missing
+        path, ValueError when the path is not a directory.
+        """
+        session = self.get_session(key)
+        if session is None or not session.workdir:
+            raise LookupError("no supervised session workdir for this conversation")
+
+        requested = (raw_path or "").strip() or str(session.workdir)
+        resolved = Path(requested).resolve()
+        roots = self._file_roots()
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            raise PermissionError(f"outside the sanctioned project directories: {requested}")
+
+        if not resolved.exists():
+            raise FileNotFoundError(resolved.name)
+        if not resolved.is_dir():
+            raise ValueError(f"not a directory: {resolved.name}")
+
+        entries: list[dict[str, Any]] = []
+        for child in resolved.iterdir():
+            try:
+                is_dir = child.is_dir()
+                size = 0 if is_dir else child.stat().st_size
+            except OSError:
+                continue  # raced a delete, or permission denied: not listable
+            entries.append({"name": child.name, "type": "dir" if is_dir else "file", "size": size, "path": str(child)})
+        entries.sort(key=lambda e: (e["type"] != "dir", str(e["name"]).lower()))
+
+        return {"path": str(resolved), "name": resolved.name, "entries": entries}
+
     def read_host_file(self, raw_path: str) -> dict[str, Any]:
         """Read a file the transcript named, for the phone to display.
 

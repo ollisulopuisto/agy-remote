@@ -136,6 +136,37 @@
     return changed ? next : convs;
   }
 
+  // The file tree's breadcrumb: an absolute host path as tappable segments,
+  // shallowest first, each carrying the path it selects. With a `root`, the
+  // segments start there -- the pane's home crumb is the workdir, and the
+  // filesystem above it is nobody's business. A path outside the root falls
+  // back to absolute segments; the root itself and degenerate paths have
+  // nothing to draw.
+  function breadcrumbSegments(path, root) {
+    var p = String(path == null ? '' : path);
+    if (!p || p === '/') return [];
+    var r = String(root == null ? '/' : root);
+    if (r && r !== '/' && (p === r || p.indexOf(r + '/') === 0)) {
+      var base = r.split('/').filter(Boolean).pop() || r;
+      var rel = p === r ? [] : p.slice(r.length).split('/').filter(Boolean);
+      var crumbs = [{ name: base, path: r }];
+      var acc = r;
+      for (var j = 0; j < rel.length; j++) {
+        acc += '/' + rel[j];
+        crumbs.push({ name: rel[j], path: acc });
+      }
+      return crumbs;
+    }
+    var parts = p.split('/').filter(Boolean);
+    var abs = [];
+    var parent = '';
+    for (var i = 0; i < parts.length; i++) {
+      parent += '/' + parts[i];
+      abs.push({ name: parts[i], path: parent });
+    }
+    return abs;
+  }
+
   global.AgySessions = {
     buildSpawnRequest: buildSpawnRequest,
     spawnStageLabel: spawnStageLabel,
@@ -144,6 +175,7 @@
     sessionStatusOf: sessionStatusOf,
     renameRequestPayload: renameRequestPayload,
     parseRenameCommand: parseRenameCommand,
-    applyRenameEvent: applyRenameEvent
+    applyRenameEvent: applyRenameEvent,
+    breadcrumbSegments: breadcrumbSegments
   };
 })(typeof window !== 'undefined' ? window : this);

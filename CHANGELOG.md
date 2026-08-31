@@ -1,5 +1,18 @@
 # Changelog
 
+## v26.08.31.107 — The session's project is browsable from the phone
+
+- **File tree pane (Files chip).** The PWA could only open a file the
+  transcript had named; opencode's PWA ships a browsable file tree. The server
+  now lists one directory of the registered session's workdir
+  (`SessionManager.list_host_dir`, `GET /api/files`): no path means the
+  workdir root, every path is resolved and must land inside the same
+  sanctioned roots as `/api/file` (traversal is a 403, missing a 404), and
+  entries are typed, sized, and sorted directories-first with their absolute
+  paths carried by the server. The pane draws a tappable breadcrumb trail
+  starting at the workdir, descends on directory taps, and opens file taps in
+  the existing viewer, which re-checks the path on its own.
+
 ## v26.08.31.106 — TUI permission popups display reliably in tmux & session parity
 
 - **Permission dialogs surface reliably in the desktop TUI.** When a phone is

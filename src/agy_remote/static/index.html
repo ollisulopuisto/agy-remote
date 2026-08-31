@@ -167,6 +167,7 @@
       <button class="chip-btn" id="cmdMenuBtn" title="All of agy's slash commands, no keyboard gymnastics needed">/</button>
       <button class="chip-btn" data-toggle="screen" id="screenToggle" title="Show the terminal agy is drawing on">Screen</button>
       <button class="chip-btn" id="diffToggle" title="What the agent's edits add up to: the session's git working-tree diff">Diff</button>
+      <button class="chip-btn" id="filesToggle" title="Browse the session's project files">Files</button>
       <button class="chip-btn" data-key="shift_tab" title="Cycle execution mode: default, accept-edits, plan">⇧⇥ Mode</button>
       <button class="chip-btn" data-key="escape" title="Close panel / stop the stream">Esc</button>
       <button class="chip-btn" data-key="up" title="Move selection up">↑</button>
@@ -232,6 +233,17 @@
     </div>
     <div class="file-viewer-path" id="diffPanePath"></div>
     <div class="file-viewer-body diff-pane-body" id="diffPaneBody"></div>
+  </div>
+
+  <!-- File tree pane: the session's project, browsable, like opencode's tree -->
+  <div class="file-viewer-backdrop" id="treePaneBackdrop" hidden></div>
+  <div class="file-viewer diff-pane" id="treePane" hidden>
+    <div class="file-viewer-header">
+      <span class="file-viewer-name">Files</span>
+      <button class="file-viewer-close" id="treePaneClose" title="Close">&#10005;</button>
+    </div>
+    <div class="file-viewer-path tree-crumbs" id="treePaneCrumbs"></div>
+    <div class="file-viewer-body diff-pane-body" id="treePaneBody"></div>
   </div>
 
   <!-- Vendored mermaid (no CDN: the CSP permits no remote script origins, and

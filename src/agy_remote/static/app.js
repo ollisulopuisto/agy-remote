@@ -1378,6 +1378,147 @@ const diffPaneClose = document.getElementById('diffPaneClose');
 if (diffPaneClose) diffPaneClose.addEventListener('click', closeDiffPane);
 if (diffPaneBackdrop) diffPaneBackdrop.addEventListener('click', closeDiffPane);
 
+// -- file tree pane ----------------------------------------------------------
+//
+// The session's project directory, browsable: opencode's PWA ships a file
+// tree, and until now a chip could only open a file the transcript had
+// named. The server lists sanctioned directories (/api/files, no path = the
+// workdir root); a directory tap descends, a file tap opens the existing
+// viewer, which re-checks the path on its own. Every path comes from the
+// server -- none is built here.
+
+const treePane = document.getElementById('treePane');
+const treePaneBackdrop = document.getElementById('treePaneBackdrop');
+const treePaneBody = document.getElementById('treePaneBody');
+const treePaneCrumbs = document.getElementById('treePaneCrumbs');
+let treePaneTicket = 0;
+let treeRoot = null;
+
+function humanSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function addTreeCrumb(label, path) {
+  const crumb = document.createElement('button');
+  crumb.type = 'button';
+  crumb.className = 'tree-crumb';
+  crumb.textContent = label;
+  crumb.onclick = () => openTreeDir(path);
+  treePaneCrumbs.appendChild(crumb);
+}
+
+function renderTreeCrumbs(rootName, dirPath) {
+  treePaneCrumbs.innerHTML = '';
+  const sep = () => {
+    const s = document.createElement('span');
+    s.className = 'tree-crumb-sep';
+    s.textContent = '/';
+    treePaneCrumbs.appendChild(s);
+  };
+  // Home crumb: the workdir root, fetched with no path.
+  addTreeCrumb(rootName || 'Files', null);
+  if (dirPath) {
+    window.AgySessions.breadcrumbSegments(dirPath, treeRoot).forEach((seg) => {
+      sep();
+      addTreeCrumb(seg.name, seg.path);
+    });
+  }
+}
+
+function renderTreeEntries(data) {
+  treePaneBody.innerHTML = '';
+  if (!Array.isArray(data.entries) || data.entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'diff-clean';
+    empty.textContent = 'Empty directory.';
+    treePaneBody.appendChild(empty);
+    return;
+  }
+  data.entries.forEach((e) => {
+    if (!e || !e.name || !e.path) return;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `tree-entry tree-${e.type === 'dir' ? 'dir' : 'file'}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'tree-entry-icon';
+    icon.textContent = e.type === 'dir' ? '▸' : '·';
+
+    const name = document.createElement('span');
+    name.className = 'tree-entry-name';
+    name.textContent = e.name;
+
+    row.append(icon, name);
+
+    if (e.type !== 'dir') {
+      const size = document.createElement('span');
+      size.className = 'tree-entry-size';
+      size.textContent = humanSize(e.size);
+      row.appendChild(size);
+    }
+
+    row.onclick = () => {
+      if (e.type === 'dir') {
+        openTreeDir(e.path);
+      } else {
+        closeTreePane();
+        openFileViewer(e.path);
+      }
+    };
+    treePaneBody.appendChild(row);
+  });
+}
+
+async function openTreeDir(path) {
+  const ticket = ++treePaneTicket;
+  treePane.hidden = false;
+  treePaneBackdrop.hidden = false;
+  requestAnimationFrame(() => {
+    treePane.classList.add('open');
+    treePaneBackdrop.classList.add('open');
+  });
+  treePaneCrumbs.innerHTML = '';
+  treePaneBody.innerHTML = '<div class="diff-clean">Loading…</div>';
+  try {
+    const cid = currentConversationId ? `&conversation_id=${encodeURIComponent(currentConversationId)}` : '';
+    const p = path ? `&path=${encodeURIComponent(path)}` : '';
+    const res = await fetch(`/api/files?token=${encodeURIComponent(authToken)}${cid}${p}`);
+    if (ticket !== treePaneTicket) return;
+    const data = await res.json();
+    if (!res.ok) {
+      treePaneBody.innerHTML = `<div class="diff-clean">${
+        data && data.detail ? escapeHtml(String(data.detail)) : `Could not list the directory (HTTP ${res.status})`
+      }</div>`;
+      return;
+    }
+    // The pathless fetch is the workdir root: the crumb trail's home.
+    if (!path) treeRoot = data.path;
+    renderTreeCrumbs(data.name, treeRoot && data.path !== treeRoot ? data.path : null);
+    renderTreeEntries(data);
+  } catch (err) {
+    if (ticket === treePaneTicket) {
+      treePaneBody.innerHTML = '<div class="diff-clean">Could not reach the server.</div>';
+    }
+  }
+}
+
+function closeTreePane() {
+  treePaneTicket++;
+  treePane.classList.remove('open');
+  treePaneBackdrop.classList.remove('open');
+  treePane.hidden = true;
+  treePaneBackdrop.hidden = true;
+}
+
+const filesToggleBtn = document.getElementById('filesToggle');
+if (filesToggleBtn) filesToggleBtn.addEventListener('click', () => openTreeDir(null));
+const treePaneClose = document.getElementById('treePaneClose');
+if (treePaneClose) treePaneClose.addEventListener('click', closeTreePane);
+if (treePaneBackdrop) treePaneBackdrop.addEventListener('click', closeTreePane);
+
 // The mirrored terminal. The server runs the emulator and sends a grid of
 // plain text, so the panels agy draws -- pickers, confirmations, the mode in
 // the status bar -- are visible here without shipping an emulator to the phone.

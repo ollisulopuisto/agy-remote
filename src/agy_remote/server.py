@@ -518,6 +518,33 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
+    @app.get("/api/files")
+    async def list_files(
+        request: Request,
+        path: str | None = Query(None),
+        conversation_id: str | None = Query(None),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """List one directory of the session's project, for the phone's file tree.
+
+        With no path the session's workdir is the root, so the request never
+        names a location outside what the session already sanctioned.
+        `list_host_dir` does the security work; verdicts map like /api/file's.
+        """
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            return mgr.list_host_dir(path, conversation_id)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except PermissionError as e:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=f"Directory not found: {e}") from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
     def _press_key(key: str, conversation_id: str | None = None) -> str:
         """Deliver a key to whichever supervisor is live, if any."""
         sup = session_mgr.get_supervisor(conversation_id)

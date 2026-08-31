@@ -12,7 +12,7 @@ const source = readFileSync(new URL('../../src/agy_remote/static/sessions.js', i
 const sandbox = { window: {} };
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus, sessionStatusOf, renameRequestPayload, parseRenameCommand, applyRenameEvent } = sandbox.window.AgySessions;
+const { buildSpawnRequest, spawnStageLabel, spawnEventMatches, sessionStatus, sessionStatusOf, renameRequestPayload, parseRenameCommand, applyRenameEvent, breadcrumbSegments } = sandbox.window.AgySessions;
 
 // Objects built inside the vm sandbox carry the sandbox's Object.prototype,
 // which deepStrictEqual rejects; a JSON round-trip gives them this realm's.
@@ -233,4 +233,46 @@ test('a rename event updates the matching row and only that row', () => {
   assert.equal(convs[0].title, 'Old A');
   // An id no row carries changes nothing.
   assert.deepEqual(inThisRealm(applyRenameEvent(convs, 'zzz', 'X')), inThisRealm(convs));
+});
+
+// -- the file tree's breadcrumb ----------------------------------------------
+
+test('a path becomes tappable segments, shallowest first', () => {
+  const crumbs = breadcrumbSegments('/Users/me/proj/src');
+  assert.deepEqual(
+    inThisRealm(crumbs),
+    [
+      { name: 'Users', path: '/Users' },
+      { name: 'me', path: '/Users/me' },
+      { name: 'proj', path: '/Users/me/proj' },
+      { name: 'src', path: '/Users/me/proj/src' },
+    ],
+  );
+});
+
+test('the root and degenerate paths yield nothing to draw', () => {
+  assert.deepEqual(inThisRealm(breadcrumbSegments('/')), []);
+  for (const bad of ['', null, undefined]) {
+    assert.deepEqual(inThisRealm(breadcrumbSegments(bad)), []);
+  }
+});
+
+test('with a root, crumbs start at the root, not the filesystem', () => {
+  const crumbs = breadcrumbSegments('/Users/me/proj/src/sub', '/Users/me/proj');
+  assert.deepEqual(
+    inThisRealm(crumbs),
+    [
+      { name: 'proj', path: '/Users/me/proj' },
+      { name: 'src', path: '/Users/me/proj/src' },
+      { name: 'sub', path: '/Users/me/proj/src/sub' },
+    ],
+  );
+  // The root itself has only the home crumb, which the pane draws itself.
+  assert.deepEqual(inThisRealm(breadcrumbSegments('/Users/me/proj', '/Users/me/proj')), [
+    { name: 'proj', path: '/Users/me/proj' },
+  ]);
+  // A path outside the root falls back to the absolute segments.
+  assert.deepEqual(inThisRealm(breadcrumbSegments('/etc', '/Users/me/proj')), [
+    { name: 'etc', path: '/etc' },
+  ]);
 });
