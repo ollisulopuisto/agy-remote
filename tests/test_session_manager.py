@@ -732,8 +732,8 @@ async def test_an_approval_while_a_phone_watches_also_surfaces_in_the_tui(
 
     assert spawned, "the tmux pane showed nothing while the hook held"
     cmd, env = spawned[0]
-    assert cmd[0] == "tmux" and "display-popup" in cmd
-    assert "agy-remote tui-approve" in " ".join(cmd)
+    assert "tui-approve" in " ".join(cmd)
+    assert "AGY_REMOTE_APPROVAL_ID=ap-1" in " ".join(cmd)
     assert env["AGY_REMOTE_APPROVAL_ID"] == "ap-1"
     assert env["AGY_REMOTE_TOKEN"] == "token"
 
@@ -1125,3 +1125,22 @@ def test_projects_root_is_also_allowed(tmp_path: Path, monkeypatch: pytest.Monke
     # A sibling of the projects root is still nobody's business.
     with pytest.raises(PermissionError):
         mgr.read_host_file(str(tmp_path / "brain" / "transcript.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_rename_in_transcript_updates_conversation_title(tmp_path: Path):
+    """When a user renames a session in the terminal via /rename, the summary reflects it."""
+    log = _write_conversation(tmp_path, "conv-rename", "first question", time.time())
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {"step_index": 1, "type": "USER_INPUT", "source": "USER_INPUT", "content": "/rename Refactored Backend"}
+            )
+            + "\n"
+        )
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="token", e2ee_enabled=False)
+    mgr = SessionManager(cfg)
+    summaries = mgr.list_conversations()
+    conv = next(s for s in summaries if s.id == "conv-rename")
+    assert conv.title == "Refactored Backend"

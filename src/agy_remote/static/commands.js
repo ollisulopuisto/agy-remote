@@ -87,9 +87,29 @@
     return all().find(function (cmd) { return cmd.name === wanted; }) || null;
   }
 
+  // Flat search across every command, for the menu's search box. A query
+  // matches a command's name or its description, case-insensitively; each
+  // result carries its category title so the flat list still shows context.
+  function search(query) {
+    if (!query) return [];
+    var q = query.toLowerCase();
+    return CATEGORIES.flatMap(function (cat) {
+      return cat.commands
+        .filter(function (cmd) {
+          return cmd.name.toLowerCase().indexOf(q) !== -1 ||
+            cmd.desc.toLowerCase().indexOf(q) !== -1;
+        })
+        .map(function (cmd) {
+          var hit = Object.assign({}, cmd, { cat: cat.title });
+          return hit;
+        });
+    });
+  }
+
   global.AgyCommands = {
     categories: categories,
     all: all,
     find: find,
+    search: search,
   };
 })(typeof window !== 'undefined' ? window : this);

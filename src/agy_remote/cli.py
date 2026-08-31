@@ -1010,7 +1010,19 @@ def _post_approval_decision(base_url: str, approval_id: str, token: str, decisio
     show_default=True,
     help="Seconds to wait for a keypress before leaving the decision to the phone.",
 )
-def tui_approve(timeout: int) -> None:
+@click.option("--approval-id", default=None, help="Approval ID to decide")
+@click.option("--base-url", default=None, help="Base URL of agy-remote server")
+@click.option("--token", default=None, help="Auth token")
+@click.option("--tool-name", default=None, help="Tool name")
+@click.option("--tool-args", default=None, help="Tool arguments (JSON string)")
+def tui_approve(
+    timeout: int,
+    approval_id: str | None = None,
+    base_url: str | None = None,
+    token: str | None = None,
+    tool_name: str | None = None,
+    tool_args: str | None = None,
+) -> None:
     """Answer a tool approval from the desktop, inside a tmux popup.
 
     The server opens this in `tmux display-popup` when a phone is holding a
@@ -1018,15 +1030,32 @@ def tui_approve(timeout: int) -> None:
     and no keypress leaves the decision to the phone. First answer wins, as
     everywhere else.
     """
-    approval_id = os.environ.get("AGY_REMOTE_APPROVAL_ID", "")
-    base_url = os.environ.get("AGY_REMOTE_URL", "").rstrip("/")
-    token = os.environ.get("AGY_REMOTE_TOKEN", "")
-    tool_name = os.environ.get("AGY_REMOTE_TOOL_NAME", "")
-    tool_args = os.environ.get("AGY_REMOTE_TOOL_ARGS", "")
+    approval_id = approval_id or os.environ.get("AGY_REMOTE_APPROVAL_ID", "")
+    base_url = (base_url or os.environ.get("AGY_REMOTE_URL", "")).rstrip("/")
+    token = token or os.environ.get("AGY_REMOTE_TOKEN", "")
+    tool_name = tool_name or os.environ.get("AGY_REMOTE_TOOL_NAME", "")
+    tool_args = tool_args or os.environ.get("AGY_REMOTE_TOOL_ARGS", "")
 
     if not approval_id or not base_url:
         click.echo("No approval in flight (AGY_REMOTE_* is unset) — nothing to answer.")
         return
+
+    if not tool_name:
+        try:
+            req = urllib.request.Request(
+                f"{base_url}/api/approvals/{approval_id}",
+                headers={"X-Auth-Token": token},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                raw_resp = resp.read()
+                data_str = raw_resp.decode("utf-8") if isinstance(raw_resp, bytes) else raw_resp
+                data = json.loads(data_str)
+                tool_name = data.get("tool_name", "")
+                if not tool_args and data.get("args"):
+                    tool_args = json.dumps(data.get("args", {}))
+        except Exception:
+            pass
 
     click.echo("agy-remote — permission required")
     click.echo("")

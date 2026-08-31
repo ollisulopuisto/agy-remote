@@ -2151,12 +2151,14 @@ const cmdMenuTitle = document.getElementById('cmdMenuTitle');
 const cmdMenuBody = document.getElementById('cmdMenuBody');
 const cmdMenuBackBtn = document.getElementById('cmdMenuBackBtn');
 const cmdMenuCloseBtn = document.getElementById('cmdMenuCloseBtn');
+const cmdMenuSearch = document.getElementById('cmdMenuSearch');
 
 let cmdMenuCategory = null;
 
 function openCmdMenu() {
   closeDrawer();
   cmdMenuCategory = null;
+  cmdMenuSearch.value = '';
   renderCmdMenu();
   cmdMenuSheet.hidden = false;
   cmdMenuBackdrop.classList.add('open');
@@ -2169,12 +2171,49 @@ function closeCmdMenu() {
   setTimeout(() => {
     cmdMenuSheet.hidden = true;
     cmdMenuCategory = null;
+    cmdMenuSearch.value = '';
     renderCmdMenu();
   }, 220);
 }
 
+function cmdRow(cmd) {
+  const row = document.createElement('button');
+  row.className = 'cmd-row';
+  const flags = [
+    cmd.panel ? '<span class="cmd-flag" title="Answers in a terminal panel — the Screen mirror opens with it">panel</span>' : '',
+    cmd.arg ? '<span class="cmd-flag" title="Needs an argument — the composer is prefilled">arg</span>' : '',
+  ].join('');
+  row.innerHTML = `<span class="cmd-row-main"><span class="cmd-name">${cmd.name}</span>` +
+    `<span class="cmd-desc">${cmd.desc}</span></span><span class="cmd-flags">${flags}</span>`;
+  row.addEventListener('click', () => runCommand(cmd));
+  return row;
+}
+
 function renderCmdMenu() {
+  const query = cmdMenuSearch.value.trim();
   const categories = window.AgyCommands.categories();
+  if (query) {
+    // Searching overrides the drill-down: every hit is shown flat, with
+    // the category title where it lives.
+    cmdMenuTitle.textContent = 'Search';
+    cmdMenuBackBtn.hidden = true;
+    const hits = window.AgyCommands.search(query);
+    cmdMenuBody.innerHTML = '';
+    if (!hits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'cmd-empty';
+      empty.textContent = `Nothing matches "${query}"`;
+      cmdMenuBody.appendChild(empty);
+      return;
+    }
+    for (const hit of hits) {
+      const row = cmdRow(hit);
+      const desc = row.querySelector('.cmd-desc');
+      if (desc) desc.textContent = `${hit.cat} — ${hit.desc}`;
+      cmdMenuBody.appendChild(row);
+    }
+    return;
+  }
   if (cmdMenuCategory === null) {
     cmdMenuTitle.textContent = 'Slash commands';
     cmdMenuBackBtn.hidden = true;
@@ -2199,16 +2238,7 @@ function renderCmdMenu() {
   cmdMenuBackBtn.hidden = false;
   cmdMenuBody.innerHTML = '';
   for (const cmd of cat.commands) {
-    const row = document.createElement('button');
-    row.className = 'cmd-row';
-    const flags = [
-      cmd.panel ? '<span class="cmd-flag" title="Answers in a terminal panel — the Screen mirror opens with it">panel</span>' : '',
-      cmd.arg ? '<span class="cmd-flag" title="Needs an argument — the composer is prefilled">arg</span>' : '',
-    ].join('');
-    row.innerHTML = `<span class="cmd-row-main"><span class="cmd-name">${cmd.name}</span>` +
-      `<span class="cmd-desc">${cmd.desc}</span></span><span class="cmd-flags">${flags}</span>`;
-    row.addEventListener('click', () => runCommand(cmd));
-    cmdMenuBody.appendChild(row);
+    cmdMenuBody.appendChild(cmdRow(cmd));
   }
 }
 
@@ -2228,8 +2258,10 @@ function runCommand(cmd) {
 cmdMenuBtn.addEventListener('click', openCmdMenu);
 cmdMenuCloseBtn.addEventListener('click', closeCmdMenu);
 cmdMenuBackdrop.addEventListener('click', closeCmdMenu);
+cmdMenuSearch.addEventListener('input', renderCmdMenu);
 cmdMenuBackBtn.addEventListener('click', () => {
   cmdMenuCategory = null;
+  cmdMenuSearch.value = '';
   renderCmdMenu();
 });
 

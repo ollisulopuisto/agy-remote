@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -1253,17 +1254,31 @@ class SessionManager:
         owned pty has no window system to overlay; the console bell rings.
         """
         supervisor = self.get_supervisor(conversation_id)
-        if supervisor is None:
-            return
-        session_name = getattr(supervisor, "session_name", None)
-        if not session_name:
-            # No tmux pane to draw on: ring the bell and leave the deciding
-            # to the phone.
-            try:
-                sys.stdout.write("\a")
-                sys.stdout.flush()
-            except Exception as e:  # noqa: BLE001 - a closed console is not fatal
-                logger.debug("Could not ring the console bell: %s", e)
+        target: str | None = None
+        session_name: str | None = None
+
+        if supervisor is not None:
+            session_name = getattr(supervisor, "session_name", None)
+            if not session_name:
+                # No tmux pane to draw on: ring the bell and leave the deciding
+                # to the phone.
+                try:
+                    sys.stdout.write("\a")
+                    sys.stdout.flush()
+                except Exception as e:  # noqa: BLE001 - a closed console is not fatal
+                    logger.debug("Could not ring the console bell: %s", e)
+                return
+            target = getattr(supervisor, "target", None) or session_name
+        else:
+            from .tmux_runner import is_tmux_available, panes_running
+
+            if is_tmux_available():
+                candidates = panes_running("agy")
+                if candidates:
+                    target = candidates[0]["target"]
+                    session_name = candidates[0]["session"]
+
+        if not target and not session_name:
             return
 
         env = {
@@ -1273,18 +1288,23 @@ class SessionManager:
             "AGY_REMOTE_TOOL_NAME": tool_name,
             "AGY_REMOTE_TOOL_ARGS": json.dumps(args, default=str)[:2048],
         }
-        target = getattr(supervisor, "target", None) or session_name
+        # The tmux server executes popup commands in its own daemon environment,
+        # ignoring the subprocess.Popen env passed to the tmux client. We must
+        # explicitly export these environment variables in the shell command
+        # string and use the active Python interpreter so venvs/uv tool paths work.
+        env_exports = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
+        popup_cmd = f"exec env {env_exports} {shlex.quote(sys.executable)} -m agy_remote.cli tui-approve"
         cmd = [
             "tmux",
             "display-popup",
             "-t",
-            target,
+            target or session_name or "",
             "-w",
             "80%",
             "-h",
             "12",
             "-E",
-            "exec agy-remote tui-approve",
+            popup_cmd,
         ]
         try:
             subprocess.Popen(  # noqa: S603 - fixed argv, tmux is the point

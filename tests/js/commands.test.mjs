@@ -57,6 +57,28 @@ test('argument-taking commands are flagged so the composer is prefilled', () => 
   assert.notEqual(inThisRealm(AgyCommands.find('/help')).arg, true);
 });
 
+test('search matches by name and description, case-insensitively', () => {
+  const byName = inThisRealm(AgyCommands.search('res'));
+  assert.ok(byName.some((c) => c.name === '/resume'), '"res" should surface /resume');
+  const byDesc = inThisRealm(AgyCommands.search('branch'));
+  assert.ok(byDesc.some((c) => c.name === '/fork'), 'descriptions are searchable too');
+  const upper = inThisRealm(AgyCommands.search('TOKEN'));
+  assert.ok(upper.some((c) => c.name === '/usage'), 'description search is case-insensitive');
+});
+
+test('search results carry their category title and flags', () => {
+  const hit = inThisRealm(AgyCommands.search('model')).find((c) => c.name === '/model');
+  assert.ok(hit, '/model should be found');
+  assert.ok(hit.cat, 'result needs its category title for display');
+  assert.equal(hit.panel, true, 'flags survive the search');
+});
+
+test('search returns nothing for blank or unmatched queries', () => {
+  assert.deepEqual(inThisRealm(AgyCommands.search('')), []);
+  assert.deepEqual(inThisRealm(AgyCommands.search(null)), []);
+  assert.deepEqual(inThisRealm(AgyCommands.search('zzzznope')), []);
+});
+
 test('find normalizes a missing slash', () => {
   assert.equal(inThisRealm(AgyCommands.find('planning')).name, '/planning');
   assert.equal(AgyCommands.find('/nope'), null);

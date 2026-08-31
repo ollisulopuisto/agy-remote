@@ -291,6 +291,8 @@ def test_without_the_marker_the_hook_does_not_auto_allow(monkeypatch, value):
     else:
         monkeypatch.delenv("AGY_REMOTE_SKIP_PERMISSIONS", raising=False)
 
+    monkeypatch.setattr(hooks_mod, "_ancestor_skip_permissions", lambda: False)
+
     def unreachable(req, timeout=0):
         raise hooks_mod.urllib.error.URLError("connection refused")
 
@@ -298,6 +300,22 @@ def test_without_the_marker_the_hook_does_not_auto_allow(monkeypatch, value):
 
     decision = json.loads(_run_hook(monkeypatch))
     assert decision["decision"] == "ask"
+
+
+def test_ancestor_skip_permissions_allows_tool_without_env_marker(monkeypatch):
+    """When agy is run by hand with --dangerously-skip-permissions, the hook detects it in ancestor args."""
+    import agy_remote.hooks as hooks_mod
+
+    monkeypatch.delenv("AGY_REMOTE_SKIP_PERMISSIONS", raising=False)
+    monkeypatch.setattr(hooks_mod, "_ancestor_skip_permissions", lambda: True)
+
+    def explode(*a, **kw):
+        raise AssertionError("the hook must not contact the server when ancestor skipped permissions")
+
+    monkeypatch.setattr(hooks_mod.urllib.request, "urlopen", explode)
+
+    decision = json.loads(_run_hook(monkeypatch))
+    assert decision["decision"] == "allow"
 
 
 def test_run_recognizes_the_skip_permissions_flag_in_its_passthrough_args():

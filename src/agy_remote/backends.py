@@ -229,6 +229,22 @@ class AgyBackend:
             # prompts we injected ourselves must never extend the window.
             mgr.note_conversation_activity(mgr.active_conversation_id)
         for step in new_steps:
+            if step.type == "USER_INPUT" or step.source in ("USER_INPUT", "USER_EXPLICIT"):
+                cleaned = clean_user_content(step.content)
+                if cleaned.startswith("/rename"):
+                    new_title = cleaned[len("/rename") :].strip()
+                    if new_title and mgr.active_conversation_id:
+                        summary = mgr.rename_conversation(mgr.active_conversation_id, new_title)
+                        if summary:
+                            await mgr.broadcast(
+                                {
+                                    "event": "session_renamed",
+                                    "data": {
+                                        "conversation_id": mgr.active_conversation_id,
+                                        "conversation": summary,
+                                    },
+                                }
+                            )
             # Keep the view, not just the frame. A step that is only broadcast
             # lives in the messages already sent: reconnect, reload the PWA or
             # ask `/api/conversations/<active>` and the transcript stopped at
@@ -297,6 +313,7 @@ class AgyBackend:
         self.parse_count += 1
         step_count = 0
         first_prompt: str | None = None
+        renamed_title: str | None = None
         last_prompt: str | None = None
         last_response: str | None = None
 
@@ -312,20 +329,25 @@ class AgyBackend:
                     continue
                 step_type = obj.get("type", "")
                 content = obj.get("content") or ""
-                if step_type == "USER_INPUT":
+                if step_type == "USER_INPUT" or obj.get("source") in ("USER_INPUT", "USER_EXPLICIT"):
                     # The drawer titles every conversation from this; unwrapped,
                     # every one of them reads "<USER_REQUEST>".
-                    content = clean_user_content(content)
-                    if not first_prompt:
-                        first_prompt = content[:100]
-                    last_prompt = content[:100]
+                    cleaned = clean_user_content(content)
+                    if cleaned.startswith("/rename"):
+                        candidate = cleaned[len("/rename") :].strip()
+                        if candidate:
+                            renamed_title = candidate
+                    elif not first_prompt and cleaned:
+                        first_prompt = cleaned[:100]
+                    if cleaned:
+                        last_prompt = cleaned[:100]
                 elif step_type == "PLANNER_RESPONSE" and content:
                     last_response = content[:150]
 
         ctime = self._get_conversation_ctime(conversation_id, log_path)
         return ConversationSummary(
             id=conversation_id,
-            title=first_prompt or f"Session {conversation_id[:8]}",
+            title=renamed_title or first_prompt or f"Session {conversation_id[:8]}",
             created_at=datetime.fromtimestamp(ctime) if ctime > 0 else datetime.fromtimestamp(stat.st_ctime),
             updated_at=datetime.fromtimestamp(stat.st_mtime),
             step_count=step_count,

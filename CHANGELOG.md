@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.08.31.106 — TUI permission popups display reliably in tmux & session parity
+
+- **Permission dialogs surface reliably in the desktop TUI.** When a phone is
+  connected and holds a tool permission gate, the desktop surfaces the decision
+  in an overlay popup (`tmux display-popup`). The tmux server executes popup
+  commands in its own daemon environment and ignores client subprocess env vars,
+  causing `tui-approve` to exit immediately on missing variables or missing PATH.
+  The popup invocation now explicitly exports the `AGY_REMOTE_*` parameters in the
+  shell command, invokes `tui-approve` via the active Python interpreter, falls back
+  to active tmux panes running `agy` when supervisor metadata is not yet bound, and
+  allows `tui-approve` to query pending approval details directly from the server.
+- **Direct `/rename` in terminal agy updates the PWA sidebar.** When a user renames
+  a session in the terminal CLI via `/rename <name>`, the transcript summarizer
+  and step watcher extract the new title, store it in the title overrides, and broadcast
+  `session_renamed` to all connected PWA drawers and headers in real time.
+- **Hand-started `agy --dangerously-skip-permissions` bypasses remote permission prompts.**
+  The `PreToolUse` hook now checks whether the parent `agy` process was launched with
+  `--dangerously-skip-permissions`, automatically allowing tool executions without holding
+  approvals on the phone when the user requested unattended execution.
+
 ## v26.08.30.105 — Sessions get names, follow-ups queue, the working tree shows
 
 - **Sessions take names, and `/rename` means the phone's rename.** Derived

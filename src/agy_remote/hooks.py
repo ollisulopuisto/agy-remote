@@ -164,9 +164,37 @@ def resolve_hook_command() -> str:
     return f"{shlex.quote(sys.executable)} -m agy_remote.cli hook-pre-tool"
 
 
+def _ancestor_skip_permissions() -> bool:
+    """Check if the direct agy parent process was launched with --dangerously-skip-permissions."""
+    try:
+        pid = os.getppid()
+        if pid <= 1:
+            return False
+        res = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=1.0,
+        )
+        if res.returncode == 0 and res.stdout:
+            cmdline = res.stdout.strip()
+            tokens = cmdline.split()
+            if tokens:
+                first = Path(tokens[0]).name.lower()
+                is_agy = first in ("agy", "antigravity") or any(t in ("agy", "antigravity") for t in tokens[:3])
+                if is_agy and "--dangerously-skip-permissions" in cmdline:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def _skip_permissions_requested() -> bool:
-    """Whether the supervised launch asked for no permission gating at all."""
-    return os.environ.get(SKIP_PERMISSIONS_ENV, "").lower() in ("1", "true", "yes")
+    """Whether agy was launched with no permission gating at all."""
+    if os.environ.get(SKIP_PERMISSIONS_ENV, "").lower() in ("1", "true", "yes"):
+        return True
+    return _ancestor_skip_permissions()
 
 
 def run_pre_tool_hook() -> None:

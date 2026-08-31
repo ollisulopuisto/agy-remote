@@ -127,3 +127,69 @@ def test_the_pending_approval_endpoint_answers_the_desktop(tmp_path: Path) -> No
     assert resp.status_code == 200
     assert resp.json()["tool_name"] == "bash"
     assert resp.json()["status"] == "pending"
+
+
+def test_tui_approve_with_cli_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in (
+        "AGY_REMOTE_URL",
+        "AGY_REMOTE_APPROVAL_ID",
+        "AGY_REMOTE_TOKEN",
+        "AGY_REMOTE_TOOL_NAME",
+        "AGY_REMOTE_TOOL_ARGS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    posted = _post_capture(monkeypatch)
+    monkeypatch.setattr(cli_mod, "_read_keypress", lambda timeout: "a")
+    result = CliRunner().invoke(
+        cli,
+        [
+            "tui-approve",
+            "--approval-id",
+            "ap-opts",
+            "--base-url",
+            "http://127.0.0.1:8090",
+            "--token",
+            "tok-opts",
+            "--tool-name",
+            "python",
+            "--tool-args",
+            '{"code": "1+1"}',
+        ],
+    )
+    assert result.exit_code == 0
+    assert "allow" in result.output.lower()
+    assert posted[0]["body"]["decision"] == "allow"
+    assert posted[0]["url"].endswith("/api/approvals/ap-opts/respond")
+
+
+def test_tui_approve_fetches_tool_info_from_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGY_REMOTE_URL", "http://127.0.0.1:8090")
+    monkeypatch.setenv("AGY_REMOTE_APPROVAL_ID", "ap-fetch")
+    monkeypatch.setenv("AGY_REMOTE_TOKEN", "tok")
+    monkeypatch.delenv("AGY_REMOTE_TOOL_NAME", raising=False)
+    monkeypatch.delenv("AGY_REMOTE_TOOL_ARGS", raising=False)
+
+    class _FakeGetResp:
+        def __enter__(self):
+            return io.StringIO(json.dumps({"tool_name": "read_file", "args": {"path": "main.py"}}))
+
+        def __exit__(self, *args):
+            return False
+
+    class _FakePostResp:
+        def __enter__(self):
+            return io.StringIO(json.dumps({"status": "ok"}))
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        if req.get_method() == "GET":
+            return _FakeGetResp()
+        return _FakePostResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(cli_mod, "_read_keypress", lambda timeout: "a")
+    result = CliRunner().invoke(cli, ["tui-approve"])
+    assert result.exit_code == 0
+    assert "read_file" in result.output
