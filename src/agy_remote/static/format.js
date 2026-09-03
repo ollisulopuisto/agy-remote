@@ -380,16 +380,58 @@
     return 'allow';
   }
 
+  // The ask_question gate's questions, normalized for the dock. The server
+  // decodes the hook's JSON string once (parse_ask_question_args); this also
+  // accepts the raw string under args.questions, so a dock can still render
+  // from a payload that skipped the server path. Anything that is not
+  // question-shaped yields null and the caller keeps the plain banner.
+  function parseQuestions(app) {
+    var a = app || {};
+    var raw = a.questions;
+    if (!raw && a.args && typeof a.args === 'object') {
+      raw = a.args.questions;
+    }
+    if (typeof raw === 'string') {
+      try {
+        raw = JSON.parse(raw);
+      } catch (e) {
+        return null;
+      }
+    }
+    if (raw && !Array.isArray(raw)) raw = [raw];
+    if (!Array.isArray(raw)) return null;
+
+    var qs = [];
+    for (var i = 0; i < raw.length; i++) {
+      var q = raw[i];
+      if (!q || typeof q !== 'object') continue;
+      var question = String(q.question || q.prompt || q.text || '').trim();
+      var options = (Array.isArray(q.options) ? q.options : [])
+        .map(function (o) {
+          return String(o).trim();
+        })
+        .filter(Boolean);
+      if (!question && !options.length) continue;
+      qs.push({
+        question: question,
+        options: options,
+        multiSelect: !!(q.multi_select || q.multiSelect || q.is_multi_select),
+      });
+    }
+    return qs.length ? qs : null;
+  }
+
   // What the approval banner announces. A question gate reads as a question
   // ("Agent asks" + the question text); everything else keeps the permission
   // framing and the command text. Pure so both framings stay pinned by tests.
   function approvalDisplay(app) {
     var args = app && app.args;
     if (app && app.tool_name === 'ask_question') {
-      var question = null;
-      if (typeof args === 'string' && args.trim()) {
+      var questions = parseQuestions(app);
+      var question = questions && questions[0] && questions[0].question ? questions[0].question : null;
+      if (!question && typeof args === 'string' && args.trim()) {
         question = args;
-      } else if (args && typeof args === 'object') {
+      } else if (!question && args && typeof args === 'object') {
         question = args.question || args.prompt || args.text || null;
       }
       return { title: 'Agent asks', body: question || app.tool_name };
@@ -512,6 +554,7 @@
     approvalsElsewhere: approvalsElsewhere,
     approvalOrigin: approvalOrigin,
     approvalDisplay: approvalDisplay,
+    parseQuestions: parseQuestions,
     shouldScrubCredentials: shouldScrubCredentials,
     peerNotice: peerNotice,
     promptWasDelivered: promptWasDelivered,

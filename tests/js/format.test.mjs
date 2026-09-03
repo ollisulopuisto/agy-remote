@@ -14,6 +14,10 @@ vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
 const { toolSummary, outputSummary, firstLine } = sandbox.window.AgyFormat;
 
+// Objects built inside the vm sandbox carry the sandbox's Object.prototype,
+// which deepStrictEqual rejects; a JSON round-trip gives them this realm's.
+const inThisRealm = (value) => JSON.parse(JSON.stringify(value));
+
 test('a tool card collapses to its name and the argument that matters', () => {
   assert.equal(
     toolSummary('run_command', { CommandLine: 'du -hd 1 /Users/dst', Cwd: '/Users/dst', WaitMsBeforeAsync: '5000' }),
@@ -305,6 +309,56 @@ test('a question gate renders as a question, not as a permission warning', () =>
     { title: 'Permission Required: run_command', body: 'du -hd 1 /tmp' },
   );
   assert.equal(display({ tool_name: 'run_command', args: null }).title, 'Permission Required: run_command');
+});
+
+test('an ask_question approval yields its structured questions for the dock', () => {
+  const { parseQuestions } = sandbox.window.AgyFormat;
+  // The server-decoded shape (normalized by parse_ask_question_args).
+  const qs = parseQuestions({
+    tool_name: 'ask_question',
+    questions: [
+      { question: 'How would you like to proceed?', options: ['A', 'B', 'C'], multi_select: false },
+      { question: 'Which checks?', options: ['x', 'y'], multi_select: true },
+    ],
+  });
+  assert.equal(qs.length, 2);
+  assert.equal(qs[0].question, 'How would you like to proceed?');
+  assert.deepEqual(inThisRealm(qs[0].options), ['A', 'B', 'C']);
+  assert.equal(qs[0].multiSelect, false);
+  assert.equal(qs[1].multiSelect, true);
+});
+
+test('raw JSON-string questions from the hook are decoded, and malformed ones yield nothing', () => {
+  const { parseQuestions } = sandbox.window.AgyFormat;
+  const raw = parseQuestions({
+    tool_name: 'ask_question',
+    args: { questions: '[{"question":"Q","options":["a","  b "],"is_multi_select":true}]' },
+  });
+  assert.equal(raw.length, 1);
+  assert.equal(raw[0].multiSelect, true);
+  assert.deepEqual(inThisRealm(raw[0].options), ['a', 'b']);
+
+  // Nothing question-shaped: the caller falls back to the plain banner.
+  for (const app of [
+    { tool_name: 'ask_question', args: { questions: 'not json' } },
+    { tool_name: 'ask_question', args: { questions: '42' } },
+    { tool_name: 'ask_question', args: { questions: '[{"options":[]}]' } },
+    { tool_name: 'run_command', args: { CommandLine: 'ls' } },
+    { tool_name: 'ask_question' },
+    null,
+  ]) {
+    assert.equal(parseQuestions(app), null, JSON.stringify(app));
+  }
+});
+
+test('a question banner reads as the question, not a permission', () => {
+  const { approvalDisplay } = sandbox.window.AgyFormat;
+  const d = approvalDisplay({
+    tool_name: 'ask_question',
+    questions: [{ question: 'Ship it today?', options: ['Yes', 'No'], multi_select: false }],
+  });
+  assert.equal(d.title, 'Agent asks');
+  assert.equal(d.body, 'Ship it today?');
 });
 
 test('credentials are scrubbed from the URL only once the app is installed', () => {

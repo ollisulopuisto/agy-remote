@@ -106,6 +106,46 @@ def make_backend(config: RemoteConfig) -> AgentBackend:
     return AgyBackend(config)
 
 
+def parse_ask_question_args(args: Any) -> list[dict[str, Any]] | None:
+    """The questions of an `ask_question` gate, decoded and normalized.
+
+    agy stores the questions as a JSON *string* under `args.questions` -- the
+    same habit it has for every other structured argument in the transcript.
+    Each entry becomes {question, options, multi_select}; entries without a
+    question or any option are dropped, a lone question object is accepted
+    where an array is expected, and a payload that does not decode to
+    question-shaped data yields None so the client falls back to a plain
+    banner rather than drawing an empty dock.
+    """
+    raw = args.get("questions") if isinstance(args, dict) else None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return None
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return None
+
+    questions: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        question = str(entry.get("question") or entry.get("prompt") or entry.get("text") or "").strip()
+        options = [str(o).strip() for o in entry.get("options") or [] if str(o).strip()]
+        if not question and not options:
+            continue
+        questions.append(
+            {
+                "question": question,
+                "options": options,
+                "multi_select": bool(entry.get("is_multi_select") or entry.get("multi_select")),
+            }
+        )
+    return questions or None
+
+
 # ---------------------------------------------------------------------------
 # agy
 # ---------------------------------------------------------------------------

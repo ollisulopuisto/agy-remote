@@ -99,6 +99,47 @@ const fileViewerPath = document.getElementById('fileViewerPath');
 const fileViewerBody = document.getElementById('fileViewerBody');
 const fileViewerClose = document.getElementById('fileViewerClose');
 
+// Multi-agent & Meta-AGY control plane elements
+const tabAgentsBtn = document.getElementById('tabAgentsBtn');
+const tabSessionsBtn = document.getElementById('tabSessionsBtn');
+const newMetaTaskBtn = document.getElementById('newMetaTaskBtn');
+const metaTaskSheet = document.getElementById('metaTaskSheet');
+const metaTaskBackdrop = document.getElementById('metaTaskBackdrop');
+const metaTaskCloseBtn = document.getElementById('metaTaskCloseBtn');
+const metaTaskCancelBtn = document.getElementById('metaTaskCancelBtn');
+const metaTaskSubmitBtn = document.getElementById('metaTaskSubmitBtn');
+const metaTaskProject = document.getElementById('metaTaskProject');
+const metaTaskProvider = document.getElementById('metaTaskProvider');
+const metaTaskModel = document.getElementById('metaTaskModel');
+const metaTaskDesc = document.getElementById('metaTaskDesc');
+const metaTaskContextField = document.getElementById('metaTaskContextField');
+const metaTaskContext = document.getElementById('metaTaskContext');
+const metaTaskError = document.getElementById('metaTaskError');
+
+const agentDetailSheet = document.getElementById('agentDetailSheet');
+const agentDetailBackdrop = document.getElementById('agentDetailBackdrop');
+const agentDetailCloseBtn = document.getElementById('agentDetailCloseBtn');
+const agentDetailProvider = document.getElementById('agentDetailProvider');
+const agentDetailProject = document.getElementById('agentDetailProject');
+const agentDetailStatus = document.getElementById('agentDetailStatus');
+const agentDetailTask = document.getElementById('agentDetailTask');
+const agentDetailModel = document.getElementById('agentDetailModel');
+const agentDetailElapsed = document.getElementById('agentDetailElapsed');
+const agentDetailResultCard = document.getElementById('agentDetailResultCard');
+const agentDetailResult = document.getElementById('agentDetailResult');
+const agentDetailDetails = document.getElementById('agentDetailDetails');
+const agentDetailOutput = document.getElementById('agentDetailOutput');
+const agentOutputStatus = document.getElementById('agentOutputStatus');
+const agentDetailCancelBtn = document.getElementById('agentDetailCancelBtn');
+const agentDetailRetryBtn = document.getElementById('agentDetailRetryBtn');
+const agentDetailHandoffBtn = document.getElementById('agentDetailHandoffBtn');
+
+let currentAgents = [];
+let activeDrawerTab = 'agents';
+let selectedAgent = null;
+let agentOutputTimer = null;
+let agentOutputOffset = 0;
+
 // ----------------------------------------------------------------------------
 // Web Crypto API (AES-256-GCM payload encryption)
 //
@@ -536,9 +577,12 @@ function handleServerEvent(event) {
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
     agentTraffic = data.agent_traffic || [];
+    if (data.agents) {
+      currentAgents = data.agents;
+    }
     updateHeader();
     renderAllMessages();
-    renderConversations(data.conversations || []);
+    renderCurrentDrawerTab(data.conversations || []);
     updateApprovalIndicators();
     checkUrlNavigation();
   } else if (type === 'session_switched') {
@@ -671,6 +715,27 @@ function handleServerEvent(event) {
     updateApprovalIndicators();
     const elem = document.getElementById(`approval-${data.id}`);
     if (elem) elem.remove();
+  } else if (type === 'agent_updated') {
+    if (data && data.agents) {
+      currentAgents = data.agents;
+    } else if (data && data.agent) {
+      const idx = currentAgents.findIndex(a => a.agent_id === data.agent.agent_id);
+      if (idx >= 0) {
+        currentAgents[idx] = data.agent;
+      } else {
+        currentAgents.push(data.agent);
+      }
+    }
+    if (activeDrawerTab === 'agents') {
+      renderAgents();
+    }
+    if (selectedAgent && data && data.agent && selectedAgent.agent_id === data.agent.agent_id) {
+      updateAgentDetailSheet(data.agent);
+    }
+  } else if (type === 'agent_output') {
+    if (selectedAgent && data && data.agent_id === selectedAgent.agent_id) {
+      appendAgentOutput(data.content, data.next_offset);
+    }
   }
 }
 
@@ -998,9 +1063,118 @@ if (soundToggleBtn) {
   applySoundUI();
 }
 
+// A question gate is a dialogue, not a permission: the dock draws the
+// options (radio, or checkboxes when the agent asked for several) plus a
+// typed answer, and sends the chosen text back as the approval's `reason` --
+// the same channel agy's own TUI uses to deliver a picked option. The banner
+// keeps the approval's id so the resolution event removes it like any other.
+function renderQuestionDock(app) {
+  const qs = window.AgyFormat.parseQuestions(app);
+  const dock = document.createElement('div');
+  dock.id = `approval-${app.id}`;
+  dock.className = 'approval-banner question-dock';
+
+  const origin = window.AgyFormat.approvalOrigin(app, currentConversationId);
+  if (origin) {
+    dock.classList.add('approval-elsewhere');
+    const originRow = document.createElement('div');
+    originRow.className = 'approval-origin';
+    originRow.textContent = `in another session: ${origin}`;
+    dock.appendChild(originRow);
+  }
+
+  qs.forEach((q, qi) => {
+    const qText = document.createElement('div');
+    qText.className = 'question-text';
+    qText.textContent = q.question || 'Answer';
+    dock.appendChild(qText);
+
+    q.options.forEach((opt, oi) => {
+      const label = document.createElement('label');
+      label.className = 'question-option';
+      const input = document.createElement('input');
+      input.type = q.multiSelect ? 'checkbox' : 'radio';
+      input.name = `question-${app.id}-${qi}`;
+      input.value = String(oi);
+      label.appendChild(input);
+      const text = document.createElement('span');
+      text.textContent = opt;
+      label.appendChild(text);
+      dock.appendChild(label);
+    });
+
+    const custom = document.createElement('input');
+    custom.type = 'text';
+    custom.className = 'question-custom';
+    custom.id = `question-${app.id}-${qi}-custom`;
+    custom.placeholder = 'Or type an answer…';
+    dock.appendChild(custom);
+  });
+
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'btn-approve question-submit';
+  submit.textContent = 'Send answer';
+  submit.onclick = () => submitQuestionAnswer(app, dock);
+  dock.appendChild(submit);
+
+  chatContainer.appendChild(dock);
+}
+
+// One line per question: the chosen option texts joined with commas, the
+// typed answer appended when present. A question with neither is skipped,
+// and nothing at all is refused before anything is sent.
+function collectQuestionAnswers(app, dock) {
+  const qs = window.AgyFormat.parseQuestions(app);
+  const parts = [];
+  qs.forEach((q, qi) => {
+    const bits = [];
+    dock.querySelectorAll(`input[name="question-${app.id}-${qi}"]`).forEach((input) => {
+      if (input.checked) bits.push(q.options[Number(input.value)]);
+    });
+    const custom = document.getElementById(`question-${app.id}-${qi}-custom`);
+    const customText = custom && custom.value ? custom.value.trim() : '';
+    if (customText) bits.push(customText);
+    if (bits.length) parts.push(bits.join(', '));
+  });
+  return parts;
+}
+
+async function submitQuestionAnswer(app, dock) {
+  const parts = collectQuestionAnswers(app, dock);
+  if (parts.length === 0) {
+    statusText.textContent = 'Pick an option or type an answer first.';
+    triggerVibrate([40, 60, 40]);
+    return;
+  }
+  triggerVibrate(20);
+  const payload = {
+    action: 'approve_tool',
+    data: { approval_id: app.id, decision: 'allow', reason: parts.join('\n') },
+  };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      const msg = cryptoKey ? await encryptData(payload) : payload;
+      ws.send(JSON.stringify(msg));
+      statusText.textContent = 'Answer sent';
+      return;
+    } catch (e) {
+      // Fall through: the socket looked open but the write threw.
+    }
+  }
+  reportUndelivered('Answer not sent — no connection to the server.');
+}
+
 function renderApprovalBanner(app) {
   const existing = document.getElementById(`approval-${app.id}`);
   if (existing) return;
+
+  // No question-shaped payload (or a server that predates the dock) keeps the
+  // plain Allow/Deny banner below.
+  if (app.tool_name === 'ask_question' && window.AgyFormat.parseQuestions(app)) {
+    renderQuestionDock(app);
+    return;
+  }
 
   const banner = document.createElement('div');
   banner.id = `approval-${app.id}`;
@@ -2111,19 +2285,393 @@ function stopDrawerDotTimer() {
   }
 }
 
+function renderCurrentDrawerTab(convs) {
+  if (convs) drawerConversations = convs;
+  if (activeDrawerTab === 'agents') {
+    renderAgents();
+  } else {
+    renderConversations(drawerConversations);
+  }
+}
+
+function renderAgents() {
+  if (!drawerList) return;
+  drawerList.innerHTML = '';
+
+  const groups = window.AgentHelpers ? window.AgentHelpers.groupAgentsByStatus(currentAgents) : { running: [], needs_attention: [], completed: [], failed: [] };
+  const hasAgents = currentAgents && currentAgents.length > 0;
+
+  if (!hasAgents) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding: 28px 16px; text-align: center; color: var(--text-muted); font-size: 13px;';
+    empty.innerHTML = `
+      <p style="margin-bottom: 12px;">No active agents or worker tasks.</p>
+      <button class="btn-primary" id="drawerEmptyLaunchBtn" style="font-size: 12px; padding: 6px 14px;">+ Launch New Task</button>
+    `;
+    drawerList.appendChild(empty);
+    const btn = empty.querySelector('#drawerEmptyLaunchBtn');
+    if (btn) btn.onclick = () => { closeDrawer(); openMetaTaskSheet(); };
+    return;
+  }
+
+  const sections = [
+    { title: 'Needs Attention', list: groups.needs_attention },
+    { title: 'Running', list: groups.running },
+    { title: 'Completed', list: groups.completed },
+    { title: 'Failed & Cancelled', list: groups.failed },
+  ];
+
+  sections.forEach(sec => {
+    if (!sec.list || sec.list.length === 0) return;
+    const header = document.createElement('div');
+    header.className = 'agent-group-title';
+    header.textContent = `${sec.title} (${sec.list.length})`;
+    drawerList.appendChild(header);
+
+    sec.list.forEach(agent => {
+      const card = document.createElement('div');
+      card.className = 'agent-card';
+      card.dataset.agentId = agent.agent_id;
+
+      const st = window.AgentHelpers.formatAgentStatus(agent.status);
+      const prov = window.AgentHelpers.formatProviderBadge(agent.provider);
+      const elapsed = window.AgentHelpers.formatElapsedTime(agent.started_at);
+
+      card.innerHTML = `
+        <div class="agent-card-header">
+          <div class="agent-card-title-group">
+            <span class="agent-status-icon ${st.badgeClass}">${st.icon}</span>
+            <span class="agent-provider-pill ${prov.pillClass}">${prov.name}</span>
+            <span class="agent-project-name">${escapeHtml(agent.project || agent.agent_id)}</span>
+          </div>
+          <span style="font-size: 11px; color: var(--text-muted);">${elapsed}</span>
+        </div>
+        <div class="agent-card-task">${escapeHtml(agent.current_task || 'No task description')}</div>
+        <div class="agent-card-footer">
+          <span>${escapeHtml(agent.model || agent.backend || '')}</span>
+          <span class="${st.badgeClass}">${st.label}</span>
+        </div>
+      `;
+
+      card.onclick = async () => {
+        if (agent.backend === 'antigravity') {
+          const payload = { action: 'switch_conversation', data: { conversation_id: agent.agent_id } };
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            const msg = cryptoKey ? await encryptData(payload) : payload;
+            ws.send(JSON.stringify(msg));
+          }
+          closeDrawer();
+        } else {
+          closeDrawer();
+          openAgentDetail(agent);
+        }
+      };
+
+      drawerList.appendChild(card);
+    });
+  });
+}
+
+// -- Drawer Tab Switching --
+if (tabAgentsBtn && tabSessionsBtn) {
+  tabAgentsBtn.onclick = () => {
+    activeDrawerTab = 'agents';
+    tabAgentsBtn.classList.add('active');
+    tabSessionsBtn.classList.remove('active');
+    renderAgents();
+  };
+  tabSessionsBtn.onclick = () => {
+    activeDrawerTab = 'sessions';
+    tabSessionsBtn.classList.add('active');
+    tabAgentsBtn.classList.remove('active');
+    renderConversations(drawerConversations);
+  };
+}
+
+// -- New Meta-AGY Task Sheet --
+function openMetaTaskSheet(prefill = null) {
+  if (!metaTaskSheet) return;
+  metaTaskSheet.hidden = false;
+  metaTaskBackdrop.hidden = false;
+  metaTaskError.hidden = true;
+  metaTaskError.textContent = '';
+
+  if (prefill) {
+    if (metaTaskProject) metaTaskProject.value = prefill.project || '';
+    if (metaTaskProvider) metaTaskProvider.value = prefill.provider || 'gemini';
+    if (metaTaskDesc) metaTaskDesc.value = prefill.task || '';
+    if (metaTaskModel) metaTaskModel.value = prefill.model || '';
+    if (prefill.context) {
+      if (metaTaskContextField) metaTaskContextField.hidden = false;
+      if (metaTaskContext) metaTaskContext.value = prefill.context;
+    } else {
+      if (metaTaskContextField) metaTaskContextField.hidden = true;
+      if (metaTaskContext) metaTaskContext.value = '';
+    }
+  } else {
+    if (metaTaskProject) metaTaskProject.value = '';
+    if (metaTaskDesc) metaTaskDesc.value = '';
+    if (metaTaskModel) metaTaskModel.value = '';
+    if (metaTaskContext) metaTaskContext.value = '';
+    if (metaTaskContextField) metaTaskContextField.hidden = true;
+  }
+}
+
+function closeMetaTaskSheet() {
+  if (!metaTaskSheet) return;
+  metaTaskSheet.hidden = true;
+  metaTaskBackdrop.hidden = true;
+}
+
+if (newMetaTaskBtn) newMetaTaskBtn.onclick = () => openMetaTaskSheet();
+if (metaTaskCloseBtn) metaTaskCloseBtn.onclick = closeMetaTaskSheet;
+if (metaTaskCancelBtn) metaTaskCancelBtn.onclick = closeMetaTaskSheet;
+if (metaTaskBackdrop) metaTaskBackdrop.onclick = closeMetaTaskSheet;
+
+if (metaTaskSubmitBtn) {
+  metaTaskSubmitBtn.onclick = async () => {
+    const project = metaTaskProject.value.trim();
+    const task = metaTaskDesc.value.trim();
+    const provider = metaTaskProvider.value;
+    const model = metaTaskModel.value.trim() || undefined;
+    const context = metaTaskContext.value.trim() || undefined;
+
+    if (!project) {
+      metaTaskError.hidden = false;
+      metaTaskError.textContent = 'Please specify a project or repository.';
+      return;
+    }
+    if (!task) {
+      metaTaskError.hidden = false;
+      metaTaskError.textContent = 'Please provide a task description.';
+      return;
+    }
+
+    metaTaskSubmitBtn.disabled = true;
+    metaTaskSubmitBtn.textContent = 'Submitting...';
+
+    try {
+      const payload = { project, task, provider, model, context };
+      const body = cryptoKey ? await encryptData(payload) : payload;
+      const res = await fetch(`/api/agents/jobs?token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        metaTaskError.hidden = false;
+        metaTaskError.textContent = err && err.detail ? err.detail : `Error ${res.status}`;
+        metaTaskSubmitBtn.disabled = false;
+        metaTaskSubmitBtn.textContent = 'Launch Agent';
+        return;
+      }
+
+      const created = await res.json();
+      metaTaskSubmitBtn.disabled = false;
+      metaTaskSubmitBtn.textContent = 'Launch Agent';
+      closeMetaTaskSheet();
+
+      // Refresh agents list and open detail
+      const idx = currentAgents.findIndex(a => a.agent_id === created.agent_id);
+      if (idx >= 0) {
+        currentAgents[idx] = created;
+      } else {
+        currentAgents.unshift(created);
+      }
+      openAgentDetail(created);
+    } catch (e) {
+      metaTaskError.hidden = false;
+      metaTaskError.textContent = `Network error: ${e.message}`;
+      metaTaskSubmitBtn.disabled = false;
+      metaTaskSubmitBtn.textContent = 'Launch Agent';
+    }
+  };
+}
+
+// -- Agent Detail Sheet & Live Streaming --
+function openAgentDetail(agent) {
+  if (!agentDetailSheet || !agent) return;
+  selectedAgent = agent;
+  agentDetailSheet.hidden = false;
+  agentDetailBackdrop.hidden = false;
+  agentOutputOffset = 0;
+  if (agentDetailOutput) agentDetailOutput.textContent = '';
+
+  updateAgentDetailSheet(agent);
+  startAgentOutputStreaming(agent.agent_id);
+}
+
+function updateAgentDetailSheet(agent) {
+  selectedAgent = agent;
+  const prov = window.AgentHelpers.formatProviderBadge(agent.provider);
+  const st = window.AgentHelpers.formatAgentStatus(agent.status);
+
+  if (agentDetailProvider) {
+    agentDetailProvider.textContent = prov.name;
+    agentDetailProvider.className = `agent-provider-pill ${prov.pillClass}`;
+  }
+  if (agentDetailProject) agentDetailProject.textContent = agent.project || agent.agent_id;
+  if (agentDetailStatus) {
+    agentDetailStatus.textContent = `${st.icon} ${st.label}`;
+    agentDetailStatus.className = `agent-status-badge ${st.badgeClass}`;
+  }
+  if (agentDetailTask) agentDetailTask.textContent = agent.current_task || '';
+  if (agentDetailModel) agentDetailModel.textContent = agent.model ? `Model: ${agent.model}` : '';
+  if (agentDetailElapsed) agentDetailElapsed.textContent = `Started: ${window.AgentHelpers.formatElapsedTime(agent.started_at)}`;
+
+  // Result card
+  if (agentDetailResultCard) {
+    if (agent.result || (agent.files_changed && agent.files_changed.length > 0) || agent.commit) {
+      agentDetailResultCard.hidden = false;
+      if (agentDetailResult) agentDetailResult.textContent = agent.result || 'Task completed without text summary.';
+      let detailsHtml = '';
+      if (agent.files_changed && agent.files_changed.length > 0) {
+        detailsHtml += `<div><strong>Files changed:</strong> ${agent.files_changed.map(f => escapeHtml(f)).join(', ')}</div>`;
+      }
+      if (agent.commit) {
+        detailsHtml += `<div><strong>Commit:</strong> <code>${escapeHtml(agent.commit)}</code></div>`;
+      }
+      if (agent.remaining_issues && agent.remaining_issues.length > 0) {
+        detailsHtml += `<div><strong>Remaining issues:</strong> ${agent.remaining_issues.map(i => escapeHtml(i)).join('; ')}</div>`;
+      }
+      if (agentDetailDetails) agentDetailDetails.innerHTML = detailsHtml;
+    } else {
+      agentDetailResultCard.hidden = true;
+    }
+  }
+
+  // Button states
+  if (agentDetailCancelBtn) {
+    agentDetailCancelBtn.disabled = agent.status === 'completed' || agent.status === 'cancelled' || agent.status === 'failed';
+  }
+  if (agentDetailRetryBtn) {
+    agentDetailRetryBtn.disabled = agent.status === 'running' || agent.status === 'needs_attention';
+  }
+}
+
+function closeAgentDetailSheet() {
+  if (!agentDetailSheet) return;
+  agentDetailSheet.hidden = true;
+  agentDetailBackdrop.hidden = true;
+  selectedAgent = null;
+  stopAgentOutputStreaming();
+}
+
+if (agentDetailCloseBtn) agentDetailCloseBtn.onclick = closeAgentDetailSheet;
+if (agentDetailBackdrop) agentDetailBackdrop.onclick = closeAgentDetailSheet;
+
+if (agentDetailCancelBtn) {
+  agentDetailCancelBtn.onclick = async () => {
+    if (!selectedAgent) return;
+    agentDetailCancelBtn.disabled = true;
+    agentDetailCancelBtn.textContent = 'Stopping...';
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(selectedAgent.agent_id)}/cancel?token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+        headers: { 'X-Auth-Token': authToken }
+      });
+      if (res.ok) {
+        selectedAgent.status = 'cancelled';
+        updateAgentDetailSheet(selectedAgent);
+      }
+    } catch (e) {
+      console.warn('Failed stopping agent:', e);
+    } finally {
+      agentDetailCancelBtn.textContent = 'Stop';
+    }
+  };
+}
+
+if (agentDetailRetryBtn) {
+  agentDetailRetryBtn.onclick = async () => {
+    if (!selectedAgent) return;
+    agentDetailRetryBtn.disabled = true;
+    agentDetailRetryBtn.textContent = 'Retrying...';
+    try {
+      const res = await fetch(`/api/agents/${encodeURIComponent(selectedAgent.agent_id)}/retry?token=${encodeURIComponent(authToken)}`, {
+        method: 'POST',
+        headers: { 'X-Auth-Token': authToken }
+      });
+      if (res.ok) {
+        const retried = await res.json();
+        openAgentDetail(retried);
+      }
+    } catch (e) {
+      console.warn('Failed retrying agent:', e);
+    } finally {
+      agentDetailRetryBtn.textContent = 'Retry';
+    }
+  };
+}
+
+if (agentDetailHandoffBtn) {
+  agentDetailHandoffBtn.onclick = () => {
+    if (!selectedAgent) return;
+    const handoffPayload = window.AgentHelpers.buildHandoffPayload(selectedAgent);
+    closeAgentDetailSheet();
+    openMetaTaskSheet(handoffPayload);
+  };
+}
+
+function startAgentOutputStreaming(agentId) {
+  stopAgentOutputStreaming();
+  pollAgentOutput(agentId);
+  agentOutputTimer = setInterval(() => {
+    if (selectedAgent && selectedAgent.agent_id === agentId && selectedAgent.status === 'running') {
+      pollAgentOutput(agentId);
+    }
+  }, 2000);
+}
+
+function stopAgentOutputStreaming() {
+  if (agentOutputTimer !== null) {
+    clearInterval(agentOutputTimer);
+    agentOutputTimer = null;
+  }
+}
+
+async function pollAgentOutput(agentId) {
+  try {
+    const res = await fetch(
+      `/api/agents/${encodeURIComponent(agentId)}/output?token=${encodeURIComponent(authToken)}&offset=${agentOutputOffset}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      appendAgentOutput(data.content, data.next_offset);
+    }
+  } catch (e) {
+    console.debug('Failed polling agent output:', e);
+  }
+}
+
+function appendAgentOutput(content, nextOffset) {
+  if (nextOffset != null) agentOutputOffset = nextOffset;
+  if (!content || !agentDetailOutput) return;
+  agentDetailOutput.textContent += content;
+  agentDetailOutput.scrollTop = agentDetailOutput.scrollHeight;
+}
+
 async function openDrawer() {
   drawer.classList.add('open');
   drawerBackdrop.classList.add('open');
   updateSessionDots();
   startDrawerDotTimer();
   try {
-    const res = await fetch(`/api/conversations?token=${encodeURIComponent(authToken)}`);
-    if (res.ok) {
-      const convs = await res.json();
-      renderConversations(convs);
+    const [convRes, agentRes] = await Promise.all([
+      fetch(`/api/conversations?token=${encodeURIComponent(authToken)}`),
+      fetch(`/api/agents?token=${encodeURIComponent(authToken)}`),
+    ]);
+    if (convRes.ok) {
+      drawerConversations = await convRes.json();
     }
+    if (agentRes.ok) {
+      currentAgents = await agentRes.json();
+    }
+    renderCurrentDrawerTab();
   } catch (e) {
-    console.debug('Failed refreshing conversations in drawer:', e);
+    console.debug('Failed refreshing drawer:', e);
   }
 }
 

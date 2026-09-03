@@ -469,6 +469,70 @@ body {
   gap: 6px;
 }
 
+/* Question dock: an ask_question gate rendered as options, not a
+   permission. Reuses the banner shell (pulse, radius) but tightens the
+   rhythm and makes every option a full-width, thumb-sized row. */
+.question-dock {
+  gap: 8px;
+}
+
+.question-text {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.35;
+}
+
+.question-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  background-color: #0a0e17;
+  border: 1px solid var(--border-color);
+  font-size: 13px;
+  color: #f1f5f9;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.question-option:active {
+  background-color: rgba(0, 229, 255, 0.1);
+  border-color: var(--accent);
+}
+
+.question-option input {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.question-custom {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-color);
+  background-color: #0a0e17;
+  color: #f1f5f9;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.question-custom:focus {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.question-submit {
+  width: 100%;
+  flex: none;
+}
+
 /* Bottom Bar & Input */
 .bottom-bar {
   background-color: var(--bg-card);
@@ -1749,4 +1813,261 @@ details.message-system > summary {
 .md-mermaid svg {
   max-width: 100%;
   height: auto;
+}
+
+/* Multi-Agent Control Plane & Dashboard */
+.drawer-tabs {
+  display: flex;
+  background-color: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+  padding: 4px;
+  gap: 4px;
+}
+
+.drawer-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.drawer-tab.active {
+  background-color: var(--bg-card-hover);
+  color: #fff;
+}
+
+.agent-group-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  padding: 12px 14px 4px;
+}
+
+.agent-card {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-card:hover, .agent-card:active {
+  background-color: var(--bg-card-hover);
+}
+
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-status-icon {
+  font-size: 12px;
+}
+
+.agent-status-icon.agent-status-running {
+  color: #3b82f6;
+  animation: pulse 2s infinite;
+}
+
+.agent-status-icon.agent-status-attention {
+  color: #f59e0b;
+  font-weight: 800;
+}
+
+.agent-status-icon.agent-status-completed {
+  color: #10b981;
+}
+
+.agent-status-icon.agent-status-failed {
+  color: #ef4444;
+}
+
+.agent-status-icon.agent-status-cancelled {
+  color: var(--text-muted);
+}
+
+.agent-provider-pill {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: #272f3d;
+  color: #c8d0dc;
+}
+
+.provider-gemini {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.provider-claude {
+  background-color: rgba(249, 115, 22, 0.2);
+  color: #fb923c;
+  border: 1px solid rgba(249, 115, 22, 0.3);
+}
+
+.provider-codex {
+  background-color: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.provider-astra {
+  background-color: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.provider-agy {
+  background-color: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.agent-project-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-card-task {
+  font-size: 12px;
+  color: var(--text-main);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agent-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Agent detail sheet */
+.agent-sheet-title-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+}
+
+.agent-info-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.agent-info-task {
+  font-size: 14px;
+  color: #fff;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+.agent-meta-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.agent-result-card {
+  background-color: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.result-card-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #34d399;
+  margin-bottom: 6px;
+}
+
+.result-card-content {
+  font-size: 13px;
+  color: #fff;
+  line-height: 1.4;
+}
+
+.result-card-details {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.agent-output-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-output-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.agent-output-pre {
+  background-color: #05070c;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #c8d0dc;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sheet-select {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: #fff;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
 }

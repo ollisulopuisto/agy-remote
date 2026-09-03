@@ -9,6 +9,7 @@ or a decision travels to the CLI) lives in a backend, see `backends.py`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -24,12 +25,14 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from .backends import AgentBackend, make_backend
+from .backends import AgentBackend, make_backend, parse_ask_question_args
 from .config import RUNTIME_STATE_FILE, RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
 from .loop_guard import LoopGuard
 from .mailbox import format_envelope, mailbox_dir, parse_message_line
+from .meta_agy import MetaAgyClient
 from .models import (
+    AgentRecord,
     ApprovalResponseRequest,
     ConversationSummary,
     SessionRecord,
@@ -75,10 +78,18 @@ class SessionManager:
         backend: AgentBackend | None = None,
         push_manager: Any = None,
         title_store: Path | None = None,
+        meta_agy_client: MetaAgyClient | None = None,
     ) -> None:
         self.config = config or get_config()
         self.backend = backend or make_backend(self.config)
         self.push_manager = push_manager
+        self.meta_agy = meta_agy_client or MetaAgyClient(
+            base_url=self.config.meta_agy_url,
+            token=self.config.meta_agy_token,
+        )
+        self._meta_jobs: dict[str, AgentRecord] = {}
+        self._meta_job_outputs: dict[str, str] = {}
+        self._last_meta_poll: float = 0.0
         self.active_conversation_id: str | None = None
         #: The conversation ID belonging to the supervised agy process for this server.
         self.supervised_conversation_id: str | None = None
@@ -182,6 +193,8 @@ class SessionManager:
         latest = self.get_latest_conversation_id()
         if latest:
             await self.switch_conversation(latest)
+        with contextlib.suppress(Exception):
+            await self.poll_meta_agy()
         self._watcher_task = asyncio.create_task(self._watch_loop())
 
     async def stop(self) -> None:
@@ -346,6 +359,8 @@ class SessionManager:
                 "terminal": self.terminal.snapshot() if self.terminal else None,
                 # Which agent-to-agent pairs are chattering, looping, or muted.
                 "agent_traffic": self.agent_traffic(),
+                # Unified agent list (native Antigravity sessions + meta-AGY worker jobs)
+                "agents": [a.model_dump(mode="json") for a in self.list_cached_agents()],
             },
         }
 
@@ -537,6 +552,282 @@ class SessionManager:
     def get_session_by_conversation(self, conversation_id: str) -> SessionRecord | None:
         """Find a session record by its Antigravity conversation ID."""
         return self.get_session(conversation_id)
+
+    # -------------------------------------------------------------------------
+    # Generalized Agent & Meta-AGY Integration
+    # -------------------------------------------------------------------------
+
+    def _antigravity_agent_records(self) -> list[AgentRecord]:
+        """Represent native Antigravity sessions and conversations as generalized AgentRecord."""
+        records: list[AgentRecord] = []
+        pending_approvals = self.get_active_pending_approvals()
+        pending_by_conv: dict[str, int] = {}
+        for p in pending_approvals:
+            cid = p.get("conversation_id")
+            if cid:
+                pending_by_conv[cid] = pending_by_conv.get(cid, 0) + 1
+
+        conversations = self.list_conversations()
+        seen_convs = set()
+
+        for conv in conversations:
+            seen_convs.add(conv.id)
+            sess = self.get_session_by_conversation(conv.id)
+            workdir = str(sess.workdir) if (sess and sess.workdir) else None
+            project_name = Path(workdir).name if workdir else conv.title
+
+            if pending_by_conv.get(conv.id, 0) > 0:
+                status = "needs_attention"
+            elif self.is_conversation_busy(conv.id):
+                status = "running"
+            else:
+                status = "completed"
+
+            model = None
+            if self.terminal:
+                snap = self.terminal.snapshot()
+                mode = snap.get("mode")
+                if mode:
+                    model = mode
+
+            records.append(
+                AgentRecord(
+                    agent_id=conv.id,
+                    backend="antigravity",
+                    provider="antigravity",
+                    model=model,
+                    project=project_name,
+                    workspace=workdir,
+                    current_task=conv.title,
+                    status=status,
+                    started_at=conv.created_at,
+                    last_activity=conv.updated_at,
+                )
+            )
+
+        for sid, sess in self._sessions.items():
+            if sess.conversation_id and sess.conversation_id in seen_convs:
+                continue
+            workdir = str(sess.workdir) if sess.workdir else None
+            project_name = Path(workdir).name if workdir else sess.id
+            status = "running" if sess.busy else "completed"
+            records.append(
+                AgentRecord(
+                    agent_id=sess.conversation_id or sid,
+                    backend="antigravity",
+                    provider="antigravity",
+                    model=None,
+                    project=project_name,
+                    workspace=workdir,
+                    current_task=f"Session {sess.tmux_name or sid}",
+                    status=status,
+                    started_at=sess.created_at,
+                    last_activity=sess.last_activity_at,
+                )
+            )
+
+        return records
+
+    def _sort_agent_records(self, records: list[AgentRecord]) -> list[AgentRecord]:
+        """Sort agents: attention-needed & running first, then completed and failed."""
+        status_priority = {
+            "needs_attention": 0,
+            "running": 1,
+            "completed": 2,
+            "failed": 3,
+            "cancelled": 4,
+        }
+
+        def sort_key(rec: AgentRecord):
+            prio = status_priority.get(rec.status, 5)
+            ts = 0.0
+            t_val = rec.last_activity or rec.started_at
+            if isinstance(t_val, datetime):
+                ts = t_val.timestamp()
+            elif isinstance(t_val, str):
+                try:
+                    ts = datetime.fromisoformat(t_val).timestamp()
+                except Exception:
+                    ts = 0.0
+            return (prio, -ts)
+
+        return sorted(records, key=sort_key)
+
+    def list_cached_agents(self) -> list[AgentRecord]:
+        """Combined list of native and meta-AGY agents from local cache."""
+        all_records = self._antigravity_agent_records() + list(self._meta_jobs.values())
+        return self._sort_agent_records(all_records)
+
+    async def list_agents(self) -> list[AgentRecord]:
+        """Fresh list of all agents, polling meta-AGY if reachable."""
+        await self.poll_meta_agy()
+        return self.list_cached_agents()
+
+    async def get_agent(self, agent_id: str) -> AgentRecord | None:
+        """Find an agent record by ID across meta-AGY and native sessions."""
+        if agent_id in self._meta_jobs:
+            return self._meta_jobs[agent_id]
+        try:
+            job = await self.meta_agy.get_job(agent_id)
+            if job:
+                self._meta_jobs[job.agent_id] = job
+                return job
+        except Exception:
+            pass
+
+        for agent in self._antigravity_agent_records():
+            if agent.agent_id == agent_id:
+                return agent
+        return None
+
+    async def get_agent_output(self, agent_id: str, offset: int = 0) -> tuple[str, int]:
+        """Fetch incremental output for an agent. Returns (content, next_offset)."""
+        agent = await self.get_agent(agent_id)
+        if agent and agent.backend == "meta-agy":
+            content, next_offset = await self.meta_agy.get_output(agent_id, offset)
+            prev_out = self._meta_job_outputs.get(agent_id, "")
+            if offset == 0:
+                self._meta_job_outputs[agent_id] = content
+            elif content:
+                self._meta_job_outputs[agent_id] = prev_out + content
+            return content, next_offset
+
+        # For native antigravity sessions:
+        if self.terminal:
+            snap = self.terminal.snapshot()
+            full_text = "\n".join(snap.get("lines", []))
+            encoded = full_text.encode("utf-8")
+            if offset >= len(encoded):
+                return "", len(encoded)
+            slice_bytes = encoded[offset:]
+            return slice_bytes.decode("utf-8", errors="replace"), len(encoded)
+        return "", offset
+
+    async def submit_meta_job(
+        self,
+        project: str,
+        task: str,
+        provider: str = "gemini",
+        model: str | None = None,
+        context: str | None = None,
+    ) -> AgentRecord:
+        """Submit a structured job to meta-AGY."""
+        job = await self.meta_agy.submit_job(
+            project=project,
+            task=task,
+            provider=provider,
+            model=model,
+            context=context,
+        )
+        self._meta_jobs[job.agent_id] = job
+        if self.push_manager:
+            self.push_manager.send_notification(
+                f"Agent Started: [{provider}] {project}",
+                task,
+                data={"agent_id": job.agent_id, "backend": "meta-agy", "status": "running"},
+            )
+        await self.broadcast(
+            {
+                "event": "agent_updated",
+                "data": {"agent": job.model_dump(mode="json")},
+            }
+        )
+        return job
+
+    async def cancel_agent(self, agent_id: str) -> bool:
+        """Stop or cancel an agent."""
+        agent = await self.get_agent(agent_id)
+        if agent and agent.backend == "meta-agy":
+            success = await self.meta_agy.cancel_job(agent_id)
+            if success and agent_id in self._meta_jobs:
+                updated_job = self._meta_jobs[agent_id].model_copy(update={"status": "cancelled"})
+                self._meta_jobs[agent_id] = updated_job
+                if self.push_manager:
+                    self.push_manager.send_notification(
+                        f"Agent Cancelled: [{updated_job.provider}] {updated_job.project or agent_id}",
+                        "Task was cancelled by operator.",
+                        data={"agent_id": agent_id, "backend": "meta-agy", "status": "cancelled"},
+                    )
+                await self.broadcast(
+                    {
+                        "event": "agent_updated",
+                        "data": {"agent": updated_job.model_dump(mode="json")},
+                    }
+                )
+            return success
+
+        # Native session stop
+        from .keys import send_key_to_supervisor
+
+        supervisor = self.get_supervisor(agent_id)
+        if supervisor:
+            send_key_to_supervisor(supervisor, "escape")
+            return True
+        return False
+
+    async def retry_agent(self, agent_id: str) -> AgentRecord:
+        """Retry a failed or completed meta-AGY agent job."""
+        job = await self.meta_agy.retry_job(agent_id)
+        self._meta_jobs[job.agent_id] = job
+        if self.push_manager:
+            self.push_manager.send_notification(
+                f"Agent Retried: [{job.provider}] {job.project or agent_id}",
+                job.current_task or "Retrying task",
+                data={"agent_id": job.agent_id, "backend": "meta-agy", "status": job.status},
+            )
+        await self.broadcast(
+            {
+                "event": "agent_updated",
+                "data": {"agent": job.model_dump(mode="json")},
+            }
+        )
+        return job
+
+    async def poll_meta_agy(self) -> list[AgentRecord]:
+        """Poll meta-AGY for updates, detect status transitions, and notify."""
+        try:
+            jobs = await self.meta_agy.list_jobs()
+        except Exception as exc:
+            logger.debug("Failed polling meta-AGY: %s", exc)
+            return list(self._meta_jobs.values())
+
+        updated = False
+        for job in jobs:
+            prev = self._meta_jobs.get(job.agent_id)
+            if prev is not None and prev.status != job.status:
+                updated = True
+                if self.push_manager:
+                    if job.status == "completed":
+                        self.push_manager.send_notification(
+                            f"Agent Completed: [{job.provider}] {job.project or 'Job'}",
+                            job.current_task or "Task finished successfully.",
+                            data={"agent_id": job.agent_id, "backend": "meta-agy", "status": "completed"},
+                        )
+                    elif job.status == "failed":
+                        self.push_manager.send_notification(
+                            f"Agent Failed: [{job.provider}] {job.project or 'Job'}",
+                            job.current_task or "Job execution failed.",
+                            data={"agent_id": job.agent_id, "backend": "meta-agy", "status": "failed"},
+                        )
+                    elif job.status == "needs_attention":
+                        self.push_manager.send_notification(
+                            f"Agent Needs Attention: [{job.provider}] {job.project or 'Job'}",
+                            job.current_task or "Operator attention required.",
+                            data={"agent_id": job.agent_id, "backend": "meta-agy", "status": "needs_attention"},
+                        )
+            elif prev is None:
+                updated = True
+
+            self._meta_jobs[job.agent_id] = job
+
+        if updated:
+            await self.broadcast(
+                {
+                    "event": "agent_updated",
+                    "data": {"agents": [a.model_dump(mode="json") for a in self.list_cached_agents()]},
+                }
+            )
+        return list(self._meta_jobs.values())
 
     def get_supervisor(self, key: str | None = None) -> Any | None:
         """Find supervisor for session key, conversation_id, or active session."""
@@ -1217,6 +1508,12 @@ class SessionManager:
                 # sends the close frame, so the socket alone proves nothing.
                 await self.reap_stale_clients()
 
+                # Poll meta-AGY jobs periodically
+                now = time.monotonic()
+                if now - self._last_meta_poll >= self.config.meta_agy_poll_interval:
+                    self._last_meta_poll = now
+                    await self.poll_meta_agy()
+
                 await asyncio.sleep(0.3)
             except asyncio.CancelledError:
                 break
@@ -1265,6 +1562,10 @@ class SessionManager:
             "created_at": datetime.now().isoformat(),
             "status": "pending",
         }
+        if tool_name == "ask_question":
+            parsed_questions = parse_ask_question_args(args)
+            if parsed_questions:
+                approval_data["questions"] = parsed_questions
         self._pending_approvals[approval_id] = approval_data
         self._forget_old_answers()
 

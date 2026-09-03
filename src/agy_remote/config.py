@@ -454,6 +454,10 @@ class RemoteConfig(BaseModel):
     #: human breaks it. Generous on purpose: real collaboration is bursts with
     #: a person steering between them.
     mailbox_ping_pong_limit: int = 20
+    #: Meta-AGY V2 endpoint configuration
+    meta_agy_url: str = Field(default_factory=lambda: os.environ.get("META_AGY_URL", "http://127.0.0.1:8000"))
+    meta_agy_token: str | None = Field(default_factory=lambda: os.environ.get("META_AGY_TOKEN"))
+    meta_agy_poll_interval: float = 2.0
 
     def model_post_init(self, __context: object) -> None:
         if "tailscale_ip" not in self.model_fields_set:

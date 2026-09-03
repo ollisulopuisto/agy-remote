@@ -81,6 +81,48 @@ class SessionRecord(BaseModel):
     last_activity_at: datetime = Field(default_factory=datetime.now)
 
 
+class AgentRecord(BaseModel):
+    """A generalized agent (native Antigravity session or Meta-AGY worker job)."""
+
+    agent_id: str
+    backend: Literal["antigravity", "meta-agy"] = "antigravity"
+    provider: str = "antigravity"  # e.g., "antigravity", "gemini", "claude", "codex", "astra"
+    model: str | None = None
+    project: str | None = None
+    workspace: str | None = None
+    current_task: str | None = None
+    status: Literal["running", "needs_attention", "completed", "failed", "cancelled"] | str = "running"
+    started_at: datetime | str | None = None
+    last_activity: datetime | str | None = None
+
+    # Meta-AGY detail & outcome fields
+    result: str | None = None
+    files_changed: list[str] = Field(default_factory=list)
+    tests_run: list[str] | dict[str, Any] | None = None
+    commit: str | None = None
+    remaining_issues: list[str] = Field(default_factory=list)
+    output_offset: int = 0
+
+
+class SubmitMetaJobRequest(BaseModel):
+    """Structured request to submit a task to meta-AGY."""
+
+    project: str
+    provider: str = "gemini"
+    task: str
+    model: str | None = None
+    context: str | None = None  # Hand-off context from prior job result
+
+
+class JobOutputResponse(BaseModel):
+    """Incremental output response for an agent."""
+
+    agent_id: str
+    offset: int
+    next_offset: int
+    content: str
+
+
 class UserPromptRequest(BaseModel):
     """Request payload to send a prompt to an active session."""
 

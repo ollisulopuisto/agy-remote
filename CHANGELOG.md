@@ -1,5 +1,35 @@
 # Changelog
 
+## v26.09.04.109 — Meta-AGY multi-agent control and observation plane
+
+- **Meta-AGY multi-agent control and observation plane.** Extended `agy-remote` from
+  a remote UI for Antigravity sessions into a multi-agent control and observation plane
+  for `meta-AGY`. `agy-remote` coordinates and observes worker tasks without becoming
+  the orchestration engine.
+- **Unified agent model (`AgentRecord`).** Generalized sessions and workers into an `AgentRecord`
+  model (`agent_id`, `backend`, `provider`, `model`, `project`, `workspace`, `current_task`,
+  `status`, `started_at`, `last_activity`, `result`, `files_changed`, `tests_run`, `commit`,
+  `remaining_issues`, `output_offset`). Antigravity sessions and Meta-AGY workers coexist
+  seamlessly in unified lists and snapshots.
+- **Meta-AGY V2 async job client (`MetaAgyClient`).** Implemented HTTP client consuming
+  meta-AGY asynchronous job endpoints (`list_jobs`, `get_job`, `submit_job`, `get_output`,
+  `cancel_job`, `retry_job`) with incremental offset-based output streaming and robust error handling.
+- **Multi-agent REST & WebSocket API.** Added authenticated endpoints `/api/agents`,
+  `/api/agents/{id}`, `/api/agents/{id}/output`, `/api/agents/jobs` (201 Created),
+  `/api/agents/{id}/cancel`, `/api/agents/{id}/retry`, and WebSocket actions `get_agents`
+  and `get_agent_output`. Reconnect payloads automatically include fresh snapshots of all active agents.
+- **Multi-agent mobile dashboard & drawer.** Added "All Agents" drawer view partitioned into
+  "Needs Attention", "Running", "Completed", and "Failed & Cancelled" cards with live status
+  indicators, elapsed execution time, and provider badges.
+- **New Task Sheet (`#metaTaskSheet`) & Agent Detail Sheet (`#agentDetailSheet`).** Mobile-friendly
+  workflow to launch worker tasks with project, provider (`gemini`, `claude`, `codex`, `astra`),
+  model, and task parameters. Detailed view provides live log streaming, outcome inspection
+  (result summary, files changed, commit hash, remaining issues), Stop and Retry controls.
+- **Task handoff & delegation.** Implemented one-tap result delegation (`buildHandoffPayload`)
+  to transition completed tasks into follow-up tasks for subsequent worker agents with context pre-populated.
+- **Push notifications for worker state transitions.** Dispatches Web Push alerts on job completion,
+  failure, cancellation, and attention-needed states with deep-linking payload data.
+
 ## v26.08.31.107 — The session's project is browsable from the phone
 
 - **File tree pane (Files chip).** The PWA could only open a file the

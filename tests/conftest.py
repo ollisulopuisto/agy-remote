@@ -6,6 +6,8 @@ import agy_remote.config as config_mod
 @pytest.fixture(autouse=True)
 def reset_config_singleton(monkeypatch):
     """Ensure every test starts and finishes with a clean config singleton."""
+    for key in ["AGY_REMOTE_URL", "AGY_REMOTE_SKIP_PERMISSIONS", "AGY_REMOTE_PORT", "AGY_REMOTE_TOKEN"]:
+        monkeypatch.delenv(key, raising=False)
     config_mod.config_instance = None
     yield
     config_mod.config_instance = None

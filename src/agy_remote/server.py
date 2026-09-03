@@ -49,6 +49,7 @@ from .models import (
     MuteMailboxRequest,
     NewSessionRequest,
     RenameConversationRequest,
+    SubmitMetaJobRequest,
     UserPromptRequest,
 )
 from .pty_runner import get_pty_supervisor
@@ -94,12 +95,16 @@ def looks_like_image(ext: str, content: bytes) -> bool:
     return True
 
 
-def create_app(config: RemoteConfig | None = None) -> FastAPI:
+def create_app(
+    config: RemoteConfig | None = None,
+    session_mgr: SessionManager | None = None,
+) -> FastAPI:
     """Factory creating configured FastAPI app."""
     cfg = config or get_config()
     validate_bind_security(cfg)
     push_mgr = get_push_manager()
-    session_mgr = SessionManager(cfg, push_manager=push_mgr)
+    if session_mgr is None:
+        session_mgr = SessionManager(cfg, push_manager=push_mgr)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -384,6 +389,114 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(e)) from e
         except SpawnerError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # -------------------------------------------------------------------------
+    # Unified Multi-Agent & Meta-AGY Endpoints
+    # -------------------------------------------------------------------------
+
+    @app.get("/api/agents")
+    async def list_agents_endpoint(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> list[dict[str, Any]]:
+        """List all agents (native Antigravity sessions and meta-AGY jobs)."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        agents = await mgr.list_agents()
+        return [a.model_dump(mode="json") for a in agents]
+
+    @app.get("/api/agents/{agent_id}")
+    async def get_agent_endpoint(
+        agent_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Get details of a specific agent."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        agent = await mgr.get_agent(agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        return agent.model_dump(mode="json")
+
+    @app.get("/api/agents/{agent_id}/output")
+    async def get_agent_output_endpoint(
+        agent_id: str,
+        request: Request,
+        offset: int = 0,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Fetch incremental output for an agent."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        content, next_offset = await mgr.get_agent_output(agent_id, offset=offset)
+        return {
+            "agent_id": agent_id,
+            "offset": offset,
+            "next_offset": next_offset,
+            "content": content,
+        }
+
+    @app.post("/api/agents/jobs", status_code=status.HTTP_201_CREATED)
+    async def submit_meta_job_endpoint(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Submit a new task to meta-AGY."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled and isinstance(body, dict) and body.get("encrypted"):
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        req = SubmitMetaJobRequest.model_validate(body)
+        try:
+            job = await mgr.submit_meta_job(
+                project=req.project,
+                task=req.task,
+                provider=req.provider,
+                model=req.model,
+                context=req.context,
+            )
+            return job.model_dump(mode="json")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to submit meta-AGY job: {exc}") from exc
+
+    @app.post("/api/agents/{agent_id}/cancel")
+    async def cancel_agent_endpoint(
+        agent_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Stop or cancel an agent."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        success = await mgr.cancel_agent(agent_id)
+        return {"ok": success, "agent_id": agent_id}
+
+    @app.post("/api/agents/{agent_id}/retry")
+    async def retry_agent_endpoint(
+        agent_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Retry a completed or failed agent job."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        try:
+            job = await mgr.retry_agent(agent_id)
+            return job.model_dump(mode="json")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Failed to retry agent {agent_id}: {exc}") from exc
 
     @app.get("/api/mailbox")
     async def get_mailbox(
@@ -883,6 +996,29 @@ def create_app(config: RemoteConfig | None = None) -> FastAPI:
                     # pointing at nothing.
                     if isinstance(target_id, str) and mgr.backend.is_known_conversation(target_id):
                         await mgr.switch_conversation(target_id, pin=True)
+                elif action == "get_agents":
+                    agents = await mgr.list_agents()
+                    await mgr.send_to(
+                        websocket,
+                        {"event": "agent_updated", "data": {"agents": [a.model_dump(mode="json") for a in agents]}},
+                    )
+                elif action == "get_agent_output":
+                    agent_id = data.get("agent_id")
+                    offset = int(data.get("offset", 0))
+                    if agent_id:
+                        content, next_offset = await mgr.get_agent_output(agent_id, offset)
+                        await mgr.send_to(
+                            websocket,
+                            {
+                                "event": "agent_output",
+                                "data": {
+                                    "agent_id": agent_id,
+                                    "offset": offset,
+                                    "next_offset": next_offset,
+                                    "content": content,
+                                },
+                            },
+                        )
         except WebSocketDisconnect:
             pass
         except Exception as e:
