@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import secrets
@@ -862,7 +863,14 @@ def create_app(
         tool_call = payload.get("toolCall", {})
         tool_name = tool_call.get("name", "unknown_tool")
         args = tool_call.get("args", {})
-        conversation_id = payload.get("conversationId", "default")
+        if isinstance(args, str):
+            with contextlib.suppress(Exception):
+                args = json.loads(args)
+
+        conversation_id = payload.get("conversationId")
+        if not conversation_id or conversation_id == "default":
+            conversation_id = mgr.supervised_conversation_id or mgr.active_conversation_id or "default"
+
         approval_id = str(uuid.uuid4())
 
         # A mixed install breaks the approval protocol silently: a new run's

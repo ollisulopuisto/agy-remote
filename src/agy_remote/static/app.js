@@ -1075,6 +1075,16 @@ function appendStep(step, target) {
         const toolName = tc.name || tc.function?.name || 'tool_call';
         const toolArgs = tc.args || tc.function?.arguments || {};
 
+        if (toolName === 'ask_question') {
+          const qs = window.AgyFormat.parseQuestions(tc) ||
+                     window.AgyFormat.parseQuestions({ args: toolArgs, questions: toolArgs && toolArgs.questions }) ||
+                     window.AgyFormat.parseQuestions(toolArgs);
+          if (qs && qs.length > 0) {
+            modelDiv.appendChild(renderQuestionCard(qs, toolName, toolArgs));
+            return;
+          }
+        }
+
         let bodyContent = '';
         if (toolArgs.TargetContent && toolArgs.ReplacementContent) {
           bodyContent = renderDiff(toolArgs.TargetContent, toolArgs.ReplacementContent, toolArgs.TargetFile);
@@ -1188,6 +1198,57 @@ function renderDiff(target, replacement, filepath) {
   return html;
 }
 
+// Render Structured Question Card (transcript tool-call)
+function renderQuestionCard(qs, toolName, toolArgs) {
+  const card = document.createElement('div');
+  card.className = 'question-card';
+
+  const countSuffix = qs.length > 1 ? ` (${qs.length} questions)` : '';
+  const header = document.createElement('div');
+  header.className = 'question-card-header';
+  header.innerHTML = `
+    <span class="question-card-badge">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      Question${countSuffix}
+    </span>
+  `;
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'question-card-body';
+
+  qs.forEach((q, qi) => {
+    const qSection = document.createElement('div');
+    qSection.className = 'question-card-section';
+
+    const qTitle = document.createElement('div');
+    qTitle.className = 'question-card-prompt';
+    const numPrefix = qs.length > 1 ? `<span class="question-num">#${qi + 1}</span> ` : '';
+    const modeBadge = q.multiSelect
+      ? '<span class="question-pill-mode">Select multiple</span>'
+      : '<span class="question-pill-mode">Select one</span>';
+    qTitle.innerHTML = `${numPrefix}${escapeHtml(q.question || 'Question')} ${modeBadge}`;
+    qSection.appendChild(qTitle);
+
+    if (q.options && q.options.length > 0) {
+      const optList = document.createElement('div');
+      optList.className = 'question-card-options';
+      q.options.forEach((opt) => {
+        const row = document.createElement('div');
+        row.className = 'question-card-opt-row';
+        const icon = q.multiSelect ? '☐' : '○';
+        row.innerHTML = `<span class="question-card-opt-bullet">${icon}</span><span class="question-card-opt-text">${escapeHtml(opt)}</span>`;
+        optList.appendChild(row);
+      });
+      qSection.appendChild(optList);
+    }
+    body.appendChild(qSection);
+  });
+
+  card.appendChild(body);
+  return card;
+}
+
 // Render Interactive Tool Approval Banner
 
 // Auto-accept: the operator's switch, persisted on the device. On, every
@@ -1255,6 +1316,8 @@ if (soundToggleBtn) {
 // keeps the approval's id so the resolution event removes it like any other.
 function renderQuestionDock(app) {
   const qs = window.AgyFormat.parseQuestions(app);
+  if (!qs || !qs.length) return;
+
   const dock = document.createElement('div');
   dock.id = `approval-${app.id}`;
   dock.className = 'approval-banner question-dock';
@@ -1269,10 +1332,17 @@ function renderQuestionDock(app) {
   }
 
   qs.forEach((q, qi) => {
+    const qSection = document.createElement('div');
+    qSection.className = 'question-dock-section';
+
     const qText = document.createElement('div');
     qText.className = 'question-text';
-    qText.textContent = q.question || 'Answer';
-    dock.appendChild(qText);
+    const numPrefix = qs.length > 1 ? `<span class="question-num">#${qi + 1}</span> ` : '';
+    const modeBadge = q.multiSelect
+      ? '<span class="question-pill-mode">Select multiple</span>'
+      : '<span class="question-pill-mode">Select one</span>';
+    qText.innerHTML = `${numPrefix}${escapeHtml(q.question || 'Answer')} ${modeBadge}`;
+    qSection.appendChild(qText);
 
     q.options.forEach((opt, oi) => {
       const label = document.createElement('label');
@@ -1285,7 +1355,7 @@ function renderQuestionDock(app) {
       const text = document.createElement('span');
       text.textContent = opt;
       label.appendChild(text);
-      dock.appendChild(label);
+      qSection.appendChild(label);
     });
 
     const custom = document.createElement('input');
@@ -1293,7 +1363,9 @@ function renderQuestionDock(app) {
     custom.className = 'question-custom';
     custom.id = `question-${app.id}-${qi}-custom`;
     custom.placeholder = 'Or type an answer…';
-    dock.appendChild(custom);
+    qSection.appendChild(custom);
+
+    dock.appendChild(qSection);
   });
 
   const submit = document.createElement('button');

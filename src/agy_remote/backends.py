@@ -117,30 +117,92 @@ def parse_ask_question_args(args: Any) -> list[dict[str, Any]] | None:
     question-shaped data yields None so the client falls back to a plain
     banner rather than drawing an empty dock.
     """
-    raw = args.get("questions") if isinstance(args, dict) else None
-    if isinstance(raw, str):
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except (ValueError, TypeError):
+            return None
+
+    raw = None
+    if isinstance(args, list):
+        raw = args
+    elif isinstance(args, dict):
+        if "questions" in args:
+            raw = args["questions"]
+        elif "question" in args or "prompt" in args or "text" in args:
+            raw = [args]
+
+    while isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except ValueError:
+        except (ValueError, TypeError):
             return None
+
     if isinstance(raw, dict):
-        raw = [raw]
+        if "questions" in raw:
+            raw = raw["questions"]
+            while isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (ValueError, TypeError):
+                    return None
+        else:
+            raw = [raw]
+
     if not isinstance(raw, list):
         return None
 
     questions: list[dict[str, Any]] = []
     for entry in raw:
+        while isinstance(entry, str):
+            try:
+                entry = json.loads(entry)
+            except (ValueError, TypeError):
+                break
         if not isinstance(entry, dict):
             continue
-        question = str(entry.get("question") or entry.get("prompt") or entry.get("text") or "").strip()
-        options = [str(o).strip() for o in entry.get("options") or [] if str(o).strip()]
+        question = str(
+            entry.get("question")
+            or entry.get("prompt")
+            or entry.get("text")
+            or entry.get("title")
+            or entry.get("message")
+            or entry.get("header")
+            or ""
+        ).strip()
+        raw_options = entry.get("options") or entry.get("choices") or entry.get("items") or entry.get("answers") or []
+        if isinstance(raw_options, str):
+            try:
+                raw_options = json.loads(raw_options)
+            except (ValueError, TypeError):
+                raw_options = []
+        if not isinstance(raw_options, list):
+            raw_options = []
+
+        options: list[str] = []
+        for o in raw_options:
+            if isinstance(o, dict):
+                val = str(
+                    o.get("label") or o.get("text") or o.get("option") or o.get("title") or o.get("value") or ""
+                ).strip()
+            else:
+                val = str(o).strip()
+            if val:
+                options.append(val)
+
         if not question and not options:
             continue
         questions.append(
             {
                 "question": question,
                 "options": options,
-                "multi_select": bool(entry.get("is_multi_select") or entry.get("multi_select")),
+                "multi_select": bool(
+                    entry.get("is_multi_select")
+                    or entry.get("multi_select")
+                    or entry.get("isMultiSelect")
+                    or entry.get("multiSelect")
+                    or entry.get("multiple")
+                ),
             }
         )
     return questions or None

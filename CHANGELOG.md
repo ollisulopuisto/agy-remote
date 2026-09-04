@@ -1,5 +1,25 @@
 # Changelog
 
+## v26.09.04.112 — Mobile question cards, multi-question rendering, and robust question parsing
+
+- **Dedicated Question Cards in the Conversation Feed.** Tool calls for `ask_question` in the
+  transcript now render as open, high-contrast question cards (`.question-card`) rather than
+  collapsing into generic tool cards. Each question displays its prompt, a selection mode indicator
+  (`Select multiple` / `Select one`), and styled option rows.
+- **Multi-Question & Rich Payload Parsing.** Normalizers in both Python (`parse_ask_question_args`,
+  `normalize_tool_calls`) and JavaScript (`AgyFormat.parseQuestions`) now seamlessly decode
+  multiple questions (e.g. 3 questions in a single turn), stringified/double-stringified JSON
+  payloads, object-based options (`label`, `text`, `option`), and key aliases (`choices`, `items`, `title`).
+- **Informative Question Summaries.** `AgyFormat.toolSummary` now extracts and announces the actual
+  question text and count (e.g. `ask_question [3 questions](...)`) instead of generic metadata fields
+  like `toolAction` or `toolSummary`.
+- **Structured Multi-Question Dock.** Active question approval docks group multiple questions into
+  distinct thumb-friendly sections (`.question-dock-section`) with numbered headers and clear selection
+  modes.
+- **PreToolUse Hook Conversation Binding.** Server hook endpoint resolves empty or `"default"`
+  conversation IDs to the active or supervised session ID, ensuring question gates reach the viewing
+  PWA.
+
 ## v26.09.04.111 — Comprehensive stress testing and concurrency verification
 
 - **Outbox Ring-Buffer Overflow & Boundary Verification.** Stress tested `SessionManager._outbox`

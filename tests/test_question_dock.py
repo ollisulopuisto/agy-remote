@@ -149,3 +149,51 @@ async def test_a_question_answer_travels_back_as_the_reason(tmp_path: Path):
     result = await task
     assert result["decision"] == "allow"
     assert result["reason"] == answer
+
+
+@pytest.mark.asyncio
+async def test_three_questions_payload_with_object_options_and_choices(tmp_path: Path):
+    """Multiple questions (e.g. 3 questions presented by agy) with rich option formats."""
+    three_questions = [
+        {
+            "question": "Which release channel?",
+            "options": [
+                {"label": "Stable channel", "value": "stable"},
+                {"label": "Beta channel", "value": "beta"},
+            ],
+            "is_multi_select": False,
+        },
+        {
+            "question": "Which tests should run?",
+            "choices": ["unit", "integration", "e2e"],
+            "multi_select": True,
+        },
+        {
+            "title": "Deploy immediately after build?",
+            "items": ["Yes", "No, wait for approval"],
+        },
+    ]
+    mgr = _mgr(tmp_path)
+
+    # Test with stringified args (as hook or transcript often serializes)
+    await mgr.register_approval(
+        "app-3q",
+        "conv-q",
+        "ask_question",
+        args=json.dumps({"questions": json.dumps(three_questions)}),
+    )
+
+    (pending,) = mgr.get_active_pending_approvals()
+    assert "questions" in pending
+    assert len(pending["questions"]) == 3
+    assert pending["questions"][0]["question"] == "Which release channel?"
+    assert pending["questions"][0]["options"] == ["Stable channel", "Beta channel"]
+    assert pending["questions"][0]["multi_select"] is False
+
+    assert pending["questions"][1]["question"] == "Which tests should run?"
+    assert pending["questions"][1]["options"] == ["unit", "integration", "e2e"]
+    assert pending["questions"][1]["multi_select"] is True
+
+    assert pending["questions"][2]["question"] == "Deploy immediately after build?"
+    assert pending["questions"][2]["options"] == ["Yes", "No, wait for approval"]
+    assert pending["questions"][2]["multi_select"] is False

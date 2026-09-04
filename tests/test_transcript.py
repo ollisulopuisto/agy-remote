@@ -58,6 +58,16 @@ def test_normalizing_never_drops_a_call_it_does_not_understand():
     assert normalize_tool_calls(calls) == calls
 
 
+def test_ask_question_questions_are_decoded_to_structures():
+    """Structured question arguments must decode to real lists/dicts for rendering."""
+    payload = '[{"question": "Proceed?", "options": ["Yes", "No"]}]'
+    calls = [{"name": "ask_question", "args": {"questions": payload, "toolAction": '"Asking"'}}]
+
+    args = normalize_tool_calls(calls)[0]["args"]
+    assert args["questions"] == [{"question": "Proceed?", "options": ["Yes", "No"]}]
+    assert args["toolAction"] == "Asking"
+
+
 def test_checkpoints_and_system_messages_are_marked_as_scaffolding():
     """agy opens every session with a CHECKPOINT that reads like prior history.
 

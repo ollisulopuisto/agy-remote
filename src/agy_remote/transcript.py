@@ -47,7 +47,8 @@ def normalize_tool_calls(tool_calls: list[Any]) -> list[Any]:
 
     Only string results are unwrapped: `"5000"` is an argument the tool receives
     as text, and turning it into a number would be inventing a type agy never
-    used.
+    used. Question arguments are structured payloads and are decoded into
+    real lists/dicts so the client can render questions directly.
     """
     normalized = []
     for call in tool_calls:
@@ -55,8 +56,32 @@ def normalize_tool_calls(tool_calls: list[Any]) -> list[Any]:
             normalized.append(call)
             continue
 
-        normalized.append({**call, "args": {key: _decode(value) for key, value in call["args"].items()}})
+        call_name = call.get("name") or (
+            call.get("function", {}) if isinstance(call.get("function"), dict) else {}
+        ).get("name")
+        new_args = {}
+        for key, value in call["args"].items():
+            if key == "questions" or call_name == "ask_question":
+                new_args[key] = _decode_structured(value)
+            else:
+                new_args[key] = _decode(value)
+
+        normalized.append({**call, "args": new_args})
     return normalized
+
+
+def _decode_structured(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    cur: Any = value
+    while isinstance(cur, str):
+        try:
+            decoded = json.loads(cur)
+        except (ValueError, TypeError):
+            break
+        cur = decoded
+    return cur
 
 
 def _decode(value: Any) -> Any:

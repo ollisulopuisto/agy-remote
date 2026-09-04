@@ -44,6 +44,18 @@
   // `run_command` plus a pile of arguments, reduced to `run_command(du -hd 1)`.
   function toolSummary(name, args) {
     var values = args || {};
+
+    if (name === 'ask_question') {
+      var qs = parseQuestions(values) || parseQuestions({ args: values, questions: values && values.questions });
+      if (qs && qs[0] && qs[0].question) {
+        var prefix = qs.length > 1 ? 'ask_question [' + qs.length + ' questions](' : 'ask_question(';
+        return prefix + truncate(qs[0].question.replace(/\s+/g, ' '), ARG_LIMIT) + ')';
+      }
+      if (values.question || values.prompt || values.text) {
+        return 'ask_question(' + truncate(String(values.question || values.prompt || values.text).replace(/\s+/g, ' '), ARG_LIMIT) + ')';
+      }
+    }
+
     var primary = null;
 
     for (var i = 0; i < PRIMARY_KEYS.length; i++) {
@@ -386,36 +398,113 @@
   // from a payload that skipped the server path. Anything that is not
   // question-shaped yields null and the caller keeps the plain banner.
   function parseQuestions(app) {
-    var a = app || {};
-    var raw = a.questions;
-    if (!raw && a.args && typeof a.args === 'object') {
-      raw = a.args.questions;
+    if (!app) return null;
+    var a = app;
+    if (typeof a === 'string') {
+      try {
+        a = JSON.parse(a);
+      } catch (e) {
+        return null;
+      }
     }
-    if (typeof raw === 'string') {
+
+    var raw = null;
+    if (Array.isArray(a)) {
+      raw = a;
+    } else if (a && typeof a === 'object') {
+      if (a.questions != null) {
+        raw = a.questions;
+      } else if (a.args != null) {
+        var argsObj = a.args;
+        if (typeof argsObj === 'string') {
+          try {
+            argsObj = JSON.parse(argsObj);
+          } catch (e) {
+            argsObj = null;
+          }
+        }
+        if (Array.isArray(argsObj)) {
+          raw = argsObj;
+        } else if (argsObj && typeof argsObj === 'object') {
+          if (argsObj.questions != null) {
+            raw = argsObj.questions;
+          } else if (argsObj.question || argsObj.prompt || argsObj.text) {
+            raw = [argsObj];
+          }
+        }
+      } else if (a.question || a.prompt || a.text) {
+        raw = [a];
+      }
+    }
+
+    while (typeof raw === 'string') {
       try {
         raw = JSON.parse(raw);
       } catch (e) {
         return null;
       }
     }
-    if (raw && !Array.isArray(raw)) raw = [raw];
+
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      if (raw.questions != null) {
+        raw = raw.questions;
+        while (typeof raw === 'string') {
+          try {
+            raw = JSON.parse(raw);
+          } catch (e) {
+            return null;
+          }
+        }
+      } else {
+        raw = [raw];
+      }
+    }
     if (!Array.isArray(raw)) return null;
 
     var qs = [];
     for (var i = 0; i < raw.length; i++) {
       var q = raw[i];
+      while (typeof q === 'string') {
+        try {
+          q = JSON.parse(q);
+        } catch (e) {
+          break;
+        }
+      }
       if (!q || typeof q !== 'object') continue;
-      var question = String(q.question || q.prompt || q.text || '').trim();
-      var options = (Array.isArray(q.options) ? q.options : [])
+      var question = String(
+        q.question || q.prompt || q.text || q.title || q.message || q.header || ''
+      ).trim();
+      var rawOptions = q.options || q.choices || q.items || q.answers || [];
+      if (typeof rawOptions === 'string') {
+        try {
+          rawOptions = JSON.parse(rawOptions);
+        } catch (e) {
+          rawOptions = [];
+        }
+      }
+      if (!Array.isArray(rawOptions)) rawOptions = [];
+
+      var options = rawOptions
         .map(function (o) {
-          return String(o).trim();
+          if (o && typeof o === 'object') {
+            return String(o.label || o.text || o.option || o.title || o.value || '').trim();
+          }
+          return String(o == null ? '' : o).trim();
         })
         .filter(Boolean);
+
       if (!question && !options.length) continue;
       qs.push({
         question: question,
         options: options,
-        multiSelect: !!(q.multi_select || q.multiSelect || q.is_multi_select),
+        multiSelect: !!(
+          q.multi_select ||
+          q.multiSelect ||
+          q.is_multi_select ||
+          q.isMultiSelect ||
+          q.multiple
+        ),
       });
     }
     return qs.length ? qs : null;
@@ -430,11 +519,22 @@
       var questions = parseQuestions(app);
       var question = questions && questions[0] && questions[0].question ? questions[0].question : null;
       if (!question && typeof args === 'string' && args.trim()) {
-        question = args;
+        try {
+          var parsedArgs = JSON.parse(args);
+          var parsedQs = parseQuestions(parsedArgs);
+          if (parsedQs && parsedQs[0] && parsedQs[0].question) {
+            question = parsedQs[0].question;
+          } else {
+            question = args;
+          }
+        } catch (e) {
+          question = args;
+        }
       } else if (!question && args && typeof args === 'object') {
-        question = args.question || args.prompt || args.text || null;
+        question = args.question || args.prompt || args.text || args.title || null;
       }
-      return { title: 'Agent asks', body: question || app.tool_name };
+      var countSuffix = questions && questions.length > 1 ? ' (' + questions.length + ' questions)' : '';
+      return { title: 'Agent asks' + countSuffix, body: question || app.tool_name };
     }
     var cmdText = '';
     if (args && typeof args === 'object') {

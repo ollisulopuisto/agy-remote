@@ -359,6 +359,58 @@ test('a question banner reads as the question, not a permission', () => {
   });
   assert.equal(d.title, 'Agent asks');
   assert.equal(d.body, 'Ship it today?');
+
+  const multi = approvalDisplay({
+    tool_name: 'ask_question',
+    questions: [
+      { question: 'Q1?', options: ['A'] },
+      { question: 'Q2?', options: ['B'] },
+      { question: 'Q3?', options: ['C'] },
+    ],
+  });
+  assert.equal(multi.title, 'Agent asks (3 questions)');
+  assert.equal(multi.body, 'Q1?');
+});
+
+test('parseQuestions decodes 3 questions with object options and alternative keys', () => {
+  const { parseQuestions } = sandbox.window.AgyFormat;
+  const three = [
+    { question: 'Q1', options: [{ label: 'Opt1', value: '1' }, { text: 'Opt2' }] },
+    { prompt: 'Q2', choices: ['X', 'Y'], isMultiSelect: true },
+    { title: 'Q3', items: ['Z'] },
+  ];
+  // Can be passed via args string, direct object, or tool call
+  const parsed = parseQuestions({
+    tool_name: 'ask_question',
+    args: JSON.stringify({ questions: JSON.stringify(three) }),
+  });
+  assert.equal(parsed.length, 3);
+  assert.equal(parsed[0].question, 'Q1');
+  assert.deepEqual(inThisRealm(parsed[0].options), ['Opt1', 'Opt2']);
+  assert.equal(parsed[1].question, 'Q2');
+  assert.equal(parsed[1].multiSelect, true);
+  assert.equal(parsed[2].question, 'Q3');
+  assert.deepEqual(inThisRealm(parsed[2].options), ['Z']);
+});
+
+test('toolSummary extracts question text for ask_question tool calls', () => {
+  const { toolSummary } = sandbox.window.AgyFormat;
+  const summary1 = toolSummary('ask_question', {
+    questions: JSON.stringify([{ question: 'How would you like to proceed with publishing?' }]),
+    toolAction: 'Asking user for action preference',
+    toolSummary: 'Ask user for publishing/benchmark preference',
+  });
+  assert.equal(summary1, 'ask_question(How would you like to proceed with publishing?)');
+
+  const summaryMulti = toolSummary('ask_question', {
+    questions: [
+      { question: 'Q1' },
+      { question: 'Q2' },
+      { question: 'Q3' },
+    ],
+    toolSummary: 'Multiple questions',
+  });
+  assert.equal(summaryMulti, 'ask_question [3 questions](Q1)');
 });
 
 test('credentials are scrubbed from the URL only once the app is installed', () => {

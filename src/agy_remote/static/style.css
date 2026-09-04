@@ -473,7 +473,19 @@ body {
    permission. Reuses the banner shell (pulse, radius) but tightens the
    rhythm and makes every option a full-width, thumb-sized row. */
 .question-dock {
+  gap: 10px;
+}
+
+.question-dock-section {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  width: 100%;
+}
+
+.question-dock-section:not(:first-child) {
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
 }
 
 .question-text {
@@ -481,6 +493,27 @@ body {
   font-weight: 600;
   color: #e2e8f0;
   line-height: 1.35;
+  word-break: break-word;
+}
+
+.question-num {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 12.5px;
+}
+
+.question-pill-mode {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  vertical-align: middle;
+  margin-left: 4px;
 }
 
 .question-option {
@@ -495,6 +528,7 @@ body {
   color: #f1f5f9;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  word-break: break-word;
 }
 
 .question-option:active {
@@ -531,6 +565,92 @@ body {
 .question-submit {
   width: 100%;
   flex: none;
+}
+
+/* Question Card (transcript tool-call rendering) */
+.question-card {
+  margin: 8px 12px;
+  background-color: var(--bg-card);
+  border: 1px solid rgba(0, 229, 255, 0.25);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.question-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(0, 229, 255, 0.08);
+  border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+}
+
+.question-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.question-card-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.question-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-card-section:not(:first-child) {
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.question-card-prompt {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #f1f5f9;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.question-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-card-opt-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(10, 14, 23, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12.5px;
+  color: #e2e8f0;
+  line-height: 1.35;
+}
+
+.question-card-opt-bullet {
+  color: var(--accent);
+  flex: none;
+  font-size: 12px;
+}
+
+.question-card-opt-text {
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 /* Bottom Bar & Input */
