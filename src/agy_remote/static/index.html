@@ -19,11 +19,12 @@
     compromise would be a full account takeover. Markdown is rendered by an
     escape-first renderer in app.js instead of a remote parser.
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; manifest-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; manifest-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/alpine.min.js"></script>
 </head>
 <body>
 
@@ -55,6 +56,12 @@
       </div>
     </div>
     <div class="header-right">
+      <button class="icon-btn" id="autoAcceptBtnHeader" title="Approval policy: ASK-ALL (every tool asks before running). Tap for Auto-Reads.">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+          <polyline points="9 12 11 14 15 10"/>
+        </svg>
+      </button>
       <button class="icon-btn" id="pushBtn" title="Enable Push Notifications">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
@@ -68,127 +75,133 @@
   </header>
 
   <!-- Side Drawer (Conversation Switcher) -->
-  <div class="drawer-backdrop" id="drawerBackdrop"></div>
-  <div class="drawer" id="drawer">
-    <div class="drawer-header">
-      <span style="font-size: 14px; font-weight: 700; color: #fff;">Sessions</span>
-      <button class="icon-btn" id="soundToggleBtn" title="Alert sounds are ON: approval and completion chimes play. Tap to silence.">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-        </svg>
-      </button>
-      <button class="icon-btn" id="autoAcceptBtn" title="Auto-accept is OFF: every tool approval asks. Tap to allow all without asking.">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
-          <polyline points="9 12 11 14 15 10"/>
-        </svg>
-      </button>
-      <button class="icon-btn" id="newMetaTaskBtn" title="Launch worker task via Meta-AGY (Gemini, Claude, Codex, Astra)">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
-      </button>
-      <button class="icon-btn" id="newSessionBtn" title="Clone a repo and start an agy on it">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-      </button>
-      <button class="icon-btn" id="closeDrawerBtn">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    </div>
-    <div class="drawer-tabs">
-      <button class="drawer-tab active" id="tabAgentsBtn">All Agents</button>
-      <button class="drawer-tab" id="tabSessionsBtn">AGY Sessions</button>
-    </div>
-    <div class="drawer-list" id="drawerList">
-      <!-- Session items will be dynamically injected -->
+  <div x-data="drawer()" @toggle-drawer.window="open = !open">
+    <div class="drawer-backdrop" id="drawerBackdrop" :class="{ open: open }" x-show="open" x-transition.opacity @click="close()"></div>
+    <div class="drawer" id="drawer" :class="{ open: open }" x-show="open" x-transition:enter="transition ease-out duration-250" x-transition:enter-start="transform -translate-x-full" x-transition:enter-end="transform translate-x-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="transform translate-x-0" x-transition:leave-end="transform -translate-x-full">
+      <div class="drawer-header">
+        <span style="font-size: 14px; font-weight: 700; color: #fff;">Sessions</span>
+        <button class="icon-btn" id="soundToggleBtn" title="Alert sounds are ON: approval and completion chimes play. Tap to silence.">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="autoAcceptBtn" title="Auto-accept is OFF: every tool approval asks. Tap to allow all without asking.">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/>
+            <polyline points="9 12 11 14 15 10"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="newMetaTaskBtn" title="Launch worker task via Meta-AGY (Gemini, Claude, Codex, Astra)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+        </button>
+        <button class="icon-btn" id="newSessionBtn" title="Clone a repo and start an agy on it">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="closeDrawerBtn" @click="close()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="drawer-tabs">
+        <button class="drawer-tab" id="tabAgentsBtn" :class="{ active: tab === 'agents' }" @click="switchTab('agents')">All Agents</button>
+        <button class="drawer-tab" id="tabSessionsBtn" :class="{ active: tab === 'sessions' }" @click="switchTab('sessions')">AGY Sessions</button>
+      </div>
+      <div class="drawer-list" id="drawerList">
+        <!-- Session items will be dynamically injected -->
+      </div>
     </div>
   </div>
 
   <!-- New Session Sheet: the server clones and spawns; this sheet only asks -->
-  <div class="sheet-backdrop" id="newSessionBackdrop"></div>
-  <div class="sheet" id="newSessionSheet" hidden>
-    <div class="sheet-header">
-      <span class="sheet-title">New session</span>
-      <button class="icon-btn" id="newSessionCloseBtn" aria-label="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    </div>
-    <div class="sheet-body">
-      <label class="sheet-field">
-        <span class="sheet-label">Repo URL</span>
-        <input type="text" id="newSessionRepo" placeholder="https://github.com/org/repo" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Branch <em>optional</em></span>
-        <input type="text" id="newSessionBranch" placeholder="main" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Task <em>optional</em></span>
-        <textarea id="newSessionTask" rows="2" placeholder="What should the agent do with it?"></textarea>
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Name <em>optional</em></span>
-        <input type="text" id="newSessionName" placeholder="derived from the repo" autocomplete="off" spellcheck="false">
-      </label>
-      <div class="sheet-progress" id="newSessionProgress" hidden>
-        <span class="sheet-progress-chip" id="newSessionStage"></span>
+  <div x-data="newSessionSheet()">
+    <div class="sheet-backdrop" id="newSessionBackdrop" :class="{ open: open }" x-show="open" x-transition.opacity @click="close()"></div>
+    <div class="sheet" id="newSessionSheet" :class="{ open: open }" x-show="open" x-transition:enter="transition ease-out duration-220" x-transition:enter-start="transform translate-y-full" x-transition:enter-end="transform translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="transform translate-y-0" x-transition:leave-end="transform translate-y-full">
+      <div class="sheet-header">
+        <span class="sheet-title">New session</span>
+        <button class="icon-btn" id="newSessionCloseBtn" aria-label="Close" @click="close()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
       </div>
-      <div class="sheet-error" id="newSessionError" hidden></div>
-      <div class="sheet-actions">
-        <button class="btn-secondary" id="newSessionCancelBtn">Cancel</button>
-        <button class="btn-primary" id="newSessionStartBtn">Start session</button>
+      <div class="sheet-body">
+        <label class="sheet-field">
+          <span class="sheet-label">Repo URL</span>
+          <input type="text" id="newSessionRepo" x-model="repo" placeholder="https://github.com/org/repo" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Branch <em>optional</em></span>
+          <input type="text" id="newSessionBranch" x-model="branch" placeholder="main" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Task <em>optional</em></span>
+          <textarea id="newSessionTask" x-model="task" rows="2" placeholder="What should the agent do with it?"></textarea>
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Name <em>optional</em></span>
+          <input type="text" id="newSessionName" x-model="name" placeholder="derived from the repo" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="sheet-progress" id="newSessionProgress" x-show="loading" x-transition>
+          <span class="sheet-progress-chip" id="newSessionStage"></span>
+        </div>
+        <div class="sheet-error" id="newSessionError" x-show="error" x-transition x-text="error"></div>
+        <div class="sheet-actions">
+          <button class="btn-secondary" id="newSessionCancelBtn" @click="close()">Cancel</button>
+          <button class="btn-primary" id="newSessionStartBtn" @click="submit()" :disabled="loading">Start session</button>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- New Meta-AGY Task Sheet -->
-  <div class="sheet-backdrop" id="metaTaskBackdrop"></div>
-  <div class="sheet" id="metaTaskSheet" hidden>
-    <div class="sheet-header">
-      <span class="sheet-title" id="metaTaskSheetTitle">New Agent Task</span>
-      <button class="icon-btn" id="metaTaskCloseBtn" aria-label="Close">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>
-    </div>
-    <div class="sheet-body">
-      <label class="sheet-field">
-        <span class="sheet-label">Project / Repository</span>
-        <input type="text" id="metaTaskProject" placeholder="e.g. transposer" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Worker / Provider</span>
-        <select id="metaTaskProvider" class="sheet-select">
-          <option value="gemini">Gemini</option>
-          <option value="claude">Claude</option>
-          <option value="codex">Codex</option>
-          <option value="astra">Astra</option>
-        </select>
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Model <em>optional</em></span>
-        <input type="text" id="metaTaskModel" placeholder="e.g. gemini-2.5-flash, claude-3-7-sonnet" autocomplete="off" spellcheck="false">
-      </label>
-      <label class="sheet-field">
-        <span class="sheet-label">Task Description</span>
-        <textarea id="metaTaskDesc" rows="4" placeholder="What should the worker do?"></textarea>
-      </label>
-      <label class="sheet-field" id="metaTaskContextField" hidden>
-        <span class="sheet-label">Prior Handoff Context</span>
-        <textarea id="metaTaskContext" rows="3" placeholder="Context from previous job"></textarea>
-      </label>
-      <div class="sheet-error" id="metaTaskError" hidden></div>
-      <div class="sheet-actions">
-        <button class="btn-secondary" id="metaTaskCancelBtn">Cancel</button>
-        <button class="btn-primary" id="metaTaskSubmitBtn">Launch Agent</button>
+  <div x-data="metaTaskSheet()">
+    <div class="sheet-backdrop" id="metaTaskBackdrop" :class="{ open: open }" x-show="open" x-transition.opacity @click="close()"></div>
+    <div class="sheet" id="metaTaskSheet" :class="{ open: open }" x-show="open" x-transition:enter="transition ease-out duration-220" x-transition:enter-start="transform translate-y-full" x-transition:enter-end="transform translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="transform translate-y-0" x-transition:leave-end="transform translate-y-full">
+      <div class="sheet-header">
+        <span class="sheet-title" id="metaTaskSheetTitle">New Agent Task</span>
+        <button class="icon-btn" id="metaTaskCloseBtn" aria-label="Close" @click="close()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sheet-body">
+        <label class="sheet-field">
+          <span class="sheet-label">Project / Repository</span>
+          <input type="text" id="metaTaskProject" x-model="project" placeholder="e.g. transposer" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Worker / Provider</span>
+          <select id="metaTaskProvider" class="sheet-select" x-model="provider">
+            <option value="gemini">Gemini</option>
+            <option value="claude">Claude</option>
+            <option value="codex">Codex</option>
+            <option value="astra">Astra</option>
+          </select>
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Model <em>optional</em></span>
+          <input type="text" id="metaTaskModel" x-model="model" placeholder="e.g. gemini-2.5-flash, claude-3-7-sonnet" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="sheet-field">
+          <span class="sheet-label">Task Description</span>
+          <textarea id="metaTaskDesc" x-model="description" rows="4" placeholder="What should the worker do?"></textarea>
+        </label>
+        <label class="sheet-field" id="metaTaskContextField" x-show="showContext" x-transition>
+          <span class="sheet-label">Prior Handoff Context</span>
+          <textarea id="metaTaskContext" x-model="context" rows="3" placeholder="Context from previous job"></textarea>
+        </label>
+        <div class="sheet-error" id="metaTaskError" x-show="error" x-transition x-text="error"></div>
+        <div class="sheet-actions">
+          <button class="btn-secondary" id="metaTaskCancelBtn" @click="close()">Cancel</button>
+          <button class="btn-primary" id="metaTaskSubmitBtn" @click="submit()" :disabled="loading">Launch Agent</button>
+        </div>
       </div>
     </div>
   </div>
@@ -376,7 +389,7 @@
     <pre id="terminalScreen"></pre>
   </section>
 
-  <footer class="bottom-bar">
+  <footer class="bottom-bar" x-data="bottomBar()">
     <div class="quick-actions">
       <button class="chip-btn" id="cmdMenuBtn" title="All of agy's slash commands, no keyboard gymnastics needed">/</button>
       <button class="chip-btn" data-toggle="screen" id="screenToggle" title="Show the terminal agy is drawing on">Screen</button>
@@ -392,8 +405,43 @@
     </div>
     <div class="attachments-preview" id="attachmentsPreview"></div>
     <div class="queued-prompts" id="queuedPrompts" hidden></div>
+    <div class="stalled-banner" id="stalledBanner" x-show="stalled" x-transition>
+      <div class="stalled-content">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span class="stalled-text" id="stalledText" x-text="'Turn stalled (no output for ' + stalledSeconds + 's)'">Turn stalled (no output for 180s)</span>
+        <div class="stalled-actions">
+          <button class="btn-interrupt" id="btnInterrupt" @click="sendInterrupt()" title="Send SIGINT (Ctrl+C)">Keskeytä (Ctrl+C)</button>
+          <button class="btn-kill" id="btnKill" @click="sendKill()" title="Send SIGKILL (Force terminate)">Pakkotapa</button>
+        </div>
+      </div>
+    </div>
+    <div class="queue-panel" id="queuePanel" x-show="queuePanelOpen" x-transition>
+      <div class="queue-panel-header">
+        <span>Queued Prompts (<span x-text="promptQueue.length">0</span>)</span>
+        <button class="icon-btn" id="queuePanelClose" aria-label="Close queue panel" @click="closeQueuePanel()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="queue-panel-list" id="queuePanelList">
+        <template x-for="item in promptQueue" :key="item.id">
+          <div class="queue-panel-item">
+            <span class="queue-panel-item-text" x-text="item.prompt"></span>
+            <div class="queue-panel-item-actions">
+              <button class="queue-panel-item-btn move-up" @click="moveQueueItem(item.id, 'up')" :disabled="promptQueue.indexOf(item) === 0" title="Move up">▲</button>
+              <button class="queue-panel-item-btn move-down" @click="moveQueueItem(item.id, 'down')" :disabled="promptQueue.indexOf(item) === promptQueue.length - 1" title="Move down">▼</button>
+              <button class="queue-panel-item-btn remove" @click="cancelQueuedPrompt(item.id)" title="Remove">✕</button>
+            </div>
+          </div>
+        </template>
+        <div x-show="promptQueue.length === 0" class="queue-panel-empty">No queued prompts</div>
+      </div>
+    </div>
     <div class="composer">
       <input type="file" id="fileInput" accept="image/*" style="display: none;">
+      <div class="queue-badge" id="queueBadge" x-show="promptQueue.length > 0" x-transition>
+        <span class="queue-count" id="queueCount" x-text="promptQueue.length">0</span>
+        <button class="queue-toggle" id="queueToggle" @click="toggleQueuePanel()" aria-label="Manage queued prompts">⋮</button>
+      </div>
       <textarea
         id="promptInput"
         class="prompt-input"

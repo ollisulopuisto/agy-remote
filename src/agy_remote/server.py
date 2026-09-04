@@ -148,7 +148,7 @@ def create_app(
     SECURITY_HEADERS = {
         "Content-Security-Policy": (
             "default-src 'self'; "
-            "script-src 'self'; "
+            "script-src 'self' 'unsafe-eval'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob:; "
             "manifest-src 'self' data:; "

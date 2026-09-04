@@ -1,5 +1,22 @@
 # Changelog
 
+## v26.09.05.115 — Declarative Alpine UI migration, watchdog alert cards, and mobile queue backlog
+
+- **Declarative Alpine.js Migration.** Vendored Alpine.js v3 locally (`src/agy_remote/static/alpine.min.js`)
+  and updated Content Security Policy (`script-src 'self' 'unsafe-eval'`) to support client-side reactivity without
+  relying on external CDNs. Refactored the conversation switcher side drawer, New Session Sheet, and Meta-AGY
+  Task Sheet into reactive Alpine components with smooth transitions, explicit state scoping, and two-way data bindings.
+- **3-State Approval Policy Selector UI.** Equipped header and drawer controls with a 3-way toggle cycling through
+  `ask_all`, `auto_reads`, and `auto_all`. Added distinct SVG state indicators (locked shield, search eye, unlocked shield)
+  with color-coded visual styling and accessibility aria-labels.
+- **Watchdog Stalled Turn Warning Card.** Implemented a non-intrusive stalled execution banner positioned above
+  the composer that appears automatically upon watchdog silence (`session_stalled`). Provides one-tap emergency
+  interrupt (`SIGINT`/Ctrl+C) and force termination (`SIGKILL`) controls with haptic feedback and auto-dismisses
+  immediately when activity resumes.
+- **Mobile Prompt Queue Backlog & Management Panel.** Added an interactive queued prompt count badge and expandable
+  management sheet allowing mobile users to inspect, reorder (move up / move down with live server synchronization),
+  and cancel pending queued turns before delivery.
+
 ## v26.09.05.114 — Granular tool approvals, Alpine.js store bridge, process watchdog, and queue reordering
 
 - **Granular Tool Approval Policies (`ask_all`, `auto_reads`, `auto_all`).** Introduced tiered

@@ -2356,3 +2356,231 @@ details.message-system > summary {
   cursor: pointer;
 }
 
+/* Stalled Session Banner (Task 3.3) */
+.stalled-banner {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.18), rgba(239, 68, 68, 0.18));
+  border: 1.5px solid var(--warning);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  animation: pulse-border 2s infinite;
+}
+
+.stalled-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stalled-content svg {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+
+.stalled-text {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fde68a;
+  min-width: 120px;
+}
+
+.stalled-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-interrupt,
+.btn-kill {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+}
+
+.btn-interrupt {
+  background-color: var(--warning);
+  color: #1a1a1a;
+}
+
+.btn-interrupt:active {
+  background-color: #d97706;
+  transform: scale(0.96);
+}
+
+.btn-kill {
+  background-color: var(--danger);
+  color: #fff;
+}
+
+.btn-kill:active {
+  background-color: #dc2626;
+  transform: scale(0.96);
+}
+
+/* Queue Badge & Panel (Task 4.3) */
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: rgba(250, 204, 21, 0.15);
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fde047;
+  margin-bottom: 6px;
+}
+
+.queue-count {
+  min-width: 18px;
+  text-align: center;
+}
+
+.queue-toggle {
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.queue-toggle:active {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.queue-panel {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 8px;
+  margin-bottom: 8px;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.queue-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.queue-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.queue-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-main);
+}
+
+.queue-panel-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-panel-item-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.queue-panel-item-btn {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.queue-panel-item-btn.move-up {
+  background-color: var(--primary);
+  color: #fff;
+}
+
+.queue-panel-item-btn.move-down {
+  background-color: var(--primary);
+  color: #fff;
+}
+
+.queue-panel-item-btn.remove {
+  background-color: var(--danger);
+  color: #fff;
+}
+
+.queue-panel-item-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.queue-panel-item-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.queue-panel-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Alpine.js transition compatibility for sheets */
+.sheet[x-show] {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sheet-backdrop[x-show] {
+  transition: opacity 0.22s ease;
+}
+
+/* Drawer transitions with Alpine */
+.drawer[x-show] {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drawer-backdrop[x-show] {
+  transition: opacity 0.25s ease;
+}
+

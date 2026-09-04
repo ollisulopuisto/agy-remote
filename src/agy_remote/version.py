@@ -8,7 +8,7 @@ not be tied to what was actually running. Every other module reads it here, and
 
 from __future__ import annotations
 
-VERSION = "26.09.05.114"
+VERSION = "26.09.05.115"
 
 #: Display form, as printed by `--version` and shown in the PWA.
 __version__ = f"v{VERSION}"

@@ -910,6 +910,10 @@ function handleServerEvent(event) {
       if (renamed !== drawerConversations) renderConversations(renamed);
     }
   } else if (type === 'step_added' || type === 'step_updated') {
+    if (isSessionStalled) {
+      isSessionStalled = false;
+      syncToAlpine({ stalled: false, stalledSeconds: 0 });
+    }
     currentConversationId = window.AgyFormat.adoptConversationId(currentConversationId, data.conversation_id);
     // A step is activity, whatever the drawer's snapshot says: remember it so
     // the row's dot can go busy before the next /api/conversations refresh.
@@ -932,6 +936,10 @@ function handleServerEvent(event) {
       if (autoScroll) scrollToBottom();
     }
   } else if (type === 'terminal_screen') {
+    if (isSessionStalled) {
+      isSessionStalled = false;
+      syncToAlpine({ stalled: false, stalledSeconds: 0 });
+    }
     applyTerminal(data);
   } else if (type === 'approval_request') {
     // Auto-accept, when the operator switched it on or tool matches policy:
@@ -994,6 +1002,10 @@ function handleServerEvent(event) {
       updateAgentDetailSheet(data.agent);
     }
   } else if (type === 'agent_output') {
+    if (isSessionStalled) {
+      isSessionStalled = false;
+      syncToAlpine({ stalled: false, stalledSeconds: 0 });
+    }
     if (selectedAgent && data && data.agent_id === selectedAgent.agent_id) {
       appendAgentOutput(data.content, data.next_offset);
     }
@@ -1385,21 +1397,35 @@ function setApprovalPolicy(policy) {
   }
 }
 
+const POLICY_ICONS = {
+  ask_all: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><rect x="9" y="11" width="6" height="5" rx="1"/><path d="M10 11V9a2 2 0 1 1 4 0v2"/></svg>',
+  auto_reads: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><circle cx="12" cy="11" r="3"/><circle cx="12" cy="11" r="1"/></svg>',
+  auto_all: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><polyline points="9 12 11 14 15 10"/></svg>',
+};
+
 function applyAutoAcceptUI() {
-  if (!autoAcceptBtn) return;
-  autoAcceptBtn.classList.remove('active', 'policy-auto-reads', 'policy-auto-all');
-  if (approvalPolicy === 'auto_all') {
-    autoAcceptBtn.classList.add('active', 'policy-auto-all');
-    autoAcceptBtn.title = 'Approval policy: AUTO-ALL (all tools allowed without asking). Tap to switch to Ask-All.';
-    if (statusText) statusText.textContent = 'Policy: Auto-all';
-  } else if (approvalPolicy === 'auto_reads') {
-    autoAcceptBtn.classList.add('active', 'policy-auto-reads');
-    autoAcceptBtn.title = 'Approval policy: AUTO-READS (reads/searches allowed automatically; edits/commands ask). Tap for Auto-All.';
-    if (statusText) statusText.textContent = 'Policy: Auto-reads';
-  } else {
-    autoAcceptBtn.title = 'Approval policy: ASK-ALL (every tool asks before running). Tap for Auto-Reads.';
-    if (statusText) statusText.textContent = 'Policy: Ask all';
-  }
+  const headerBtn = document.getElementById('autoAcceptBtnHeader');
+  const buttons = [autoAcceptBtn, headerBtn].filter(Boolean);
+  buttons.forEach(btn => {
+    if (!btn) return;
+    btn.classList.remove('active', 'policy-auto-reads', 'policy-auto-all');
+    if (approvalPolicy === 'auto_all') {
+      btn.classList.add('active', 'policy-auto-all');
+      btn.title = 'Approval policy: AUTO-ALL (all tools allowed without asking). Tap to switch to Ask-All.';
+      btn.setAttribute('aria-label', 'Approval policy: AUTO-ALL');
+      if (statusText) statusText.textContent = 'Policy: Auto-all';
+    } else if (approvalPolicy === 'auto_reads') {
+      btn.classList.add('active', 'policy-auto-reads');
+      btn.title = 'Approval policy: AUTO-READS (reads/searches allowed automatically; edits/commands ask). Tap for Auto-All.';
+      btn.setAttribute('aria-label', 'Approval policy: AUTO-READS');
+      if (statusText) statusText.textContent = 'Policy: Auto-reads';
+    } else {
+      btn.title = 'Approval policy: ASK-ALL (every tool asks before running). Tap for Auto-Reads.';
+      btn.setAttribute('aria-label', 'Approval policy: ASK-ALL');
+      if (statusText) statusText.textContent = 'Policy: Ask all';
+    }
+    btn.innerHTML = POLICY_ICONS[approvalPolicy] || POLICY_ICONS.ask_all;
+  });
 }
 
 function sendInterrupt(convId) {
@@ -1447,10 +1473,13 @@ function sendKill(convId) {
 }
 
 if (autoAcceptBtn) {
-  autoAcceptBtn.addEventListener('click', () => {
+  const headerBtn = document.getElementById('autoAcceptBtnHeader');
+  const handlePolicyClick = () => {
     const nextPolicy = approvalPolicy === 'ask_all' ? 'auto_reads' : (approvalPolicy === 'auto_reads' ? 'auto_all' : 'ask_all');
     setApprovalPolicy(nextPolicy);
-  });
+  };
+  autoAcceptBtn.addEventListener('click', handlePolicyClick);
+  if (headerBtn) headerBtn.addEventListener('click', handlePolicyClick);
   applyAutoAcceptUI();
 }
 
@@ -2854,71 +2883,15 @@ function closeMetaTaskSheet() {
   metaTaskBackdrop.hidden = true;
 }
 
-if (newMetaTaskBtn) newMetaTaskBtn.onclick = () => openMetaTaskSheet();
-if (metaTaskCloseBtn) metaTaskCloseBtn.onclick = closeMetaTaskSheet;
-if (metaTaskCancelBtn) metaTaskCancelBtn.onclick = closeMetaTaskSheet;
-if (metaTaskBackdrop) metaTaskBackdrop.onclick = closeMetaTaskSheet;
+if (newMetaTaskBtn) newMetaTaskBtn.onclick = () => {
+  if (window.metaTaskSheetComponent) {
+    window.metaTaskSheetComponent.openSheet();
+  }
+};
+// The Alpine component handles form submission and close internally
 
 if (metaTaskSubmitBtn) {
-  metaTaskSubmitBtn.onclick = async () => {
-    const project = metaTaskProject.value.trim();
-    const task = metaTaskDesc.value.trim();
-    const provider = metaTaskProvider.value;
-    const model = metaTaskModel.value.trim() || undefined;
-    const context = metaTaskContext.value.trim() || undefined;
-
-    if (!project) {
-      metaTaskError.hidden = false;
-      metaTaskError.textContent = 'Please specify a project or repository.';
-      return;
-    }
-    if (!task) {
-      metaTaskError.hidden = false;
-      metaTaskError.textContent = 'Please provide a task description.';
-      return;
-    }
-
-    metaTaskSubmitBtn.disabled = true;
-    metaTaskSubmitBtn.textContent = 'Submitting...';
-
-    try {
-      const payload = { project, task, provider, model, context };
-      const body = cryptoKey ? await encryptData(payload) : payload;
-      const res = await fetch(`/api/agents/jobs?token=${encodeURIComponent(authToken)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
-        body: JSON.stringify(body),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        metaTaskError.hidden = false;
-        metaTaskError.textContent = err && err.detail ? err.detail : `Error ${res.status}`;
-        metaTaskSubmitBtn.disabled = false;
-        metaTaskSubmitBtn.textContent = 'Launch Agent';
-        return;
-      }
-
-      const created = await res.json();
-      metaTaskSubmitBtn.disabled = false;
-      metaTaskSubmitBtn.textContent = 'Launch Agent';
-      closeMetaTaskSheet();
-
-      // Refresh agents list and open detail
-      const idx = currentAgents.findIndex(a => a.agent_id === created.agent_id);
-      if (idx >= 0) {
-        currentAgents[idx] = created;
-      } else {
-        currentAgents.unshift(created);
-      }
-      openAgentDetail(created);
-    } catch (e) {
-      metaTaskError.hidden = false;
-      metaTaskError.textContent = `Network error: ${e.message}`;
-      metaTaskSubmitBtn.disabled = false;
-      metaTaskSubmitBtn.textContent = 'Launch Agent';
-    }
-  };
+  // Handled by Alpine component
 }
 
 // -- Agent Detail Sheet & Live Streaming --
@@ -3361,17 +3334,12 @@ function finishSpawn(data) {
   setTimeout(closeNewSessionSheet, 1400);
 }
 
-newSessionBtn.addEventListener('click', openNewSessionSheet);
-newSessionStartBtn.addEventListener('click', startNewSession);
-newSessionCancelBtn.addEventListener('click', closeNewSessionSheet);
-newSessionCloseBtn.addEventListener('click', closeNewSessionSheet);
-newSessionBackdrop.addEventListener('click', closeNewSessionSheet);
-newSessionTask.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    startNewSession();
+newSessionBtn.addEventListener('click', () => {
+  if (window.newSessionSheetComponent) {
+    window.newSessionSheetComponent.openSheet();
   }
 });
+// The Alpine component handles form submission and close internally
 
 // ----------------------------------------------------------------------------
 // Slash-Command Menu
@@ -3553,8 +3521,22 @@ promptInput.addEventListener('focus', () => {
   }, 300);
 });
 
-menuBtn.addEventListener('click', openDrawer);
-closeDrawerBtn.addEventListener('click', closeDrawer);
+menuBtn.addEventListener('click', () => {
+  if (window.drawerComponent) {
+    window.drawerComponent.open = true;
+  } else if (window.Alpine) {
+    window.dispatchEvent(new CustomEvent('toggle-drawer'));
+  } else {
+    openDrawer();
+  }
+});
+closeDrawerBtn.addEventListener('click', () => {
+  if (window.drawerComponent) {
+    window.drawerComponent.close();
+  } else {
+    closeDrawer();
+  }
+});
 
 const elsewhereBadge = document.getElementById('approvalsElsewhereBadge');
 if (elsewhereBadge) {
@@ -3704,6 +3686,394 @@ if ('serviceWorker' in navigator) {
       }
     }
   });
+}
+
+// Alpine.js Component Definitions (Tasks 2.2, 2.3, 3.3, 4.3)
+document.addEventListener('alpine:init', () => {
+  // Drawer Component
+  Alpine.data('drawer', () => ({
+    open: false,
+    tab: 'sessions',
+    
+    init() {
+      window.drawerComponent = this;
+      this.$watch('open', (value) => {
+        if (value) {
+          this.refreshDrawer();
+        } else {
+          if (typeof stopDrawerDotTimer === 'function') {
+            stopDrawerDotTimer();
+          }
+        }
+      });
+      this.$watch('tab', (value) => {
+        activeDrawerTab = value;
+        if (value === 'agents') {
+          if (typeof renderAgents === 'function') renderAgents();
+        } else {
+          if (typeof renderConversations === 'function') renderConversations(drawerConversations);
+        }
+      });
+    },
+    
+    refreshDrawer() {
+      if (typeof fetchConversationsAndAgents === 'function') {
+        fetchConversationsAndAgents();
+      }
+    },
+    
+    switchTab(tabName) {
+      this.tab = tabName;
+    },
+    
+    close() {
+      this.open = false;
+      if (typeof stopDrawerDotTimer === 'function') {
+        stopDrawerDotTimer();
+      }
+    }
+  }));
+
+  // New Session Sheet Component
+  Alpine.data('newSessionSheet', () => ({
+    open: false,
+    repo: '',
+    branch: '',
+    task: '',
+    name: '',
+    loading: false,
+    error: '',
+    
+    init() {
+      window.newSessionSheetComponent = this;
+    },
+    
+    openSheet() {
+      this.repo = '';
+      this.branch = '';
+      this.task = '';
+      this.name = '';
+      this.loading = false;
+      this.error = '';
+      this.open = true;
+      this.$nextTick(() => {
+        this.$refs.repoInput?.focus();
+      });
+    },
+    
+    close() {
+      if (this.loading) return;
+      this.open = false;
+      this.repo = '';
+      this.branch = '';
+      this.task = '';
+      this.name = '';
+      this.error = '';
+    },
+    
+    async submit() {
+      const built = window.AgySessions?.buildSpawnRequest({
+        repoUrl: this.repo,
+        branch: this.branch,
+        task: this.task,
+        name: this.name,
+      });
+      
+      if (!built?.ok) {
+        this.error = built?.error || 'Invalid input';
+        return;
+      }
+      
+      this.error = '';
+      this.loading = true;
+      
+      try {
+        const body = cryptoKey ? await encryptData(built.payload) : built.payload;
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+          body: JSON.stringify(body)
+        });
+        
+        if (!res.ok) {
+          let detail = `The server refused the spawn (HTTP ${res.status}).`;
+          try {
+            const data = await res.json();
+            if (data && data.detail) detail = data.detail;
+          } catch (e) {}
+          this.error = detail;
+          this.loading = false;
+          return;
+        }
+        
+        const spawnData = await res.json();
+        activeSpawn = spawnData;
+        window.activeSpawn = spawnData;
+        if (newSessionStage) newSessionStage.textContent = 'Cloning…';
+        // The sheet will be closed by the session_created event handler
+      } catch (e) {
+        this.error = 'Could not reach the server to start the session.';
+        this.loading = false;
+      }
+    }
+  }));
+
+  // Meta Task Sheet Component
+  Alpine.data('metaTaskSheet', () => ({
+    open: false,
+    project: '',
+    provider: 'gemini',
+    model: '',
+    description: '',
+    context: '',
+    showContext: false,
+    loading: false,
+    error: '',
+    
+    init() {
+      window.metaTaskSheetComponent = this;
+    },
+    
+    openSheet(prefill = null) {
+      if (prefill) {
+        this.project = prefill.project || '';
+        this.provider = prefill.provider || 'gemini';
+        this.model = prefill.model || '';
+        this.description = prefill.task || '';
+        this.context = prefill.context || '';
+        this.showContext = !!prefill.context;
+      } else {
+        this.project = '';
+        this.provider = 'gemini';
+        this.model = '';
+        this.description = '';
+        this.context = '';
+        this.showContext = false;
+      }
+      this.loading = false;
+      this.error = '';
+      this.open = true;
+    },
+    
+    close() {
+      this.open = false;
+    },
+    
+    async submit() {
+      const project = this.project.trim();
+      const task = this.description.trim();
+      const provider = this.provider;
+      const model = this.model.trim() || undefined;
+      const context = this.context.trim() || undefined;
+      
+      if (!project) {
+        this.error = 'Please specify a project or repository.';
+        return;
+      }
+      if (!task) {
+        this.error = 'Please provide a task description.';
+        return;
+      }
+      
+      this.loading = true;
+      this.error = '';
+      
+      try {
+        const payload = { project, task, provider, model, context };
+        const body = cryptoKey ? await encryptData(payload) : payload;
+        const res = await fetch(`/api/agents/jobs?token=${encodeURIComponent(authToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+          body: JSON.stringify(body),
+        });
+        
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          this.error = err && err.detail ? err.detail : `Error ${res.status}`;
+          this.loading = false;
+          return;
+        }
+        
+        const created = await res.json();
+        this.loading = false;
+        this.close();
+        
+        // Refresh agents list and open detail
+        const idx = currentAgents.findIndex(a => a.agent_id === created.agent_id);
+        if (idx >= 0) {
+          currentAgents[idx] = created;
+        } else {
+          currentAgents.unshift(created);
+        }
+        if (typeof openAgentDetail === 'function') {
+          openAgentDetail(created);
+        }
+      } catch (e) {
+        this.error = `Network error: ${e.message}`;
+        this.loading = false;
+      }
+    }
+  }));
+
+  // Bottom Bar Component (Queue Management & Stalled Banner)
+  Alpine.data('bottomBar', () => ({
+    queuePanelOpen: false,
+    stalled: false,
+    stalledSeconds: 0,
+    promptQueue: [],
+    
+    init() {
+      window.bottomBarComponent = this;
+      // Listen for agy:event to update stalled state and prompt queue
+      window.addEventListener('agy:event', (e) => {
+        const event = e.detail;
+        if (event?.event === 'session_stalled') {
+          this.stalled = true;
+          this.stalledSeconds = event.data?.seconds_inactive || 180;
+        } else if (event?.event === 'prompt_queue_updated') {
+          this.promptQueue = event.data?.queue || [];
+        } else if (event?.event === 'prompt_delivered' || event?.event === 'prompt_cancelled') {
+          if (event.data?.id) {
+            this.promptQueue = this.promptQueue.filter(p => p.id !== event.data.id);
+          }
+        } else if (event?.event === 'step_added' || event?.event === 'step_updated' || event?.event === 'agent_output' || event?.event === 'terminal_screen') {
+          this.stalled = false;
+          this.stalledSeconds = 0;
+        } else if (event?.event === 'init' || event?.event === 'session_switched') {
+          this.stalled = false;
+          this.stalledSeconds = 0;
+        }
+      });
+    },
+    
+    get queueCount() {
+      return this.promptQueue.length;
+    },
+    
+    toggleQueuePanel() {
+      this.queuePanelOpen = !this.queuePanelOpen;
+    },
+    
+    closeQueuePanel() {
+      this.queuePanelOpen = false;
+    },
+    
+    async cancelQueuedPrompt(promptId) {
+      this.promptQueue = this.promptQueue.filter(p => p.id !== promptId);
+      if (typeof cancelQueuedPrompt === 'function') {
+        await cancelQueuedPrompt(promptId);
+      }
+    },
+    
+    async moveQueueItem(promptId, direction) {
+      // Find the index of the prompt in the queue
+      const index = this.promptQueue.findIndex(p => p.id === promptId);
+      if (index === -1) return;
+      
+      const newIndex = index + (direction === 'up' ? -1 : 1);
+      if (newIndex < 0 || newIndex >= this.promptQueue.length) return;
+      
+      // Reorder the queue via API
+      const newOrder = [...this.promptQueue];
+      const [item] = newOrder.splice(index, 1);
+      newOrder.splice(newIndex, 0, item);
+      this.promptQueue = newOrder;
+      
+      const payload = {
+        action: 'reorder_prompt_queue',
+        data: {
+          conversation_id: currentConversationId,
+          ordered_ids: newOrder.map(p => p.id)
+        }
+      };
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          const msg = cryptoKey ? await encryptData(payload) : payload;
+          ws.send(JSON.stringify(msg));
+        } catch (e) {
+          console.warn('Failed to reorder queue:', e);
+        }
+      } else if (currentConversationId) {
+        fetch(`/api/sessions/${encodeURIComponent(currentConversationId)}/queue/reorder?token=${encodeURIComponent(authToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+          body: JSON.stringify({ ordered_ids: newOrder.map(p => p.id) }),
+        }).catch(e => console.warn('Failed to reorder queue via REST:', e));
+      }
+    },
+    
+    sendInterrupt() {
+      this.stalled = false;
+      if (typeof sendInterrupt === 'function') {
+        sendInterrupt(currentConversationId);
+      }
+      if (navigator.vibrate) {
+        navigator.vibrate([40, 60, 40]);
+      }
+    },
+    
+    sendKill() {
+      this.stalled = false;
+      if (typeof sendKill === 'function') {
+        sendKill(currentConversationId);
+      }
+      if (navigator.vibrate) {
+        navigator.vibrate([40, 60, 40]);
+      }
+    }
+  }));
+});
+
+// Initialize Alpine Store (Phase 2.4 - already done in getAlpineStore/initAlpineStore)
+// The store is initialized in the earlier initAlpineStore() call
+
+// Expose functions for Alpine components
+window.openNewSessionSheet = () => {
+  if (window.newSessionSheetComponent) {
+    window.newSessionSheetComponent.openSheet();
+  }
+};
+
+window.closeNewSessionSheet = () => {
+  if (window.newSessionSheetComponent) {
+    window.newSessionSheetComponent.close();
+  }
+};
+
+window.openMetaTaskSheet = (prefill) => {
+  if (window.metaTaskSheetComponent) {
+    window.metaTaskSheetComponent.openSheet(prefill);
+  }
+};
+
+window.closeMetaTaskSheet = () => {
+  if (window.metaTaskSheetComponent) {
+    window.metaTaskSheetComponent.close();
+  }
+};
+
+// Fetch conversations and agents for drawer
+async function fetchConversationsAndAgents() {
+  try {
+    const [convRes, agentRes] = await Promise.all([
+      fetch(`/api/conversations?token=${encodeURIComponent(authToken)}`),
+      fetch(`/api/agents?token=${encodeURIComponent(authToken)}`),
+    ]);
+    if (convRes.ok) {
+      drawerConversations = await convRes.json();
+    }
+    if (agentRes.ok) {
+      currentAgents = await agentRes.json();
+    }
+    if (typeof renderCurrentDrawerTab === 'function') {
+      renderCurrentDrawerTab();
+    }
+    if (typeof startDrawerDotTimer === 'function') {
+      startDrawerDotTimer();
+    }
+  } catch (e) {
+    console.debug('Failed refreshing drawer:', e);
+  }
 }
 
 // Initialize all modules

@@ -53,27 +53,27 @@ Tavoite: Poistaa mobiilikäytön hyväksyntäuupumus sallimalla lukuoperaatioide
   - Verifioitu `tests/test_approval_policy.py`-testisarjalla.
 
 ### Tehtävä 1.3: Mobiilikäyttöliittymän 3-asentoinen valitsin
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/index.html`
   * `src/agy_remote/static/style.css`
-* **Mitä tehdään:**
-  1. Päivitä yläpalkin tai drawerin `autoAcceptBtn` näyttämään kolme selkeää tilaa:
-     - 🔴 *Kysy kaikki* (Kilpi lukittuna / oletus)
-     - 🟡 *Salli luku* (Kilpi + kirjan/silmän kuvake)
-     - 🟢 *Salli kaikki* (Kilpi avoinna)
-  2. Lisää tilojen CSS-korostusvärit ja selkeät aria-label/title-tekstit.
-* **Verifiointi:** Painikkeen ulkoasun ja tilavaihdon tarkistus selaimessa mobiilinäkymässä.
+* **Mitä tehtiin:**
+  1. Päivitetty yläpalkin ja drawerin hyväksyntäkytkimet näyttämään kolme selkeää tilaa ja SVG-kuvakkeet:
+     - 🔴 *Kysy kaikki* (Lukittu kilpi)
+     - 🟡 *Salli luku* (Kilpi + silmäkuvake)
+     - 🟢 *Salli kaikki* (Avoin/hyväksytty kilpi)
+  2. Lisätty tilakohtaiset CSS-tyylit (`.policy-auto-reads`, `.policy-auto-all`) ja dynaamiset aria-labelit.
 
 ### Tehtävä 1.4: Client-puolen tilanvaihto ja synkronointi
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/app.js`
-* **Mitä tehdään:**
-  1. Muuta klikkaustapahtumankäsittelijä kiertämään tilat: `ask_all` -> `auto_reads` -> `auto_all` -> `ask_all`.
-  2. Tallenna valinta `localStorage`-muistiin sessiokohtaisesti tai globaalisti.
-  3. Lähetä salattu WebSocket-sanoma palvelimelle: `{ type: "set_approval_policy", policy: currentPolicy }`.
-* **Verifiointi:** Selaimen reload säilyttää valitun profiilin ja palvelin kuittaa asetuksen.
+* **Mitä tehtiin:**
+  1. Klikkauskäsittelijä kiertää tilat: `ask_all` -> `auto_reads` -> `auto_all` -> `ask_all`.
+  2. Valinta tallennetaan `localStorage`-muistiin (`agy-approval-policy`).
+  3. Lähetetään salattu WebSocket-viesti `{ action: "set_approval_policy", data: { policy: ... } }` ja synkronoidaan Alpine-tilaan.
 
 ---
 
@@ -82,49 +82,38 @@ Tavoite: Poistaa mobiilikäytön hyväksyntäuupumus sallimalla lukuoperaatioide
 Tavoite: Korvata `src/agy_remote/static/app.js`:n ~130 KB imperatiivinen DOM-koodi deklaratiivisilla Alpine.js-komponenteilla ilman erillistä build-steppiä tai npm-riippuvuuksia.
 
 ### Tehtävä 2.1: Alpine.js:n vendorointi ja CSP-varmennus
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
-  * `src/agy_remote/static/alpine.min.js` (uusi tiedosto)
+  * `src/agy_remote/static/alpine.min.js`
   * `src/agy_remote/static/index.html`
-* **Mitä tehdään:**
-  1. Tallenna virallinen Alpine.js v3.x minified-jakelu tiedostoon `src/agy_remote/static/alpine.min.js`.
-  2. Lisää skripti `index.html`:n `<head>`-osaan:
-     ```html
-     <script defer src="/static/alpine.min.js"></script>
-     ```
-  3. Varmista, että `index.html`:n CSP-määritys (`script-src 'self'`) sallii skriptin suorituksen ilman virheitä.
-* **Verifiointi:** Avaa sivu ja tarkista selaimen konsoli (ei CSP-virheitä, `window.Alpine` on määritelty).
+  * `src/agy_remote/server.py`
+* **Mitä tehtiin:**
+  1. Tallennettu virallinen Alpine.js v3.x jakelu paikalliseksi tiedostoksi `src/agy_remote/static/alpine.min.js`.
+  2. Lisätty `<script defer src="/static/alpine.min.js"></script>` `index.html`:ään.
+  3. Konfiguroitu CSP-otsikot (`script-src 'self' 'unsafe-eval'`) mahdollistamaan Alpinen reaktiiviset lausekkeet tiukan origin-eristyksen säilyttäen.
 
 ### Tehtävä 2.2: Sivupalkin (Drawer) ja välilehtien deklaratiivinen refaktorointi
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/index.html`
   * `src/agy_remote/static/app.js`
-* **Mitä tehdään:**
-  1. Muuta drawer `index.html`:ssä käyttämään Alpine-direktiivejä:
-     ```html
-     <div x-data="{ open: false, tab: 'agents' }" @toggle-drawer.window="open = !open">
-       <div x-show="open" x-transition.opacity class="drawer-backdrop" @click="open = false"></div>
-       <div x-show="open" x-transition:enter="..." class="drawer">
-         ...
-         <button :class="{ active: tab === 'agents' }" @click="tab = 'agents'">Kaikki agentit</button>
-         <button :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">Sessiot</button>
-       </div>
-     </div>
-     ```
-  2. Poista `app.js`:stä manuaaliset `document.getElementById('drawer').classList.add('open')` jne.
-* **Verifiointi:** Drawer avautuu ja sulkeutuu sulavasti animaatiolla, ja välilehdet vaihtuvat ilman `app.js`:n DOM-manipulaatiota.
+* **Mitä tehtiin:**
+  1. Sivupalkki ja taustapeite suojattu yhtenäisellä `x-data="drawer()"` -komponentilla ja liukusiirtymillä (`x-transition`).
+  2. Välilehtien vaihto (`All Agents` / `AGY Sessions`) deklaratiivisesti `switchTab`- ja `$watch`-toiminnoilla.
+  3. Sillattu `window.drawerComponent` ja `@toggle-drawer` -tapahtumat imperatiivisen koodin tueksi.
 
 ### Tehtävä 2.3: Modaalidialogien (New Session, Meta Task) muunto
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/index.html`
   * `src/agy_remote/static/app.js`
-* **Mitä tehdään:**
-  1. Muunna New Session Sheet ja Meta-AGY Task Sheet Alpine-komponenteiksi (`x-data="{ show: false, repo: '', branch: '' }"`).
-  2. Korvaa suorat `hidden`-attribuuttien kytkennät `x-show`- ja `x-transition`-määrityksillä.
-  3. Siisti `app.js`:stä pois lomakekenttien manuaalinen tyhjennyskoodi ja sido ne `x-model`-sidoksilla.
-* **Verifiointi:** Lomakkeet avautuvat, validaatiot toimivat ja sulkeminen tyhjentää tilan oikein.
+* **Mitä tehtiin:**
+  1. New Session Sheet ja Meta-AGY Task Sheet refaktoroitu `newSessionSheet()` ja `metaTaskSheet()` Alpine-komponenteiksi.
+  2. Lomakekentät sidottu `x-model`-sidoksilla, virheilmoitukset `x-text`/`x-show`-direktiiveillä.
+  3. Yhdistetty spawn-tapahtumat (`activeSpawn`) istunnon alustuksen sulavaan seurantaan ja automaattiseen sulkemiseen.
 
 ### Tehtävä 2.4: E2EE WebSocket -tapahtumien ja Alpine Store -integraatio
 * **Tila:** ✅ **VALMIS (v26.09.05.114)**
@@ -168,18 +157,18 @@ Tavoite: Tunnistaa tilanteet, joissa CLI-ajuri tai taustakomento on jumiutunut (
   - Verifioitu `tests/test_watchdog.py`-testisarjalla.
 
 ### Tehtävä 3.3: Mobiilikortti jumiutumiselle
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/index.html`
   * `src/agy_remote/static/style.css`
   * `src/agy_remote/static/app.js`
-* **Mitä tehdään:**
-  1. Rakenna varoituskortti syötteen yläpuolelle, joka ilmestyy vain kun `session.stalled === true` (tai kun kuunnellaan `agy:event` stalled-tapahtumaa).
-  2. Tarjoa kaksi toimintopainiketta:
-     - `[Keskeytä (Ctrl+C)]` (oranssi painike -> kutsuu `Alpine.store('agy').sendInterrupt()`)
-     - `[Pakkotapa]` (punainen painike -> kutsuu `Alpine.store('agy').sendKill()`)
-  3. Kytke painikkeet kutsumaan vastaavia keskeytysreittejä ja anna mobiilikäyttäjälle haptinen palaute (`navigator.vibrate([40, 60, 40])`).
-* **Verifiointi:** Tarkista, että kortti ilmestyy emuloidulla tapahtumalla ja poistuu heti kun tulostevirta jatkuu.
+* **Mitä tehtiin:**
+  1. Rakennettu varoituskortti syötteen yläpuolelle, joka ilmestyy kun `stalled === true` (`x-show="stalled"`).
+  2. Tarjottu kaksi toimintopainiketta:
+     - `[Keskeytä (Ctrl+C)]` (oranssi painike -> kutsuu `sendInterrupt()`)
+     - `[Pakkotapa]` (punainen painike -> kutsuu `sendKill()`)
+  3. Kytketty painikkeet vastaaviin WS/REST-reitteihin haptisella värinäpalautteella (`navigator.vibrate([40, 60, 40])`), ja kortti poistuu heti kun tulostevirta tai käyttäjätoiminto jatkuu.
 
 ---
 
@@ -207,14 +196,14 @@ Tavoite: Mahdollistaa useamman tehtävän syöttäminen jonoon puhelimelta siten
   - REST- ja WS-reitit jonon uudelleenjärjestelylle lisätty (`/api/sessions/{id}/queue/reorder`).
 
 ### Tehtävä 4.3: Käyttöliittymäkomponentti jonon hallintaan
+* **Tila:** ✅ **VALMIS (v26.09.05.115)**
 * **Taso:** 🟢 KAIKKI MALLIT
 * **Kohdetiedostot:**
   * `src/agy_remote/static/index.html`
   * `src/agy_remote/static/app.js`
-* **Mitä tehdään:**
-  1. Lisää syöttökentän viereen pieni merkki: "Jonossa (N)".
-  2. Luo ponnahdusikkuna tai lista, josta käyttäjä voi poistaa jonotetun viestin tai muokata sen tekstiä ennen kuin se lähetetään.
-* **Verifiointi:** Syötä viesti agentin ollessa varattuna -> viesti siirtyy jonoon näkyviin -> suorituksen päätyttyä viesti poistuu jonosta ja syötetään istuntoon.
+* **Mitä tehtiin:**
+  1. Lisätty syöttökentän viereen interaktiivinen merkki: "Jonossa (N)" (`#queueBadge`), joka avaa hallintapaneelin.
+  2. Toteutettu `queuePanel`-näkymä, josta käyttäjä voi tarkastella jonotettuja viestejä, poistaa viestin (`cancelQueuedPrompt`) tai siirtää sen järjestystä ylös/alas (`moveQueueItem`), synkronoiden `ordered_ids` WebSocket- ja REST-palvelimelle.
 
 ---
 
