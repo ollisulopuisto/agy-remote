@@ -134,6 +134,14 @@ body {
   color: #fff;
   background-color: var(--primary);
 }
+.icon-btn.policy-auto-reads {
+  color: #fff;
+  background-color: #d97706 !important; /* amber/warm warning */
+}
+.icon-btn.policy-auto-all {
+  color: #fff;
+  background-color: #16a34a !important; /* green/all-allowed */
+}
 
 /* Chat Canvas & Messages */
 .chat-container {

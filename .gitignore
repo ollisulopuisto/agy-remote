@@ -53,3 +53,8 @@ config.yaml
 # App uploads & local keys
 .agents/uploads/
 vapid.json
+
+# Scratch media
+/*.png
+/*.jpg
+/*.jpeg

@@ -1,5 +1,23 @@
 # Changelog
 
+## v26.09.05.114 — Granular tool approvals, Alpine.js store bridge, process watchdog, and queue reordering
+
+- **Granular Tool Approval Policies (`ask_all`, `auto_reads`, `auto_all`).** Introduced tiered
+  approval policies configurable globally or per session. Read-only exploration tools (`view_file`,
+  `list_dir`, `grep_search`, `find_by_name`, `read_url_content`, etc.) can be auto-allowed in
+  `auto_reads` mode, while mutation tools (`write_to_file`, `replace_file_content`, `run_command`, etc.)
+  still require explicit user approval. Interactive question gates (`ask_question`) remain strictly
+  unbypassed across all modes. Exposed via `/api/approvals/policy` (GET/POST) and WebSocket sync.
+- **Alpine.js Reactive Store Bridge.** Established a headless, zero-CDN bridge to Alpine.js (`Alpine.store("agy", ...)`).
+  Dispatches `CustomEvent("agy:event")` on window for reactive component binding and exposes global actions
+  (`setApprovalPolicy`, `sendInterrupt`, `sendKill`, `reorderPromptQueue`) with dual WebSocket and REST fallbacks.
+- **Process Stall Watchdog & Emergency Interrupt/Kill Controls.** Added active execution monitoring
+  to detect stalled/hung agent processes. Integrated supervisor-level SIGINT/`C-c` interrupt and SIGTERM/SIGKILL
+  process termination across both PTY and Tmux supervisors, accessible via `/api/sessions/{id}/interrupt`
+  and `/api/sessions/{id}/kill` REST endpoints and WebSocket commands.
+- **Prompt Queue Reordering.** Added the backend capability to reorder pending queued prompts for active
+  sessions via `/api/sessions/{id}/queue/reorder` and WebSocket messaging.
+
 ## v26.09.04.113 — Origin pane binding and keyboard capture protection for TUI popups
 
 - **Direct Origin Pane Binding for Approvals.** The `PreToolUse` hook now captures `$TMUX_PANE`

@@ -11,6 +11,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from .config import find_server_for_tmux_session, live_runtime_state, read_stored_token
 from .tmux_runner import session_id_from_env
@@ -31,6 +32,40 @@ SKIP_PERMISSIONS_ENV = "AGY_REMOTE_SKIP_PERMISSIONS"
 #: layer wins and the user sees `signal: killed` instead of being told the
 #: approval timed out. Waiting 310s here meant agy always won.
 HOOK_RESPONSE_TIMEOUT = 270.0
+
+#: Standard tool names across Antigravity, Claude Code, and Gemini CLI that
+#: only inspect the workspace without executing commands or modifying files.
+READ_ONLY_TOOLS: set[str] = {
+    "view_file",
+    "grep_search",
+    "find_by_name",
+    "list_dir",
+    "read_url_content",
+    "read_browser_page",
+    "search_web",
+    "view",
+    "grep",
+    "glob",
+    "ls",
+    "readurl",
+    "websearch",
+}
+
+
+def is_read_only_tool(tool_name: str, args: dict[str, Any] | None = None) -> bool:
+    """Check if a tool call is read-only (safe for auto-approval under auto_reads policy)."""
+    if not tool_name:
+        return False
+    name = tool_name.lower().strip()
+    # ask_question is a user dialogue gate, never a read-only query
+    if name == "ask_question":
+        return False
+    if name in READ_ONLY_TOOLS:
+        return True
+    if name in ("manage_task", "manage_subagents") and args and isinstance(args, dict):
+        action = str(args.get("Action", "")).lower().strip()
+        return action in ("list", "status")
+    return False
 
 
 def resolve_server_endpoint() -> tuple[str, str]:

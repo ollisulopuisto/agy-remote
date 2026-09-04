@@ -90,6 +90,16 @@ class PtySupervisor:
         os.write(self.master_fd, sequence)
         return True
 
+    def kill(self) -> bool:
+        """Forcefully terminate the child process with SIGKILL."""
+        if self.pid is None:
+            return False
+        try:
+            os.kill(self.pid, signal.SIGKILL)
+            return True
+        except ProcessLookupError:
+            return False
+
     @staticmethod
     def _become_session_leader(slave_fd: int) -> None:
         """Run in the child: take the pty as its controlling terminal.

@@ -28,6 +28,7 @@ from fastapi import WebSocket
 from .backends import AgentBackend, make_backend, parse_ask_question_args
 from .config import RUNTIME_STATE_FILE, RemoteConfig, get_config
 from .crypto import ReplayGuard, decode_key, encrypt_payload
+from .hooks import is_read_only_tool
 from .loop_guard import LoopGuard
 from .mailbox import format_envelope, mailbox_dir, parse_message_line
 from .meta_agy import MetaAgyClient
@@ -161,6 +162,13 @@ class SessionManager:
         self._prompt_queues: dict[str, list[dict[str, Any]]] = {}
         #: Overridable in tests; production uses the module default.
         self.busy_window_seconds: float = BUSY_WINDOW_SECONDS
+        #: Approval policy: 'ask_all' | 'auto_reads' | 'auto_all'
+        self.approval_policy: str = "ask_all"
+        self._session_approval_policies: dict[str, str] = {}
+        #: Stall watchdog: track last terminal output timestamp per session/conversation
+        self._last_output_time: dict[str, float] = {}
+        self._stalled_sessions: set[str] = set()
+        self.stall_timeout_seconds: float = 180.0
 
         # Key material for sealing every frame we put on the wire. Derived once
         # so a malformed key fails loudly at startup rather than per-message.
@@ -571,6 +579,8 @@ class SessionManager:
         self._sessions[record.id] = record
         if supervisor is not None:
             self._supervisors[record.id] = supervisor
+            if hasattr(supervisor, "add_output_listener"):
+                supervisor.add_output_listener(lambda _data: self.note_output(record.conversation_id or record.id))
         if mirror is not None:
             self._terminal_mirrors[record.id] = mirror
 
@@ -1107,6 +1117,8 @@ class SessionManager:
         """
         if conversation_id:
             self._last_activity[conversation_id] = time.monotonic()
+            self._last_output_time[conversation_id] = time.monotonic()
+            self._stalled_sessions.discard(conversation_id)
 
     def is_conversation_busy(self, conversation_id: str | None) -> bool:
         """Whether the agent in this conversation is mid-turn.
@@ -1158,6 +1170,132 @@ class SessionManager:
                         {"event": "prompt_cancelled", "data": {"id": prompt_id, "conversation_id": conversation_id}}
                     )
                     return True
+        return False
+
+    async def reorder_queued_prompts(self, conversation_id: str, ordered_ids: list[str]) -> bool:
+        """Reorder prompts in the conversation's queue."""
+        queue = self._prompt_queues.get(conversation_id)
+        if not queue:
+            return False
+        id_to_entry = {e["id"]: e for e in queue}
+        new_queue: list[dict[str, Any]] = []
+        for pid in ordered_ids:
+            if pid in id_to_entry:
+                new_queue.append(id_to_entry.pop(pid))
+        for remaining in id_to_entry.values():
+            new_queue.append(remaining)
+        self._prompt_queues[conversation_id] = new_queue
+        await self.broadcast(
+            {
+                "event": "prompt_queue_updated",
+                "data": {
+                    "conversation_id": conversation_id,
+                    "queue": list(new_queue),
+                },
+            }
+        )
+        return True
+
+    # -------------------------------------------------------------------------
+    # Granular tool approval policy
+    # -------------------------------------------------------------------------
+
+    def get_approval_policy(self, conversation_id: str | None = None) -> str:
+        """The active tool approval policy: 'ask_all', 'auto_reads', or 'auto_all'."""
+        if conversation_id and conversation_id in self._session_approval_policies:
+            return self._session_approval_policies[conversation_id]
+        return self.approval_policy
+
+    def set_approval_policy(self, policy: str, conversation_id: str | None = None) -> None:
+        """Set approval policy globally or for a specific conversation."""
+        valid_policies = {"ask_all", "auto_reads", "auto_all"}
+        normalized = policy.lower().strip()
+        if normalized not in valid_policies:
+            raise ValueError(f"Invalid approval policy: {policy}. Must be one of {valid_policies}")
+        if conversation_id:
+            self._session_approval_policies[conversation_id] = normalized
+        else:
+            self.approval_policy = normalized
+
+    # -------------------------------------------------------------------------
+    # Process stall watchdog & emergency controls
+    # -------------------------------------------------------------------------
+
+    def note_output(self, key: str | None = None) -> None:
+        """Record terminal output activity for stall detection."""
+        now = time.monotonic()
+        if key:
+            self._last_output_time[key] = now
+            self._stalled_sessions.discard(key)
+        cid = self.active_conversation_id or self.supervised_conversation_id
+        if cid:
+            self._last_output_time[cid] = now
+            self._stalled_sessions.discard(cid)
+
+    def is_session_stalled(self, conversation_id: str | None = None) -> bool:
+        """Check if a session is currently marked as stalled."""
+        cid = conversation_id or self.active_conversation_id or self.supervised_conversation_id
+        return bool(cid and cid in self._stalled_sessions)
+
+    async def check_stalled_sessions(self, threshold_seconds: float | None = None) -> list[str]:
+        """Check all supervised sessions for output stalls during busy turns.
+
+        A turn is stalled if it is busy, has produced no output for >threshold_seconds,
+        and is NOT currently waiting on a pending tool approval.
+        """
+        threshold = threshold_seconds or self.stall_timeout_seconds
+        now = time.monotonic()
+        newly_stalled: list[str] = []
+
+        all_convs = set(self._last_activity.keys())
+        for sess in self._sessions.values():
+            if sess.conversation_id:
+                all_convs.add(sess.conversation_id)
+
+        for cid in all_convs:
+            if not self.is_conversation_busy(cid):
+                self._stalled_sessions.discard(cid)
+                continue
+
+            has_pending = any(
+                app.get("conversation_id") == cid and app.get("status") == "pending"
+                for app in self._pending_approvals.values()
+            )
+            if has_pending:
+                continue
+
+            last_out = self._last_output_time.get(cid, self._last_activity.get(cid, now))
+            if (now - last_out) >= threshold:
+                if cid not in self._stalled_sessions:
+                    self._stalled_sessions.add(cid)
+                    newly_stalled.append(cid)
+                    logger.warning("Session %s detected as STALLED (silent for %.1fs)", cid, now - last_out)
+                    await self.broadcast(
+                        {
+                            "event": "session_stalled",
+                            "data": {
+                                "conversation_id": cid,
+                                "seconds_inactive": round(now - last_out, 1),
+                            },
+                        }
+                    )
+            else:
+                self._stalled_sessions.discard(cid)
+
+        return newly_stalled
+
+    def interrupt_session(self, conversation_id: str | None = None) -> bool:
+        """Send SIGINT / Ctrl+C to the session supervisor."""
+        sup = self.get_supervisor(conversation_id)
+        if sup is not None and hasattr(sup, "send_key"):
+            return bool(sup.send_key("interrupt"))
+        return False
+
+    def kill_session(self, conversation_id: str | None = None) -> bool:
+        """Forcefully terminate the session supervisor."""
+        sup = self.get_supervisor(conversation_id)
+        if sup is not None and hasattr(sup, "kill"):
+            return bool(sup.kill())
         return False
 
     async def submit_prompt(self, prompt: str, conversation_id: str | None = None) -> dict[str, Any]:
@@ -1239,6 +1377,7 @@ class SessionManager:
             cols = 80
         mirror = TerminalMirror(rows=rows, cols=cols)
         supervisor.add_output_listener(mirror.feed)
+        supervisor.add_output_listener(lambda _data: self.note_output())
         self.terminal = mirror
 
     def attach_screen(self, mirror: Any) -> None:
@@ -1565,6 +1704,9 @@ class SessionManager:
                 # Queued follow-ups whose turns have ended go in now
                 await self.deliver_due_prompts()
 
+                # Watchdog for hung / stalled sessions
+                await self.check_stalled_sessions()
+
                 # End sessions whose pairing has expired mid-connection
                 await self.disconnect_expired_clients()
 
@@ -1819,6 +1961,21 @@ class SessionManager:
         immediate. "ask" hands the decision back to agy, which prompts in its
         own terminal exactly as it would with no hook installed.
         """
+        policy = self.get_approval_policy(conversation_id)
+        if tool_name != "ask_question":
+            if policy == "auto_all":
+                logger.info("Approval for %s auto-allowed by policy=auto_all", tool_name)
+                return {
+                    "decision": "allow",
+                    "reason": "agy-remote: auto-accepted (policy: auto_all)",
+                }
+            if policy == "auto_reads" and is_read_only_tool(tool_name, args):
+                logger.info("Approval for read-only tool %s auto-allowed by policy=auto_reads", tool_name)
+                return {
+                    "decision": "allow",
+                    "reason": f"agy-remote: auto-accepted read-only tool ({tool_name})",
+                }
+
         if not self.can_hold_approval(conversation_id):
             logger.info("Approval for %s answered locally: no phone is watching this session", tool_name)
             return {

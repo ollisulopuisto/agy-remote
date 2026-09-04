@@ -195,6 +195,18 @@ class TmuxSupervisor:
         )
         return res.returncode == 0
 
+    def kill(self) -> bool:
+        """Terminate the target pane or session."""
+        if not self.has_session():
+            return False
+        cmd = (
+            ["tmux", "kill-pane", "-t", self.target]
+            if ":" in self.target
+            else ["tmux", "kill-session", "-t", self.session_name]
+        )
+        res = subprocess.run(cmd, capture_output=True, check=False)
+        return res.returncode == 0
+
     def get_pane_pid(self) -> int | None:
         """The PID of the process running in the target pane, or None if gone."""
         if not self.has_session():

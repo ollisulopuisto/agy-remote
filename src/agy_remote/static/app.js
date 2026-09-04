@@ -11,6 +11,60 @@ let autoScroll = true;
 let attachedFiles = [];
 let cryptoKey = null;
 let agentTraffic = [];
+let isSessionStalled = false;
+let sessionStalledSeconds = 0;
+
+// Alpine.js store bridge for reactive UI components (Phase 2.4)
+function getAlpineStore() {
+  if (window.Alpine && window.Alpine.store) {
+    try {
+      return window.Alpine.store('session');
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
+
+function syncToAlpine(updates) {
+  const store = getAlpineStore();
+  if (store && updates && typeof updates === 'object') {
+    Object.assign(store, updates);
+  }
+}
+
+function initAlpineStore() {
+  if (!window.Alpine || !window.Alpine.store) return;
+  if (!getAlpineStore()) {
+    window.Alpine.store('session', {
+      connected: false,
+      statusText: 'Connecting',
+      agent: currentAgent || '',
+      conversationId: currentConversationId || null,
+      conversations: typeof drawerConversations !== 'undefined' ? drawerConversations : [],
+      steps: currentSteps || [],
+      pendingApprovals: pendingApprovals || [],
+      agentTraffic: agentTraffic || [],
+      usage: null,
+      approvalPolicy: typeof approvalPolicy !== 'undefined' ? approvalPolicy : 'ask_all',
+      stalled: false,
+      stalledSeconds: 0,
+      promptQueue: [],
+      setApprovalPolicy(p) {
+        if (typeof setApprovalPolicy === 'function') setApprovalPolicy(p);
+      },
+      interrupt(cid) {
+        if (typeof sendInterrupt === 'function') sendInterrupt(cid);
+      },
+      kill(cid) {
+        if (typeof sendKill === 'function') sendKill(cid);
+      }
+    });
+  }
+}
+
+document.addEventListener('alpine:init', initAlpineStore);
+if (window.Alpine) initAlpineStore();
 
 // Parse token and E2EE key from URL and Hash
 const urlParams = new URLSearchParams(window.location.search);
@@ -737,6 +791,10 @@ function handleServerEvent(event) {
 
   const { event: type, data } = event;
 
+  try {
+    window.dispatchEvent(new CustomEvent('agy:event', { detail: event }));
+  } catch (_) {}
+
   if (type === 'pong') {
     lastPongAt = Date.now();
     return;
@@ -765,6 +823,17 @@ function handleServerEvent(event) {
     renderCurrentDrawerTab(data.conversations || []);
     updateApprovalIndicators();
     checkUrlNavigation();
+    syncToAlpine({
+      connected: true,
+      statusText: 'Connected',
+      agent: currentAgent,
+      conversationId: currentConversationId,
+      conversations: data.conversations || [],
+      steps: currentSteps,
+      pendingApprovals: pendingApprovals,
+      usage: data.usage || null,
+      stalled: false,
+    });
   } else if (type === 'session_switched') {
     currentConversation = data.conversation || null;
     currentConversationId = data.conversation_id;
@@ -785,6 +854,14 @@ function handleServerEvent(event) {
     }
     updateApprovalIndicators();
     checkUrlNavigation();
+    syncToAlpine({
+      conversationId: currentConversationId,
+      conversations: data.conversations || (typeof drawerConversations !== 'undefined' ? drawerConversations : []),
+      steps: currentSteps,
+      pendingApprovals: pendingApprovals,
+      usage: data.usage || null,
+      stalled: false,
+    });
   } else if (type === 'peers') {
     applyPeerCount(data && data.count);
   } else if (type === 'agent_traffic') {
@@ -857,12 +934,13 @@ function handleServerEvent(event) {
   } else if (type === 'terminal_screen') {
     applyTerminal(data);
   } else if (type === 'approval_request') {
-    // Auto-accept, when the operator switched it on: the gate is answered
-    // allow the instant it arrives, no banner, no buzz-fit. The id guard
-    // keeps a re-broadcast from answering twice.
-    if (window.AgyFormat.autoAcceptDecision(autoAccept, data) && !autoAcceptedIds.has(data.id)) {
+    // Auto-accept, when the operator switched it on or tool matches policy:
+    // the gate is answered allow the instant it arrives, no banner, no buzz-fit.
+    const activePol = typeof approvalPolicy !== 'undefined' ? approvalPolicy : (autoAccept ? 'auto_all' : 'ask_all');
+    const decision = window.AgyFormat.autoAcceptDecision(activePol, data);
+    if (decision && !autoAcceptedIds.has(data.id)) {
       autoAcceptedIds.add(data.id);
-      respondApproval(data.id, 'allow');
+      respondApproval(data.id, decision);
       triggerVibrate([40, 30, 40]);
       statusText.textContent = `Auto-accepted ${data.tool_name || 'tool'}`;
       return;
@@ -921,6 +999,24 @@ function handleServerEvent(event) {
     }
   } else if (type === 'usage_updated') {
     renderUsageHud(data);
+  } else if (type === 'session_stalled') {
+    isSessionStalled = true;
+    sessionStalledSeconds = (data && data.seconds_inactive) || 180;
+    syncToAlpine({ stalled: true, stalledSeconds: sessionStalledSeconds });
+    if (statusText) statusText.textContent = `Turn stalled (${sessionStalledSeconds}s silence)`;
+  } else if (type === 'approval_policy_changed') {
+    if (data && data.policy) {
+      approvalPolicy = data.policy;
+      autoAccept = (data.policy === 'auto_all');
+      try {
+        localStorage.setItem('agy-approval-policy', data.policy);
+        localStorage.setItem('agy-auto-accept', autoAccept ? '1' : '0');
+      } catch (_) {}
+      applyAutoAcceptUI();
+      syncToAlpine({ approvalPolicy: data.policy });
+    }
+  } else if (type === 'prompt_queue_updated') {
+    syncToAlpine({ promptQueue: (data && data.queue) || [] });
   }
 }
 
@@ -1257,33 +1353,107 @@ function renderQuestionCard(qs, toolName, toolArgs) {
 // twice. A tool called `rm -rf /` does not care which device answered it,
 // which is exactly why the switch lives behind an explicit toggle and not a
 // one-tap banner button.
-let autoAccept = false;
+let approvalPolicy = 'ask_all';
 try {
-  autoAccept = localStorage.getItem('agy-auto-accept') === '1';
-} catch (e) { /* private mode: the switch just does not persist */ }
+  approvalPolicy = localStorage.getItem('agy-approval-policy') || (localStorage.getItem('agy-auto-accept') === '1' ? 'auto_all' : 'ask_all');
+} catch (e) { /* private mode fallback */ }
+let autoAccept = approvalPolicy === 'auto_all';
 const autoAcceptedIds = new Set();
 
 const autoAcceptBtn = document.getElementById('autoAcceptBtn');
 
+function setApprovalPolicy(policy) {
+  approvalPolicy = policy;
+  autoAccept = (policy === 'auto_all');
+  try {
+    localStorage.setItem('agy-approval-policy', policy);
+    localStorage.setItem('agy-auto-accept', autoAccept ? '1' : '0');
+  } catch (e) {}
+  applyAutoAcceptUI();
+  syncToAlpine({ approvalPolicy: policy });
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = { action: 'set_approval_policy', data: { policy: policy, conversation_id: currentConversationId } };
+    const send = async () => {
+      try {
+        const msg = cryptoKey ? await encryptData(payload) : payload;
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        console.warn('Failed to sync approval policy:', err);
+      }
+    };
+    send();
+  }
+}
+
 function applyAutoAcceptUI() {
   if (!autoAcceptBtn) return;
-  autoAcceptBtn.classList.toggle('active', autoAccept);
-  autoAcceptBtn.title = autoAccept
-    ? 'Auto-accept is ON: tool approvals are allowed without asking. Tap to turn off.'
-    : 'Auto-accept is OFF: every tool approval asks. Tap to allow all without asking.';
+  autoAcceptBtn.classList.remove('active', 'policy-auto-reads', 'policy-auto-all');
+  if (approvalPolicy === 'auto_all') {
+    autoAcceptBtn.classList.add('active', 'policy-auto-all');
+    autoAcceptBtn.title = 'Approval policy: AUTO-ALL (all tools allowed without asking). Tap to switch to Ask-All.';
+    if (statusText) statusText.textContent = 'Policy: Auto-all';
+  } else if (approvalPolicy === 'auto_reads') {
+    autoAcceptBtn.classList.add('active', 'policy-auto-reads');
+    autoAcceptBtn.title = 'Approval policy: AUTO-READS (reads/searches allowed automatically; edits/commands ask). Tap for Auto-All.';
+    if (statusText) statusText.textContent = 'Policy: Auto-reads';
+  } else {
+    autoAcceptBtn.title = 'Approval policy: ASK-ALL (every tool asks before running). Tap for Auto-Reads.';
+    if (statusText) statusText.textContent = 'Policy: Ask all';
+  }
+}
+
+function sendInterrupt(convId) {
+  const targetId = convId || currentConversationId;
+  const payload = { action: 'interrupt_session', data: { conversation_id: targetId } };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const send = async () => {
+      try {
+        const msg = cryptoKey ? await encryptData(payload) : payload;
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        console.warn('Failed to send interrupt frame:', err);
+      }
+    };
+    send();
+  } else {
+    fetch(`/api/sessions/${encodeURIComponent(targetId)}/interrupt`, {
+      method: 'POST',
+      headers: { 'X-Auth-Token': authToken }
+    }).catch(e => console.warn('Interrupt request failed:', e));
+  }
+  if (statusText) statusText.textContent = 'Sent SIGINT (Ctrl+C)';
+}
+
+function sendKill(convId) {
+  const targetId = convId || currentConversationId;
+  const payload = { action: 'kill_session', data: { conversation_id: targetId } };
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const send = async () => {
+      try {
+        const msg = cryptoKey ? await encryptData(payload) : payload;
+        ws.send(JSON.stringify(msg));
+      } catch (err) {
+        console.warn('Failed to send kill frame:', err);
+      }
+    };
+    send();
+  } else {
+    fetch(`/api/sessions/${encodeURIComponent(targetId)}/kill`, {
+      method: 'POST',
+      headers: { 'X-Auth-Token': authToken }
+    }).catch(e => console.warn('Kill request failed:', e));
+  }
+  if (statusText) statusText.textContent = 'Sent SIGKILL';
 }
 
 if (autoAcceptBtn) {
   autoAcceptBtn.addEventListener('click', () => {
-    autoAccept = !autoAccept;
-    try {
-      localStorage.setItem('agy-auto-accept', autoAccept ? '1' : '0');
-    } catch (e) { /* still works for this page load */ }
-    applyAutoAcceptUI();
-    statusText.textContent = autoAccept ? 'Auto-accept ON' : 'Auto-accept OFF';
+    const nextPolicy = approvalPolicy === 'ask_all' ? 'auto_reads' : (approvalPolicy === 'auto_reads' ? 'auto_all' : 'ask_all');
+    setApprovalPolicy(nextPolicy);
   });
   applyAutoAcceptUI();
 }
+
 
 // Alert sounds: the synthesized chimes in sounds.js. Off means off -- no
 // tone plays anywhere -- and the switch persists like auto-accept does.

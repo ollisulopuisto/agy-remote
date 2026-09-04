@@ -280,6 +280,29 @@ test('auto-accept never answers a question gate', () => {
   assert.equal(autoAcceptDecision(true, { id: 'ap-q', tool_name: 'run_command' }), 'allow');
 });
 
+test('auto_reads policy auto-allows read-only queries and prompts for mutations', () => {
+  const { autoAcceptDecision, isReadOnlyTool } = sandbox.window.AgyFormat;
+  assert.equal(isReadOnlyTool('view_file'), true);
+  assert.equal(isReadOnlyTool('grep_search'), true);
+  assert.equal(isReadOnlyTool('find_by_name'), true);
+  assert.equal(isReadOnlyTool('list_dir'), true);
+  assert.equal(isReadOnlyTool('run_command'), false);
+  assert.equal(isReadOnlyTool('write_to_file'), false);
+  assert.equal(isReadOnlyTool('ask_question'), false);
+  assert.equal(isReadOnlyTool('manage_task', { Action: 'list' }), true);
+  assert.equal(isReadOnlyTool('manage_task', { Action: 'kill' }), false);
+
+  assert.equal(autoAcceptDecision('auto_reads', { id: 'ap-1', tool_name: 'view_file' }), 'allow');
+  assert.equal(autoAcceptDecision('auto_reads', { id: 'ap-2', tool_name: 'grep_search' }), 'allow');
+  assert.equal(autoAcceptDecision('auto_reads', { id: 'ap-3', tool_name: 'run_command' }), null);
+  assert.equal(autoAcceptDecision('auto_reads', { id: 'ap-4', tool_name: 'write_to_file' }), null);
+  assert.equal(autoAcceptDecision('auto_reads', { id: 'ap-5', tool_name: 'ask_question' }), null);
+
+  assert.equal(autoAcceptDecision('ask_all', { id: 'ap-6', tool_name: 'view_file' }), null);
+  assert.equal(autoAcceptDecision('auto_all', { id: 'ap-7', tool_name: 'run_command' }), 'allow');
+});
+
+
 test('a question gate renders as a question, not as a permission warning', () => {
   const { approvalDisplay } = sandbox.window.AgyFormat;
   // Cross-realm objects (vm sandbox) fail deepStrictEqual's prototype check,

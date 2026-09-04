@@ -391,6 +391,51 @@ def create_app(
         except SpawnerError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
+    @app.post("/api/sessions/{session_id}/interrupt")
+    async def interrupt_session_endpoint(
+        session_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Interrupt a running or stalled session with SIGINT (Ctrl+C)."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        ok = mgr.interrupt_session(session_id)
+        if not ok:
+            ok = _press_key("interrupt", session_id) == "ok"
+        return {"status": "ok" if ok else "failed", "session_id": session_id}
+
+    @app.post("/api/sessions/{session_id}/kill")
+    async def kill_session_endpoint(
+        session_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Forcefully terminate a running or stalled session."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        ok = mgr.kill_session(session_id)
+        return {"status": "ok" if ok else "failed", "session_id": session_id}
+
+    @app.post("/api/sessions/{conversation_id}/queue/reorder")
+    async def reorder_queue_endpoint(
+        conversation_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Reorder queued prompts for a conversation."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        body = await request.json()
+        ordered_ids = body.get("ordered_ids", [])
+        if not isinstance(ordered_ids, list):
+            raise HTTPException(status_code=400, detail="ordered_ids list required")
+        ok = await mgr.reorder_queued_prompts(conversation_id, ordered_ids)
+        return {"status": "ok" if ok else "failed", "conversation_id": conversation_id}
+
     # -------------------------------------------------------------------------
     # Unified Multi-Agent & Meta-AGY Endpoints
     # -------------------------------------------------------------------------
@@ -559,6 +604,42 @@ def create_app(
             raise HTTPException(status_code=400, detail="endpoint and preferences dict required")
         ok = push_mgr.update_preferences(endpoint, prefs)
         return {"ok": ok, "preferences": push_mgr.get_preferences(endpoint)}
+
+    @app.get("/api/approvals/policy")
+    async def get_approval_policy(
+        request: Request,
+        conversation_id: str | None = Query(None),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Get the active approval policy ('ask_all', 'auto_reads', 'auto_all')."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        return {"policy": mgr.get_approval_policy(conversation_id)}
+
+    @app.post("/api/approvals/policy")
+    async def set_approval_policy(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Set approval policy globally or per session."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        body = await request.json()
+        policy = body.get("policy", "ask_all")
+        cid = body.get("conversation_id")
+        try:
+            mgr.set_approval_policy(policy, cid)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        await mgr.broadcast(
+            {
+                "event": "approval_policy_changed",
+                "data": {"policy": policy, "conversation_id": cid},
+            }
+        )
+        return {"status": "ok", "policy": policy, "conversation_id": cid}
 
     @app.get("/api/approvals/{approval_id}")
     async def get_approval(
@@ -1050,6 +1131,30 @@ def create_app(
                             logger.warning("Rejected malformed approval response: %s", e)
                             continue
                         await mgr.resolve_approval(approval_id, response)
+                elif action == "set_approval_policy":
+                    policy = data.get("policy", "ask_all")
+                    conv_id = data.get("conversation_id")
+                    with contextlib.suppress(ValueError):
+                        mgr.set_approval_policy(policy, conv_id)
+                        await mgr.broadcast(
+                            {
+                                "event": "approval_policy_changed",
+                                "data": {"policy": policy, "conversation_id": conv_id},
+                            }
+                        )
+                elif action == "interrupt_session":
+                    conv_id = data.get("conversation_id")
+                    ok = mgr.interrupt_session(conv_id)
+                    if not ok:
+                        _press_key("interrupt", conv_id)
+                elif action == "kill_session":
+                    conv_id = data.get("conversation_id")
+                    mgr.kill_session(conv_id)
+                elif action == "reorder_prompt_queue":
+                    conv_id = data.get("conversation_id")
+                    ordered_ids = data.get("ordered_ids", [])
+                    if conv_id and isinstance(ordered_ids, list):
+                        await mgr.reorder_queued_prompts(conv_id, ordered_ids)
                 elif action == "switch_conversation":
                     target_id = data.get("conversation_id")
                     # Only switch to an id that resolves to a real

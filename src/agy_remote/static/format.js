@@ -377,19 +377,55 @@
     return /^(mermaid|mmd)$/i.test(String(lang == null ? '' : lang).trim());
   }
 
+  const READ_ONLY_TOOLS = new Set([
+    'view_file',
+    'grep_search',
+    'find_by_name',
+    'list_dir',
+    'read_url_content',
+    'read_browser_page',
+    'search_web',
+    'view',
+    'grep',
+    'glob',
+    'ls',
+    'readurl',
+    'websearch'
+  ]);
+
+  function isReadOnlyTool(toolName, args) {
+    if (!toolName) return false;
+    const name = String(toolName).toLowerCase().trim();
+    if (name === 'ask_question') return false;
+    if (READ_ONLY_TOOLS.has(name)) return true;
+    if (name === 'manage_task' || name === 'manage_subagents') {
+      if (args && typeof args === 'object') {
+        const action = String(args.Action || '').toLowerCase().trim();
+        return action === 'list' || action === 'status';
+      }
+    }
+    return false;
+  }
+
   // The auto-accept toggle's decision: 'allow' when the operator turned the
-  // switch on and the event really is an approval an id can answer, null
-  // otherwise -- the caller then falls through to the ordinary banner. Kept
-  // pure so the moment it fires is pinned by tests, not by vibes.
-  function autoAcceptDecision(enabled, approval) {
-    if (!enabled) return null;
+  // policy on and the event is an approval that matches the policy, null
+  // otherwise -- the caller then falls through to the ordinary banner.
+  function autoAcceptDecision(enabledOrPolicy, approval) {
+    if (!enabledOrPolicy) return null;
     if (!approval || !approval.id) return null;
     // A question gate is not a permission. ask_question exists to put a
-    // question in front of a human; an auto-allow swallows the only dialogue
-    // the agent can ever open, and the session then sits waiting on an answer
-    // that was answered by nobody.
+    // question in front of a human; an auto-allow swallows the dialogue.
     if (approval.tool_name === 'ask_question') return null;
-    return 'allow';
+
+    const policy = typeof enabledOrPolicy === 'string'
+      ? enabledOrPolicy
+      : (enabledOrPolicy ? 'auto_all' : 'ask_all');
+
+    if (policy === 'auto_all') return 'allow';
+    if (policy === 'auto_reads') {
+      return isReadOnlyTool(approval.tool_name, approval.args) ? 'allow' : null;
+    }
+    return null;
   }
 
   // The ask_question gate's questions, normalized for the dock. The server
@@ -683,6 +719,7 @@
     adoptConversationId: adoptConversationId,
     applyStepUpdate: applyStepUpdate,
     socketIsStale: socketIsStale,
+    isReadOnlyTool: isReadOnlyTool,
     autoAcceptDecision: autoAcceptDecision,
     replaceFileRefs: replaceFileRefs,
     promptRoute: promptRoute,
