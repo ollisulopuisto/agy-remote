@@ -98,7 +98,7 @@ async def test_plaintext_when_e2ee_disabled(tmp_path: Path):
     ws = FakeWebSocket()
     mgr._connected_clients.add(ws)
     await mgr.broadcast({"event": "pong", "data": {}})
-    assert ws.sent[0] == {"event": "pong", "data": {}}
+    assert ws.sent[0] == {"event": "pong", "data": {}, "seq": 1}
 
 
 # ---------------------------------------------------------------------------

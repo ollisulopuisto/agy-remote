@@ -509,6 +509,56 @@ def create_app(
         mgr = get_mgr(request)
         return {"pairs": mgr.agent_traffic()}
 
+    @app.get("/api/usage")
+    async def get_usage(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Current context window tokens, cost, model, and execution mode HUD data."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        return mgr.get_usage_hud()
+
+    @app.get("/api/conversations/{conversation_id}/usage")
+    async def get_conversation_usage(
+        conversation_id: str,
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Usage and context stats for a specific conversation."""
+        verify_auth(request, token, token_header)
+        mgr = get_mgr(request)
+        return mgr.get_usage_hud(conversation_id)
+
+    @app.get("/api/push/preferences")
+    async def get_push_preferences_endpoint(
+        request: Request,
+        endpoint: str | None = Query(None),
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Get notification preferences for an endpoint."""
+        verify_auth(request, token, token_header)
+        return {"preferences": push_mgr.get_preferences(endpoint)}
+
+    @app.post("/api/push/preferences")
+    async def update_push_preferences_endpoint(
+        request: Request,
+        token: str | None = Query(None),
+        token_header: str | None = Security(api_key_header),
+    ) -> dict[str, Any]:
+        """Update notification preferences for an endpoint."""
+        verify_auth(request, token, token_header)
+        body = await request.json()
+        endpoint = body.get("endpoint")
+        prefs = body.get("preferences", {})
+        if not endpoint or not isinstance(prefs, dict):
+            raise HTTPException(status_code=400, detail="endpoint and preferences dict required")
+        ok = push_mgr.update_preferences(endpoint, prefs)
+        return {"ok": ok, "preferences": push_mgr.get_preferences(endpoint)}
+
     @app.get("/api/approvals/{approval_id}")
     async def get_approval(
         approval_id: str,
@@ -1019,6 +1069,16 @@ def create_app(
                                 },
                             },
                         )
+                elif action == "replay":
+                    since_seq = int(data.get("since_seq", 0))
+                    replayed = await mgr.replay_since(websocket, since_seq)
+                    if not replayed:
+                        init_payload = mgr._init_data()
+                        await mgr.send_to(websocket, init_payload)
+                elif action == "get_usage":
+                    conv_id = data.get("conversation_id")
+                    usage = mgr.get_usage_hud(conv_id)
+                    await mgr.send_to(websocket, {"event": "usage_updated", "data": usage})
         except WebSocketDisconnect:
             pass
         except Exception as e:

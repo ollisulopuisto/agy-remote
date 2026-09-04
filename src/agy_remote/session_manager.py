@@ -123,6 +123,10 @@ class SessionManager:
         self._running: bool = False
         #: Track active focus status per connected WebSocket client
         self._client_focus: dict[WebSocket, dict[str, Any]] = {}
+        #: Event sequencing and replay buffer for transient mobile reconnects (Phase 3)
+        self._event_seq: int = 0
+        self._outbox: list[tuple[int, dict[str, Any]]] = []
+        self._outbox_max_size: int = 500
         #: Multi-session registry (Phase 1.1)
         self._sessions: dict[str, SessionRecord] = {}
         self._supervisors: dict[str, Any] = {}
@@ -300,6 +304,7 @@ class SessionManager:
                     "conversations": [c.model_dump(mode="json") for c in self.list_conversations()],
                     "steps": [step.model_dump() for step in self.active_steps],
                     "pending_approvals": self.get_active_pending_approvals(),
+                    "usage": self.get_usage_hud(conversation_id),
                 },
             }
         )
@@ -361,6 +366,10 @@ class SessionManager:
                 "agent_traffic": self.agent_traffic(),
                 # Unified agent list (native Antigravity sessions + meta-AGY worker jobs)
                 "agents": [a.model_dump(mode="json") for a in self.list_cached_agents()],
+                # Monotonic event sequence id for replay
+                "last_seq": self._event_seq,
+                # Context, token & cost HUD data
+                "usage": self.get_usage_hud(),
             },
         }
 
@@ -480,12 +489,18 @@ class SessionManager:
         return len(stale)
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
-        """Send JSON payload to all active WebSocket clients."""
+        """Send JSON payload to all active WebSocket clients, recording in the replay outbox."""
+        self._event_seq += 1
+        seq_payload = {**payload, "seq": self._event_seq}
+
+        self._outbox.append((self._event_seq, seq_payload))
+        if len(self._outbox) > self._outbox_max_size:
+            self._outbox.pop(0)
+
         if not self._connected_clients:
             return
 
-        # Seal once and reuse: every client shares the same pre-shared key.
-        envelope = self.seal(payload)
+        envelope = self.seal(seq_payload)
 
         to_remove = set()
         for ws in self._connected_clients:
@@ -496,6 +511,54 @@ class SessionManager:
 
         for ws in to_remove:
             self._connected_clients.discard(ws)
+
+    async def replay_since(self, websocket: WebSocket, since_seq: int) -> bool:
+        """Replay missed events from the outbox to a newly reconnected client.
+
+        Returns True if all missed events were successfully replayed, or False
+        if the client has fallen behind the bounded outbox buffer (meaning
+        the client must perform a full state re-sync via `init`).
+        """
+        if not self._outbox:
+            return True
+        earliest_seq = self._outbox[0][0]
+        if since_seq < earliest_seq - 1:
+            return False
+
+        for seq, evt in self._outbox:
+            if seq > since_seq:
+                await self.send_to(websocket, evt)
+        return True
+
+    def get_usage_hud(self, conversation_id: str | None = None) -> dict[str, Any]:
+        """Get context window tokens, cost, model, and execution mode HUD data."""
+        conv_id = conversation_id or self.active_conversation_id
+        result: dict[str, Any] = {
+            "conversation_id": conv_id,
+            "agent": self.backend.name,
+            "model": None,
+            "mode": None,
+            "context_tokens": None,
+            "context_limit": None,
+            "context_percent": None,
+            "cost": None,
+            "total_steps": len(self.active_steps) if conv_id == self.active_conversation_id else 0,
+        }
+
+        mirror = self.get_screen_mirror(conv_id)
+        if mirror:
+            snap = mirror.snapshot()
+            usage = snap.get("usage") or {}
+            result.update({k: v for k, v in usage.items() if v is not None})
+            if snap.get("mode"):
+                result["mode"] = snap.get("mode")
+
+        if not result.get("model") and conv_id and conv_id in self._meta_jobs:
+            job = self._meta_jobs[conv_id]
+            result["model"] = job.model or job.provider
+            result["provider"] = job.provider
+
+        return result
 
     def register_session(
         self,
@@ -796,7 +859,7 @@ class SessionManager:
             prev = self._meta_jobs.get(job.agent_id)
             if prev is not None and prev.status != job.status:
                 updated = True
-                if self.push_manager:
+                if self.push_manager and not self.is_client_focused(job.agent_id):
                     if job.status == "completed":
                         self.push_manager.send_notification(
                             f"Agent Completed: [{job.provider}] {job.project or 'Job'}",

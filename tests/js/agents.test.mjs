@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import AgentHelpers from '../../src/agy_remote/static/agents.js';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+
+const source = readFileSync(new URL('../../src/agy_remote/static/agents.js', import.meta.url), 'utf8');
+const sandbox = { window: {}, globalThis: {} };
+vm.createContext(sandbox);
+vm.runInContext(source, sandbox);
+const AgentHelpers = sandbox.window.AgentHelpers || sandbox.globalThis.AgentHelpers;
 
 test('sortAgents places needs_attention and running before completed and failed', () => {
   const agents = [

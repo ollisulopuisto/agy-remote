@@ -134,11 +134,45 @@ const agentDetailCancelBtn = document.getElementById('agentDetailCancelBtn');
 const agentDetailRetryBtn = document.getElementById('agentDetailRetryBtn');
 const agentDetailHandoffBtn = document.getElementById('agentDetailHandoffBtn');
 
+// Usage & Context HUD elements
+const usageHud = document.getElementById('usageHud');
+const hudModel = document.getElementById('hudModel');
+const hudContext = document.getElementById('hudContext');
+const hudContextBar = document.getElementById('hudContextBar');
+const hudContextText = document.getElementById('hudContextText');
+const hudCost = document.getElementById('hudCost');
+
+const usageDetailSheet = document.getElementById('usageDetailSheet');
+const usageDetailBackdrop = document.getElementById('usageDetailBackdrop');
+const usageDetailCloseBtn = document.getElementById('usageDetailCloseBtn');
+const hudDetailModel = document.getElementById('hudDetailModel');
+const hudDetailMode = document.getElementById('hudDetailMode');
+const hudDetailPercent = document.getElementById('hudDetailPercent');
+const hudDetailProgressBar = document.getElementById('hudDetailProgressBar');
+const hudDetailTokens = document.getElementById('hudDetailTokens');
+const hudDetailSteps = document.getElementById('hudDetailSteps');
+const hudDetailCost = document.getElementById('hudDetailCost');
+const hudRunUsageBtn = document.getElementById('hudRunUsageBtn');
+const hudRunContextBtn = document.getElementById('hudRunContextBtn');
+
+// Notification Preferences elements
+const pushPrefsSheet = document.getElementById('pushPrefsSheet');
+const pushPrefsBackdrop = document.getElementById('pushPrefsBackdrop');
+const pushPrefsCloseBtn = document.getElementById('pushPrefsCloseBtn');
+const savePushPrefsBtn = document.getElementById('savePushPrefsBtn');
+const prefApprovals = document.getElementById('prefApprovals');
+const prefCompleted = document.getElementById('prefCompleted');
+const prefFailed = document.getElementById('prefFailed');
+const prefAttention = document.getElementById('prefAttention');
+const prefLoops = document.getElementById('prefLoops');
+
 let currentAgents = [];
 let activeDrawerTab = 'agents';
 let selectedAgent = null;
 let agentOutputTimer = null;
 let agentOutputOffset = 0;
+let currentUsage = null;
+let lastReceivedSeq = 0;
 
 // ----------------------------------------------------------------------------
 // Web Crypto API (AES-256-GCM payload encryption)
@@ -277,7 +311,7 @@ async function decryptData(envelope) {
 }
 
 // ----------------------------------------------------------------------------
-// Web Push Notifications
+// Web Push Notifications & Preferences
 // ----------------------------------------------------------------------------
 async function setupPushNotifications() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
@@ -285,8 +319,29 @@ async function setupPushNotifications() {
     return;
   }
 
+  // Check existing subscription on load
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub && pushBtn) {
+      pushBtn.style.color = 'var(--success)';
+      pushBtn.title = 'Notification Preferences';
+    }
+  } catch (e) {
+    // ignore
+  }
+
   pushBtn?.addEventListener('click', async () => {
     try {
+      if (Notification.permission === 'granted') {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          openPushPrefsSheet();
+          return;
+        }
+      }
+
       const permission = await Notification.requestPermission();
       if (permission !== 'granted') {
         alert('Notification permission denied');
@@ -309,7 +364,8 @@ async function setupPushNotifications() {
       });
 
       pushBtn.style.color = 'var(--success)';
-      alert('✓ Lock-screen Push Notifications enabled!');
+      pushBtn.title = 'Notification Preferences';
+      openPushPrefsSheet();
     } catch (e) {
       console.warn('Failed subscribing to push:', e);
     }
@@ -326,6 +382,111 @@ function urlBase64ToUint8Array(base64String) {
   }
   return outputArray;
 }
+
+let pushPreferences = {
+  approvals: true,
+  completed: true,
+  failed: true,
+  attention: true,
+  loops: true,
+};
+
+async function loadPushPreferences() {
+  try {
+    const saved = localStorage.getItem('agy_push_preferences');
+    if (saved) {
+      pushPreferences = { ...pushPreferences, ...JSON.parse(saved) };
+    }
+  } catch (e) {
+    console.warn('Failed loading cached push prefs', e);
+  }
+
+  if (prefApprovals) prefApprovals.checked = pushPreferences.approvals !== false;
+  if (prefCompleted) prefCompleted.checked = pushPreferences.completed !== false;
+  if (prefFailed) prefFailed.checked = pushPreferences.failed !== false;
+  if (prefAttention) prefAttention.checked = pushPreferences.attention !== false;
+  if (prefLoops) prefLoops.checked = pushPreferences.loops !== false;
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub && sub.endpoint) {
+        const res = await fetch(`/api/push/preferences?token=${encodeURIComponent(authToken)}&endpoint=${encodeURIComponent(sub.endpoint)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.preferences) {
+            pushPreferences = { ...pushPreferences, ...data.preferences };
+            if (prefApprovals) prefApprovals.checked = pushPreferences.approvals !== false;
+            if (prefCompleted) prefCompleted.checked = pushPreferences.completed !== false;
+            if (prefFailed) prefFailed.checked = pushPreferences.failed !== false;
+            if (prefAttention) prefAttention.checked = pushPreferences.attention !== false;
+            if (prefLoops) prefLoops.checked = pushPreferences.loops !== false;
+            localStorage.setItem('agy_push_preferences', JSON.stringify(pushPreferences));
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+}
+
+async function savePushPreferences() {
+  pushPreferences = {
+    approvals: prefApprovals ? prefApprovals.checked : true,
+    completed: prefCompleted ? prefCompleted.checked : true,
+    failed: prefFailed ? prefFailed.checked : true,
+    attention: prefAttention ? prefAttention.checked : true,
+    loops: prefLoops ? prefLoops.checked : true,
+  };
+  try {
+    localStorage.setItem('agy_push_preferences', JSON.stringify(pushPreferences));
+  } catch (e) {
+    // ignore
+  }
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub && sub.endpoint) {
+        await fetch(`/api/push/preferences?token=${encodeURIComponent(authToken)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: sub.endpoint,
+            preferences: pushPreferences,
+          }),
+        });
+      }
+    } catch (e) {
+      console.warn('Failed saving push preferences to server', e);
+    }
+  }
+  closePushPrefsSheet();
+}
+
+function openPushPrefsSheet() {
+  if (!pushPrefsSheet) return;
+  loadPushPreferences();
+  pushPrefsSheet.hidden = false;
+  if (pushPrefsBackdrop) pushPrefsBackdrop.hidden = false;
+  requestAnimationFrame(() => pushPrefsSheet.classList.add('open'));
+}
+
+function closePushPrefsSheet() {
+  if (!pushPrefsSheet) return;
+  pushPrefsSheet.classList.remove('open');
+  if (pushPrefsBackdrop) pushPrefsBackdrop.hidden = true;
+  setTimeout(() => {
+    pushPrefsSheet.hidden = true;
+  }, 200);
+}
+
+if (pushPrefsCloseBtn) pushPrefsCloseBtn.onclick = closePushPrefsSheet;
+if (pushPrefsBackdrop) pushPrefsBackdrop.onclick = closePushPrefsSheet;
+if (savePushPrefsBtn) savePushPrefsBtn.onclick = savePushPreferences;
 
 // ----------------------------------------------------------------------------
 // Voice Dictation (Web Speech API)
@@ -474,11 +635,20 @@ function connectWebSocket() {
   const socket = new WebSocket(wsUrl);
   ws = socket;
 
-  socket.onopen = () => {
+  socket.onopen = async () => {
     statusBadge.className = 'status-badge';
     statusText.textContent = cryptoKey ? 'E2EE Live' : 'Live';
     startHeartbeat(socket);
     reportFocusState();
+    if (lastReceivedSeq > 0) {
+      const payload = { action: 'replay', data: { since_seq: lastReceivedSeq } };
+      try {
+        const msg = cryptoKey ? await encryptData(payload) : payload;
+        socket.send(JSON.stringify(msg));
+      } catch (e) {
+        console.warn('Failed sending replay request:', e);
+      }
+    }
   };
 
   socket.onmessage = async (event) => {
@@ -561,6 +731,10 @@ document.addEventListener('visibilitychange', () => {
 
 // Handle Server Push Events
 function handleServerEvent(event) {
+  if (event && event.seq) {
+    lastReceivedSeq = Math.max(lastReceivedSeq, event.seq);
+  }
+
   const { event: type, data } = event;
 
   if (type === 'pong') {
@@ -569,6 +743,9 @@ function handleServerEvent(event) {
   }
 
   if (type === 'init') {
+    if (data.last_seq) {
+      lastReceivedSeq = Math.max(lastReceivedSeq, data.last_seq);
+    }
     applyTerminal(data.terminal);
     currentAgent = data.agent || '';
     applyAgentIdentity();
@@ -580,6 +757,9 @@ function handleServerEvent(event) {
     if (data.agents) {
       currentAgents = data.agents;
     }
+    if (data.usage) {
+      renderUsageHud(data.usage);
+    }
     updateHeader();
     renderAllMessages();
     renderCurrentDrawerTab(data.conversations || []);
@@ -590,6 +770,9 @@ function handleServerEvent(event) {
     currentConversationId = data.conversation_id;
     currentSteps = data.steps || [];
     pendingApprovals = data.pending_approvals || [];
+    if (data.usage) {
+      renderUsageHud(data.usage);
+    }
     updateHeader();
     renderAllMessages();
     if (data.conversations) {
@@ -736,6 +919,8 @@ function handleServerEvent(event) {
     if (selectedAgent && data && data.agent_id === selectedAgent.agent_id) {
       appendAgentOutput(data.content, data.next_offset);
     }
+  } else if (type === 'usage_updated') {
+    renderUsageHud(data);
   }
 }
 
@@ -1708,6 +1893,10 @@ try {
 function applyTerminal(snapshot) {
   if (!snapshot) return;
 
+  if (snapshot.usage) {
+    renderUsageHud(snapshot.usage);
+  }
+
   const badge = document.getElementById('modeBadge');
   if (badge) {
     badge.textContent = snapshot.mode || '';
@@ -2651,6 +2840,130 @@ function appendAgentOutput(content, nextOffset) {
   if (!content || !agentDetailOutput) return;
   agentDetailOutput.textContent += content;
   agentDetailOutput.scrollTop = agentDetailOutput.scrollHeight;
+}
+
+// -- Context & Usage HUD ----------------------------------------------------
+function renderUsageHud(usage) {
+  if (!usage) return;
+  currentUsage = usage;
+
+  const hasAny = !!(usage.model || (usage.context_percent != null) || usage.cost);
+  if (!hasAny) {
+    if (usageHud) usageHud.hidden = true;
+    return;
+  }
+
+  if (usageHud) usageHud.hidden = false;
+
+  if (hudModel) {
+    if (usage.model) {
+      hudModel.textContent = usage.model;
+      hudModel.hidden = false;
+    } else {
+      hudModel.hidden = true;
+    }
+  }
+
+  if (hudContext) {
+    if (usage.context_percent != null) {
+      const pct = usage.context_percent;
+      const severity = window.AgyFormat.contextSeverity(pct);
+      const text = window.AgyFormat.formatContextPercent(pct);
+
+      hudContext.classList.remove('warning', 'critical');
+      if (severity !== 'normal') {
+        hudContext.classList.add(severity);
+      }
+
+      if (hudContextBar) {
+        hudContextBar.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+      }
+      if (hudContextText) {
+        hudContextText.textContent = text;
+      }
+      hudContext.hidden = false;
+    } else {
+      hudContext.hidden = true;
+    }
+  }
+
+  if (hudCost) {
+    if (usage.cost) {
+      hudCost.textContent = usage.cost;
+      hudCost.hidden = false;
+    } else {
+      hudCost.hidden = true;
+    }
+  }
+
+  if (usageDetailSheet && !usageDetailSheet.hidden) {
+    updateUsageDetailSheet(usage);
+  }
+}
+
+function updateUsageDetailSheet(usage) {
+  const u = usage || currentUsage || {};
+  if (hudDetailModel) hudDetailModel.textContent = u.model || '—';
+  if (hudDetailMode) hudDetailMode.textContent = u.mode || '—';
+
+  const pct = u.context_percent;
+  if (hudDetailPercent) {
+    hudDetailPercent.textContent = pct != null ? `${Number(pct).toFixed(1)}%` : '—';
+  }
+  if (hudDetailProgressBar) {
+    const widthPct = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
+    hudDetailProgressBar.style.width = `${widthPct}%`;
+    const severity = window.AgyFormat.contextSeverity(pct);
+    hudDetailProgressBar.classList.remove('warning', 'critical');
+    if (severity !== 'normal') {
+      hudDetailProgressBar.classList.add(severity);
+    }
+  }
+
+  if (hudDetailTokens) {
+    hudDetailTokens.textContent = window.AgyFormat.formatTokenCount(u.tokens_used, u.tokens_limit);
+  }
+  if (hudDetailSteps) {
+    hudDetailSteps.textContent =
+      u.step_count != null ? String(u.step_count) : currentSteps ? String(currentSteps.length) : '—';
+  }
+  if (hudDetailCost) {
+    hudDetailCost.textContent = u.cost || '—';
+  }
+}
+
+function openUsageDetailSheet() {
+  if (!usageDetailSheet) return;
+  updateUsageDetailSheet(currentUsage);
+  usageDetailSheet.hidden = false;
+  if (usageDetailBackdrop) usageDetailBackdrop.hidden = false;
+  requestAnimationFrame(() => usageDetailSheet.classList.add('open'));
+}
+
+function closeUsageDetailSheet() {
+  if (!usageDetailSheet) return;
+  usageDetailSheet.classList.remove('open');
+  if (usageDetailBackdrop) usageDetailBackdrop.hidden = true;
+  setTimeout(() => {
+    usageDetailSheet.hidden = true;
+  }, 200);
+}
+
+if (usageHud) usageHud.onclick = openUsageDetailSheet;
+if (usageDetailCloseBtn) usageDetailCloseBtn.onclick = closeUsageDetailSheet;
+if (usageDetailBackdrop) usageDetailBackdrop.onclick = closeUsageDetailSheet;
+
+if (hudRunUsageBtn) {
+  hudRunUsageBtn.onclick = () => {
+    closeUsageDetailSheet();
+    sendPrompt('/usage');
+  };
+}
+if (hudRunContextBtn) {
+  hudRunContextBtn.onclick = () => {
+    closeUsageDetailSheet();
+    sendPrompt('/context');
+  };
 }
 
 async function openDrawer() {

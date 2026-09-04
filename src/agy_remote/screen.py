@@ -14,6 +14,7 @@ stream of escape sequences into a small grid of text that any client can render.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import threading
 import time
@@ -89,6 +90,7 @@ class TerminalMirror:
             "rows": rows,
             "cols": cols,
             "mode": parse_mode(lines),
+            "usage": parse_context_and_usage(lines),
         }
 
     def take_dirty_snapshot(self) -> dict[str, Any] | None:
@@ -118,6 +120,90 @@ def parse_mode(lines: list[str]) -> str | None:
         if mode:
             return mode
     return None
+
+
+def _parse_token_num(raw: str) -> int | None:
+    text = raw.strip().replace(",", "").lower()
+    mult = 1
+    if text.endswith("k"):
+        mult = 1000
+        text = text[:-1]
+    elif text.endswith("m"):
+        mult = 1000000
+        text = text[:-1]
+    try:
+        return int(float(text) * mult)
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_context_and_usage(lines: list[str]) -> dict[str, Any]:
+    """Extract model, context percentage, token counts, cost, and mode from terminal screen."""
+    non_empty = [line.strip() for line in lines if line.strip()]
+    if not non_empty:
+        return {}
+
+    status_bar = non_empty[-1]
+    candidate_text = " \n ".join(non_empty[-5:])
+
+    result: dict[str, Any] = {"raw": status_bar}
+
+    mode = parse_mode(lines)
+    if mode:
+        result["mode"] = mode
+
+    # Cost e.g. $0.05
+    cost_match = re.search(r"\$(\d+(?:\.\d+)?)", candidate_text)
+    if cost_match:
+        result["cost"] = f"${cost_match.group(1)}"
+
+    # Context ratio e.g. 24k / 200k or 24.5k/200k
+    ratio_match = re.search(r"(\d+(?:\.\d+)?[kKmM]?)\s*/\s*(\d+(?:\.\d+)?[kKmM]?)", candidate_text)
+    if ratio_match:
+        tokens = _parse_token_num(ratio_match.group(1))
+        limit = _parse_token_num(ratio_match.group(2))
+        if tokens is not None:
+            result["tokens_used"] = tokens
+            result["context_tokens"] = tokens
+        if limit is not None:
+            result["tokens_limit"] = limit
+            result["context_limit"] = limit
+        if tokens is not None and limit is not None and limit > 0:
+            result["context_percent"] = round((tokens / limit) * 100, 1)
+
+    # Percentage e.g. 14% or (14%)
+    if "context_percent" not in result:
+        pct_match = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", candidate_text)
+        if pct_match:
+            with contextlib.suppress(ValueError):
+                pct = float(pct_match.group(1))
+                if 0 <= pct <= 100:
+                    result["context_percent"] = pct
+
+    # Step count e.g. 18 steps
+    step_match = re.search(r"(\d+)\s+steps?", candidate_text, re.IGNORECASE)
+    if step_match:
+        with contextlib.suppress(ValueError):
+            result["step_count"] = int(step_match.group(1))
+
+    # Model name detection
+    model_patterns = [
+        r"(Gemini\s+[\d.]+\s*(?:Flash|Pro|Ultra)?(?:\s*Thinking)?)",
+        r"(Claude\s+[\d.]+\s*(?:Sonnet|Opus|Haiku)?(?:\s*Thinking)?)",
+        r"(GPT-[\w.-]+)",
+        r"(o1[\w.-]*)",
+        r"(o3[\w.-]*)",
+        r"(o4[\w.-]*)",
+        r"(Codex[\w.-]*)",
+        r"(Astra[\w.-]*)",
+    ]
+    for pat in model_patterns:
+        m = re.search(pat, candidate_text, re.IGNORECASE)
+        if m:
+            result["model"] = m.group(1).strip()
+            break
+
+    return result
 
 
 class TmuxScreen:
@@ -181,6 +267,7 @@ class TmuxScreen:
             "rows": geom.get("rows", len(lines)),
             "cols": geom.get("cols", max((len(line) for line in lines), default=0)),
             "mode": parse_mode(lines),
+            "usage": parse_context_and_usage(lines),
         }
 
     def take_dirty_snapshot(self) -> dict[str, Any] | None:

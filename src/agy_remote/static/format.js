@@ -547,6 +547,28 @@
     };
   }
 
+  function formatContextPercent(pct) {
+    if (pct === null || pct === undefined || isNaN(pct)) return null;
+    var num = parseFloat(pct);
+    return (num % 1 === 0 ? num.toFixed(0) : num.toFixed(1)) + '%';
+  }
+
+  function formatTokenCount(num) {
+    if (num === null || num === undefined || isNaN(num)) return null;
+    var n = parseInt(num, 10);
+    if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+    return String(n);
+  }
+
+  function contextSeverity(pct) {
+    if (pct === null || pct === undefined || isNaN(pct)) return 'normal';
+    var num = parseFloat(pct);
+    if (num >= 85) return 'critical';
+    if (num >= 65) return 'warning';
+    return 'normal';
+  }
+
   global.AgyFormat = {
     pairedManifest: pairedManifest,
     approvalsForSession: approvalsForSession,
@@ -577,6 +599,9 @@
     isDoubleTap: isDoubleTap,
     trafficForSession: trafficForSession,
     formatTrafficPill: formatTrafficPill,
+    formatContextPercent: formatContextPercent,
+    formatTokenCount: formatTokenCount,
+    contextSeverity: contextSeverity,
     parseUnifiedDiff: parseUnifiedDiff
   };
 })(typeof window !== 'undefined' ? window : this);

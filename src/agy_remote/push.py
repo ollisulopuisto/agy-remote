@@ -17,6 +17,24 @@ from .config import get_config
 logger = logging.getLogger("agy_remote.push")
 
 
+def classify_notification(title: str, data: dict[str, Any] | None) -> str:
+    """Map a notification to a user-configurable preference category."""
+    d = data or {}
+    t = str(d.get("type") or d.get("status") or "").lower()
+    title_lower = title.lower()
+    if "approval" in t or "approval_id" in d or "approval" in title_lower or "permission" in title_lower:
+        return "approvals"
+    if t == "completed" or "completed" in title_lower or "finished" in title_lower:
+        return "completed"
+    if t == "failed" or "failed" in title_lower or "failure" in title_lower:
+        return "failed"
+    if t == "needs_attention" or "attention" in title_lower:
+        return "attention"
+    if t == "agent_loop" or "loop" in title_lower or d.get("loop"):
+        return "loops"
+    return "completed"
+
+
 class PushManager:
     """Manages VAPID keys and push notification subscriptions."""
 
@@ -87,19 +105,56 @@ class PushManager:
 
     def add_subscription(self, sub: dict[str, Any]) -> None:
         """Register a new browser push subscription."""
-        # Avoid duplicate endpoints
         endpoint = sub.get("endpoint")
         if not endpoint:
             return
+        # Preserve preferences if updating existing endpoint
+        existing_prefs = None
+        for s in self.subscriptions:
+            if s.get("endpoint") == endpoint and "preferences" in s:
+                existing_prefs = s["preferences"]
+                break
         self.subscriptions = [s for s in self.subscriptions if s.get("endpoint") != endpoint]
+        if existing_prefs and "preferences" not in sub:
+            sub["preferences"] = existing_prefs
         self.subscriptions.append(sub)
         self._save()
+
+    def update_preferences(self, endpoint: str, preferences: dict[str, bool]) -> bool:
+        """Update notification category preferences for an endpoint."""
+        updated = False
+        for sub in self.subscriptions:
+            if sub.get("endpoint") == endpoint:
+                sub["preferences"] = {**sub.get("preferences", {}), **preferences}
+                updated = True
+        if not updated:
+            self.subscriptions.append({"endpoint": endpoint, "preferences": preferences})
+            updated = True
+        self._save()
+        return updated
+
+    def get_preferences(self, endpoint: str | None = None) -> dict[str, bool]:
+        """Get preferences for an endpoint, or default."""
+        default_prefs = {
+            "approvals": True,
+            "completed": True,
+            "failed": True,
+            "attention": True,
+            "loops": True,
+        }
+        if not endpoint:
+            return default_prefs
+        for sub in self.subscriptions:
+            if sub.get("endpoint") == endpoint:
+                return {**default_prefs, **sub.get("preferences", {})}
+        return default_prefs
 
     def send_notification(self, title: str, body: str, data: dict[str, Any] | None = None) -> None:
         """Send push notification to all registered mobile subscribers."""
         if not self.subscriptions:
             return
 
+        category = classify_notification(title, data)
         payload = json.dumps(
             {
                 "title": title,
@@ -110,6 +165,10 @@ class PushManager:
 
         invalid_endpoints = set()
         for sub in self.subscriptions:
+            prefs = sub.get("preferences")
+            if prefs and not prefs.get(category, True):
+                continue
+
             try:
                 webpush(
                     subscription_info=sub,

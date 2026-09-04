@@ -2071,3 +2071,160 @@ details.message-system > summary {
   padding: 8px 10px;
   font-size: 14px;
 }
+
+/* Context & Usage HUD */
+.hud-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hud-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  position: relative;
+  overflow: hidden;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.hud-pill:active {
+  background: var(--bg-card-hover);
+}
+
+.hud-model {
+  color: #c8d0dc;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.hud-context {
+  position: relative;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.hud-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: rgba(34, 197, 94, 0.22);
+  pointer-events: none;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.hud-context.warning .hud-bar-fill {
+  background: rgba(234, 179, 8, 0.3);
+}
+
+.hud-context.critical .hud-bar-fill {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.hud-context-label {
+  position: relative;
+  z-index: 1;
+}
+
+.hud-cost {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.25);
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.hud-detail-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.hud-progress-container {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+  margin: 2px 0;
+}
+
+.hud-progress-bar {
+  height: 100%;
+  background: #22c55e;
+  border-radius: 9999px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.hud-progress-bar.warning {
+  background: #eab308;
+}
+
+.hud-progress-bar.critical {
+  background: #ef4444;
+}
+
+/* Push Preferences */
+.prefs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pref-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pref-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pref-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #f1f5f9;
+}
+
+.pref-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.pref-checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+

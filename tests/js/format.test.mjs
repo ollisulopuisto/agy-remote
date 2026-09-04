@@ -369,3 +369,24 @@ test('credentials are scrubbed from the URL only once the app is installed', () 
   assert.equal(shouldScrubCredentials(false), false);
   assert.equal(shouldScrubCredentials(true), true);
 });
+
+test('HUD formatters handle context percentage, token counts, and severity', () => {
+  const { formatContextPercent, formatTokenCount, contextSeverity } = sandbox.window.AgyFormat;
+
+  assert.equal(formatContextPercent(12), '12%');
+  assert.equal(formatContextPercent(12.4), '12.4%');
+  assert.equal(formatContextPercent(null), null);
+
+  assert.equal(formatTokenCount(850), '850');
+  assert.equal(formatTokenCount(24500), '24.5k');
+  assert.equal(formatTokenCount(200000), '200k');
+  assert.equal(formatTokenCount(1500000), '1.5M');
+  assert.equal(formatTokenCount(null), null);
+
+  assert.equal(contextSeverity(20), 'normal');
+  assert.equal(contextSeverity(65), 'warning');
+  assert.equal(contextSeverity(75), 'warning');
+  assert.equal(contextSeverity(88), 'critical');
+  assert.equal(contextSeverity(null), 'normal');
+});
+

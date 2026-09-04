@@ -1,5 +1,29 @@
 # Changelog
 
+## v26.09.04.110 — Remote-loop hardening, presence suppression, push preferences, and live Context & Usage HUD
+
+- **Remote-Loop Outbox & Monotonic Sequence Tracking.** Server tags all WebSocket broadcast frames
+  with monotonic sequence IDs (`_event_seq`), buffers recent frames in `SessionManager._outbox`
+  (ring buffer up to 500 events), and supports `{ action: "replay", data: { since_seq: N } }`.
+  Transient mobile network disconnects and background suspensions drain missed events seamlessly
+  without dropped turns or jarring full reloads.
+- **Client Presence & Notification Suppression.** Tracks active client focus via WebSocket `focus_state`
+  events when the mobile PWA is visible and focused. Automatically suppresses lock-screen push notifications
+  when the user is actively viewing the session or conversation, eliminating redundant buzzes while retaining
+  alerts when away.
+- **Push Notification Category Preferences.** Classified mobile push alerts into 5 categories:
+  `approvals`, `completed`, `failed`, `attention`, and `loops`. Added `GET /api/push/preferences` and
+  `POST /api/push/preferences` REST endpoints, per-endpoint preference storage and filtering in
+  `PushManager.send_notification`, and mobile Notification Settings modal (`#pushPrefsSheet`).
+- **Live Context & Token Usage HUD.** Parses active model, execution mode, context window ratio/percentage
+  (e.g. `24.5k / 200k`, `12.3%`), reported cost (`$0.05`), and step counts from terminal screen mirror
+  (`screen.py`). Exposed via `GET /api/usage`, `GET /api/conversations/{id}/usage`, and real-time WebSocket
+  state payloads.
+- **Mobile PWA Header HUD & Details Sheet.** Added compact pill strip in `#usageHud` header showing active
+  model, color-coded context usage bar (`normal`, `warning`, `critical`), and cost. Tapping opens Context &
+  Token Usage bottom sheet (`#usageDetailSheet`) with full breakdown and quick action buttons to dispatch
+  `/usage` and `/context`.
+
 ## v26.09.04.109 — Meta-AGY multi-agent control and observation plane
 
 - **Meta-AGY multi-agent control and observation plane.** Extended `agy-remote` from

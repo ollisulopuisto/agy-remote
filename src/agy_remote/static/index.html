@@ -45,6 +45,14 @@
         </div>
         <div class="session-subtitle" id="sessionSubtitle">Connecting...</div>
       </div>
+      <div class="hud-strip" id="usageHud" title="Tap for model & context details" hidden>
+        <span class="hud-pill hud-model" id="hudModel" hidden></span>
+        <span class="hud-pill hud-context" id="hudContext" hidden>
+          <span class="hud-bar-fill" id="hudContextBar"></span>
+          <span class="hud-context-label" id="hudContextText"></span>
+        </span>
+        <span class="hud-pill hud-cost" id="hudCost" hidden></span>
+      </div>
     </div>
     <div class="header-right">
       <button class="icon-btn" id="pushBtn" title="Enable Push Notifications">
@@ -229,6 +237,109 @@
         <button class="btn-secondary" id="agentDetailCancelBtn">Stop</button>
         <button class="btn-secondary" id="agentDetailRetryBtn">Retry</button>
         <button class="btn-primary" id="agentDetailHandoffBtn">Hand off / Delegate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Usage & Context HUD Sheet -->
+  <div class="sheet-backdrop" id="usageDetailBackdrop"></div>
+  <div class="sheet" id="usageDetailSheet" hidden>
+    <div class="sheet-header">
+      <span class="sheet-title">Context & Token Usage</span>
+      <button class="icon-btn" id="usageDetailCloseBtn" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="hud-detail-card">
+        <div class="hud-detail-row">
+          <span class="hud-label">Active Model:</span>
+          <span class="hud-val font-semibold" id="hudDetailModel">—</span>
+        </div>
+        <div class="hud-detail-row">
+          <span class="hud-label">Execution Mode:</span>
+          <span class="hud-val" id="hudDetailMode">—</span>
+        </div>
+        <div class="hud-detail-row">
+          <span class="hud-label">Context Window:</span>
+          <span class="hud-val" id="hudDetailPercent">—</span>
+        </div>
+        <div class="hud-progress-container">
+          <div class="hud-progress-bar" id="hudDetailProgressBar" style="width: 0%;"></div>
+        </div>
+        <div class="hud-detail-row text-sm text-dim">
+          <span class="hud-label">Tokens:</span>
+          <span class="hud-val" id="hudDetailTokens">—</span>
+        </div>
+        <div class="hud-detail-row">
+          <span class="hud-label">Total Steps:</span>
+          <span class="hud-val" id="hudDetailSteps">—</span>
+        </div>
+        <div class="hud-detail-row">
+          <span class="hud-label">Reported Cost:</span>
+          <span class="hud-val" id="hudDetailCost">—</span>
+        </div>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-secondary" id="hudRunUsageBtn">Run /usage</button>
+        <button class="btn-primary" id="hudRunContextBtn">Run /context</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Preferences Sheet -->
+  <div class="sheet-backdrop" id="pushPrefsBackdrop"></div>
+  <div class="sheet" id="pushPrefsSheet" hidden>
+    <div class="sheet-header">
+      <span class="sheet-title">Notification Settings</span>
+      <button class="icon-btn" id="pushPrefsCloseBtn" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <div class="prefs-list">
+        <label class="pref-item">
+          <div class="pref-info">
+            <span class="pref-title">Tool Approvals</span>
+            <span class="pref-desc">Notify when an agent requests permission to run a tool</span>
+          </div>
+          <input type="checkbox" id="prefApprovals" checked class="pref-checkbox">
+        </label>
+        <label class="pref-item">
+          <div class="pref-info">
+            <span class="pref-title">Job Completed</span>
+            <span class="pref-desc">Notify when a worker or task finishes successfully</span>
+          </div>
+          <input type="checkbox" id="prefCompleted" checked class="pref-checkbox">
+        </label>
+        <label class="pref-item">
+          <div class="pref-info">
+            <span class="pref-title">Job Failed</span>
+            <span class="pref-desc">Notify when an agent encounters an unrecoverable failure</span>
+          </div>
+          <input type="checkbox" id="prefFailed" checked class="pref-checkbox">
+        </label>
+        <label class="pref-item">
+          <div class="pref-info">
+            <span class="pref-title">Needs Attention</span>
+            <span class="pref-desc">Notify when an agent requires human intervention</span>
+          </div>
+          <input type="checkbox" id="prefAttention" checked class="pref-checkbox">
+        </label>
+        <label class="pref-item">
+          <div class="pref-info">
+            <span class="pref-title">Loop Detection</span>
+            <span class="pref-desc">Notify when autonomous agents chat in a loop</span>
+          </div>
+          <input type="checkbox" id="prefLoops" checked class="pref-checkbox">
+        </label>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-primary" id="savePushPrefsBtn">Save Preferences</button>
       </div>
     </div>
   </div>
