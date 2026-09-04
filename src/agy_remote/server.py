@@ -905,11 +905,14 @@ def create_app(
                 },
             )
 
+        origin_pane = payload.get("tmux_pane") or payload.get("tmuxPane") or request.headers.get("X-Tmux-Pane") or None
+
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,
             conversation_id=conversation_id,
             tool_name=tool_name,
             args=args,
+            origin_pane=origin_pane,
         )
         return JSONResponse(content=decision_payload)
 

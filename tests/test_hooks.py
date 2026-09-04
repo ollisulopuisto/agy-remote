@@ -441,6 +441,43 @@ def test_the_hook_advertises_its_version_to_the_server(monkeypatch):
     assert captured["version"] == hooks_mod.__version__
 
 
+def test_hook_transmits_tmux_pane_in_payload_and_header(monkeypatch):
+    """PreToolUse hook captures $TMUX_PANE and sends it to the server."""
+    import contextlib
+    import io
+    import json
+
+    import agy_remote.hooks as hooks_mod
+
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return b'{"decision": "allow"}'
+
+    def fake_urlopen(req, timeout=0):
+        captured["header_pane"] = req.headers.get("X-tmux-pane")
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(hooks_mod.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("AGY_REMOTE_URL", "http://127.0.0.1:9999")
+    monkeypatch.setenv("TMUX_PANE", "%77")
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"toolCall": {"name": "run_command"}}'))
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        hooks_mod.run_pre_tool_hook()
+
+    assert captured["header_pane"] == "%77"
+    assert captured["body"]["tmux_pane"] == "%77"
+
+
 def test_run_refuses_to_start_with_a_mixed_hook_build(monkeypatch):
     """The exact failure seen in the wild: `run` upgraded, the hook binary not
     (or the reverse). Coherence matters more than a quick start."""

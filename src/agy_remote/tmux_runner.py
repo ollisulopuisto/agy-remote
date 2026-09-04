@@ -254,6 +254,38 @@ def panes_running(command: str = "agy") -> list[dict[str, str]]:
     return found
 
 
+def is_pane_active_and_visible(target: str) -> bool:
+    """Check if target pane is in the active window of an attached tmux client.
+
+    tmux display-popup always displays over the currently active window of
+    the client displaying the target session. If target is in a background window,
+    display-popup will pop up over whatever window the user is currently working
+    in (e.g. editor or shell) and steal keyboard focus. We only open popups if
+    the target pane's window is currently active and attached.
+    """
+    if not is_tmux_available() or not target:
+        return False
+    try:
+        res = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", target, "#{session_attached}:#{window_active}:#{pane_active}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2.0,
+        )
+        if res.returncode != 0 or not res.stdout:
+            return False
+        parts = res.stdout.strip().split(":")
+        if len(parts) < 3:
+            return False
+        session_attached, window_active, _pane_active = parts[0], parts[1], parts[2]
+        is_attached = session_attached.isdigit() and int(session_attached) > 0
+        is_window_active = window_active == "1"
+        return is_attached and is_window_active
+    except Exception:
+        return False
+
+
 def capture_pane(session_name: str) -> list[str] | None:
     """The visible pane content as plain lines, or None if the session is gone.
 

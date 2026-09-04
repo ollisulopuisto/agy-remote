@@ -130,6 +130,7 @@ class SessionManager:
         #: Multi-session registry (Phase 1.1)
         self._sessions: dict[str, SessionRecord] = {}
         self._supervisors: dict[str, Any] = {}
+        self._conversation_panes: dict[str, str] = {}
         self._terminal_mirrors: dict[str, TerminalMirror] = {}
         #: Byte offset already delivered from each session's inbox. A session
         #: is first seen at its inbox's current end: delivery is for what
@@ -1587,12 +1588,19 @@ class SessionManager:
     # -------------------------------------------------------------------------
     # Tool Approvals / Permissions Handling
     # -------------------------------------------------------------------------
+    def is_pane_visible(self, target: str) -> bool:
+        """Check if target pane is in the active window of an attached client."""
+        from .tmux_runner import is_pane_active_and_visible
+
+        return is_pane_active_and_visible(target)
+
     async def register_approval(
         self,
         approval_id: str,
         conversation_id: str,
         tool_name: str,
         args: dict[str, Any],
+        origin_pane: str | None = None,
     ) -> dict[str, Any]:
         """Register a pending approval and broadcast it to the phone.
 
@@ -1611,6 +1619,9 @@ class SessionManager:
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._approval_futures[approval_id] = fut
 
+        if origin_pane:
+            self._conversation_panes[conversation_id] = origin_pane
+
         # Name the session, not just its id. "rm -rf /" from
         # `fe67ae68-b3b6-4918` says nothing about which of four terminals is
         # waiting, and a phone cannot look up a name for a session it has never
@@ -1625,6 +1636,8 @@ class SessionManager:
             "created_at": datetime.now().isoformat(),
             "status": "pending",
         }
+        if origin_pane:
+            approval_data["origin_pane"] = origin_pane
         if tool_name == "ask_question":
             parsed_questions = parse_ask_question_args(args)
             if parsed_questions:
@@ -1634,7 +1647,7 @@ class SessionManager:
 
         # Broadcast approval request to phone
         await self.broadcast({"event": "approval_request", "data": approval_data})
-        self._surface_in_tui(conversation_id, approval_id, tool_name, args)
+        self._surface_in_tui(conversation_id, approval_id, tool_name, args, origin_pane=origin_pane)
         return approval_data
 
     def pending_approval(self, approval_id: str) -> dict[str, Any] | None:
@@ -1646,7 +1659,14 @@ class SessionManager:
             return None
         return info
 
-    def _surface_in_tui(self, conversation_id: str, approval_id: str, tool_name: str, args: dict[str, Any]) -> None:
+    def _surface_in_tui(
+        self,
+        conversation_id: str,
+        approval_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        origin_pane: str | None = None,
+    ) -> None:
         """Mirror a held approval into the terminal agy runs in.
 
         With no phone connected the hook answers "ask" and agy prompts in its
@@ -1660,13 +1680,15 @@ class SessionManager:
         (drawn by tmux itself, so agy's screen is never touched). A server-
         owned pty has no window system to overlay; the console bell rings.
         """
-        supervisor = self.get_supervisor(conversation_id)
-        target: str | None = None
+        target = origin_pane or self._conversation_panes.get(conversation_id)
         session_name: str | None = None
 
+        supervisor = self.get_supervisor(conversation_id)
         if supervisor is not None:
             session_name = getattr(supervisor, "session_name", None)
-            if not session_name:
+            if not target:
+                target = getattr(supervisor, "target", None) or session_name
+            if not target and not session_name:
                 # No tmux pane to draw on: ring the bell and leave the deciding
                 # to the phone.
                 try:
@@ -1675,17 +1697,34 @@ class SessionManager:
                 except Exception as e:  # noqa: BLE001 - a closed console is not fatal
                     logger.debug("Could not ring the console bell: %s", e)
                 return
-            target = getattr(supervisor, "target", None) or session_name
-        else:
-            from .tmux_runner import is_tmux_available, panes_running
-
-            if is_tmux_available():
-                candidates = panes_running("agy")
-                if candidates:
-                    target = candidates[0]["target"]
-                    session_name = candidates[0]["session"]
 
         if not target and not session_name:
+            logger.debug(
+                "No target tmux pane known for approval %s in conversation %s; deciding on phone",
+                approval_id,
+                conversation_id,
+            )
+            return
+
+        final_target = target or session_name or ""
+
+        # CRITICAL: Prevent capturing keyboard activity in a different window.
+        # tmux display-popup displays over the attached client's currently active window.
+        # If the target pane's window is not active, display-popup will pop up over
+        # whatever window the user is currently working in (e.g. editor or zsh) and
+        # steal keystrokes. We only open popups if the target pane's window is active.
+        if not self.is_pane_visible(final_target):
+            logger.info(
+                "Skipping TUI popup for approval %s: pane %s is in an inactive window; deciding on phone",
+                approval_id,
+                final_target,
+            )
+            with contextlib.suppress(Exception):
+                subprocess.run(
+                    ["tmux", "set-window-option", "-t", final_target, "monitor-activity", "on"],
+                    capture_output=True,
+                    check=False,
+                )
             return
 
         env = {
@@ -1705,7 +1744,7 @@ class SessionManager:
             "tmux",
             "display-popup",
             "-t",
-            target or session_name or "",
+            final_target,
             "-w",
             "80%",
             "-h",
@@ -1738,20 +1777,17 @@ class SessionManager:
         """
         fut = self._approval_futures.get(approval_id)
         if fut is None:
-            return {"decision": "deny", "reason": "Unknown approval."}
+            return {"decision": "deny", "reason": "unknown approval"}
 
         try:
-            # Long enough to walk to the phone, short enough to answer first.
-            res = await asyncio.wait_for(fut, timeout=timeout)
-            return res
+            return await asyncio.wait_for(fut, timeout=timeout)
         except TimeoutError:
-            self._pending_approvals[approval_id]["status"] = "denied"
+            self._pending_approvals.pop(approval_id, None)
+            self._approval_futures.pop(approval_id, None)
             return {
                 "decision": "deny",
-                "reason": "Approval timed out on mobile remote.",
+                "reason": "approval timed out waiting for response",
             }
-        finally:
-            self._approval_futures.pop(approval_id, None)
 
     def can_hold_approval(self, conversation_id: str) -> bool:
         """Whether an approval for this session would reach a person.
@@ -1769,8 +1805,9 @@ class SessionManager:
         conversation_id: str,
         tool_name: str,
         args: dict[str, Any],
+        origin_pane: str | None = None,
     ) -> dict[str, Any]:
-        """Register a pending approval and wait for the user's response.
+        """Request remote approval from connected clients (PWA/phones).
 
         The agy PreToolUse hook path: the hook process blocks on this call and
         returns whatever the phone decides (or a timeout denial) to the CLI.
@@ -1789,7 +1826,7 @@ class SessionManager:
                 "reason": "agy-remote: no phone watching this session, asking here instead",
             }
 
-        await self.register_approval(approval_id, conversation_id, tool_name, args)
+        await self.register_approval(approval_id, conversation_id, tool_name, args, origin_pane=origin_pane)
 
         # `broadcast` prunes clients whose send failed, so an open socket with
         # nothing behind it -- a phone that slept, a laptop that closed -- is

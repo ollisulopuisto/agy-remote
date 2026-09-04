@@ -214,6 +214,9 @@ def run_pre_tool_hook() -> None:
             return
 
         payload = json.loads(raw_input)
+        tmux_pane = os.environ.get("TMUX_PANE")
+        if tmux_pane and isinstance(payload, dict) and "tmux_pane" not in payload:
+            payload["tmux_pane"] = tmux_pane
 
         # Use the running server's published credentials. get_config() would
         # mint a *fresh* random token in this separate process, which never
@@ -222,16 +225,19 @@ def run_pre_tool_hook() -> None:
 
         url = f"{base_url}/api/hook/pre-tool"
         data = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+            # So a mixed install -- this hook from one build, the server
+            # from another -- is visible while running, not just at startup.
+            "X-Agy-Remote-Version": __version__,
+        }
+        if tmux_pane:
+            headers["X-Tmux-Pane"] = tmux_pane
         req = urllib.request.Request(
             url,
             data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-Auth-Token": auth_token,
-                # So a mixed install -- this hook from one build, the server
-                # from another -- is visible while running, not just at startup.
-                "X-Agy-Remote-Version": __version__,
-            },
+            headers=headers,
             method="POST",
         )
 

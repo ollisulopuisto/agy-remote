@@ -163,3 +163,46 @@ def test_start_detached_enables_focus_events(monkeypatch):
     focus_events_cmd = next(c for c in calls if "set-option" in c and "focus-events" in c)
     assert "focus-events" in focus_events_cmd
     assert "on" in focus_events_cmd
+
+
+def test_is_pane_active_and_visible(monkeypatch):
+    from agy_remote.tmux_runner import is_pane_active_and_visible
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class Res:
+            returncode = 0
+            stdout = "1:1:1\n"
+
+        return Res()
+
+    monkeypatch.setattr("agy_remote.tmux_runner.is_tmux_available", lambda: True)
+    monkeypatch.setattr("agy_remote.tmux_runner.subprocess.run", fake_run)
+
+    # Active and attached
+    assert is_pane_active_and_visible("%10") is True
+
+    # Inactive window in attached session
+    def fake_inactive(cmd, **kwargs):
+        class Res:
+            returncode = 0
+            stdout = "1:0:1\n"
+
+        return Res()
+
+    monkeypatch.setattr("agy_remote.tmux_runner.subprocess.run", fake_inactive)
+    assert is_pane_active_and_visible("%10") is False
+
+    # Detached session
+    def fake_detached(cmd, **kwargs):
+        class Res:
+            returncode = 0
+            stdout = "0:1:1\n"
+
+        return Res()
+
+    monkeypatch.setattr("agy_remote.tmux_runner.subprocess.run", fake_detached)
+    assert is_pane_active_and_visible("%10") is False

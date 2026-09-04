@@ -722,6 +722,7 @@ async def test_an_approval_while_a_phone_watches_also_surfaces_in_the_tui(
             spawned.append((cmd, env))
 
     monkeypatch.setattr("agy_remote.session_manager.subprocess.Popen", _FakePopen)
+    monkeypatch.setattr(mgr, "is_pane_visible", lambda target: True)
 
     class _TmuxSupervisor:
         session_name = "agy-remote-8090"
@@ -736,6 +737,24 @@ async def test_an_approval_while_a_phone_watches_also_surfaces_in_the_tui(
     assert "AGY_REMOTE_APPROVAL_ID=ap-1" in " ".join(cmd)
     assert env["AGY_REMOTE_APPROVAL_ID"] == "ap-1"
     assert env["AGY_REMOTE_TOKEN"] == "token"
+
+    # When the pane's window is inactive, popup MUST NOT spawn to avoid stealing focus
+    spawned.clear()
+    monkeypatch.setattr(mgr, "is_pane_visible", lambda target: False)
+    await mgr.register_approval("ap-inactive", "conv-1", "bash", {"command": "ls"})
+    assert not any("display-popup" in cmd for cmd, _ in spawned), (
+        "popup must not open when target pane window is inactive"
+    )
+
+    # Origin pane passed explicitly from PreToolUse hook is targeted directly
+    spawned.clear()
+    monkeypatch.setattr(mgr, "is_pane_visible", lambda target: True)
+    await mgr.register_approval("ap-origin", "conv-origin", "bash", {"command": "pwd"}, origin_pane="%42")
+    popup_cmds = [cmd for cmd, _ in spawned if "display-popup" in cmd]
+    assert popup_cmds, "popup must spawn for active origin pane"
+    cmd = popup_cmds[0]
+    idx = cmd.index("-t")
+    assert cmd[idx + 1] == "%42", "popup must target exact originating pane"
 
     # A session without tmux (a server-owned pty) cannot host a popup; the
     # console still has to hear something, so the terminal bell rings.

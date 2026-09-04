@@ -1,5 +1,22 @@
 # Changelog
 
+## v26.09.04.113 — Origin pane binding and keyboard capture protection for TUI popups
+
+- **Direct Origin Pane Binding for Approvals.** The `PreToolUse` hook now captures `$TMUX_PANE`
+  directly from its runtime environment and transmits it to the server in both the request payload
+  (`tmux_pane`) and `X-Tmux-Pane` HTTP header. Approvals are bound to the exact pane where the
+  `agy` instance is running instead of falling back to arbitrary global pane listings (`panes_running("agy")[0]`).
+- **Keyboard Capture Protection Across Inactive Windows.** `tmux display-popup` always surfaces
+  on the attached client's currently active window, regardless of target. To eliminate accidental
+  keystroke theft (e.g. typing in a shell or editor while a background `agy` triggers a gate),
+  `SessionManager` checks whether the target pane's window is currently active and attached
+  (`is_pane_active_and_visible`). When inactive, popup rendering is safely skipped, setting
+  window activity monitoring (`monitor-activity on`) instead, leaving the decision to the mobile
+  remote or Web PWA without disrupting the desktop user.
+- **Removed Global Pane Guessing Fallback.** Removed the arbitrary `panes_running("agy")[0]`
+  fallback in `_surface_in_tui`. If a target pane or supervisor is not known for a conversation,
+  popups are not displayed in random tmux panes.
+
 ## v26.09.04.112 — Mobile question cards, multi-question rendering, and robust question parsing
 
 - **Dedicated Question Cards in the Conversation Feed.** Tool calls for `ask_question` in the
