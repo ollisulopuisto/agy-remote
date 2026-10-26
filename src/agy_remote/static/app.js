@@ -2582,15 +2582,26 @@ function renderConversations(convs) {
     };
 
     const timeStr = c.updated_at ? new Date(c.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-    item.innerHTML = `
-      <div class="session-item-title"><span class="session-item-name">${escapeHtml(c.title || c.id)}</span></div>
-      <div class="session-item-meta">${timeStr} • ${c.step_count} steps</div>
-    `;
+
+    // Build the session item with textContent (never innerHTML) so
+    // transcript-controlled titles can never inject markup into the drawer.
+    const titleRow = document.createElement('div');
+    titleRow.className = 'session-item-title';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'session-item-name';
+    nameSpan.textContent = c.title || c.id;
+    titleRow.appendChild(nameSpan);
+
+    const metaRow = document.createElement('div');
+    metaRow.className = 'session-item-meta';
+    metaRow.textContent = `${timeStr} • ${c.step_count} steps`;
+
+    item.appendChild(titleRow);
+    item.appendChild(metaRow);
 
     // Rename affordance: sessions derive identical-looking titles from their
     // transcripts, and only the operator can say which is which. The tap must
     // not switch sessions, so it stops propagation.
-    const titleRow = item.querySelector('.session-item-title');
     if (titleRow) {
       const renameBtn = document.createElement('button');
       renameBtn.type = 'button';

@@ -80,6 +80,24 @@ def is_safe_approval_id(approval_id: str | None) -> bool:
     return bool(_SAFE_APPROVAL_ID_RE.match(approval_id))
 
 
+def _is_within_roots(resolved: Path, roots: list[Path]) -> bool:
+    """True when `resolved` equals a sanctioned root or is nested beneath one.
+
+    `os.path.commonpath` compares the normalized paths, so a reference that
+    escapes the roots through `..` or a symlink is rejected even after
+    `Path.resolve()` has collapsed it. A ValueError (incomparable paths) is
+    treated as outside the roots.
+    """
+    resolved_str = str(resolved)
+    for root in roots:
+        try:
+            if os.path.commonpath([resolved_str, str(root)]) == str(root):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 class SessionManager:
     """Manages active agent conversations and real-time streaming."""
 
@@ -1490,7 +1508,7 @@ class SessionManager:
 
         resolved = Path(str(session.workdir)).resolve()
         roots = self._file_roots()
-        if not any(resolved == root or root in resolved.parents for root in roots):
+        if not _is_within_roots(resolved, roots):
             raise PermissionError(f"outside the sanctioned project directories: {resolved}")
 
         try:
@@ -1588,7 +1606,7 @@ class SessionManager:
         requested = (raw_path or "").strip() or str(session.workdir)
         resolved = Path(requested).resolve()
         roots = self._file_roots()
-        if not any(resolved == root or root in resolved.parents for root in roots):
+        if not _is_within_roots(resolved, roots):
             raise PermissionError(f"outside the sanctioned project directories: {requested}")
 
         if not resolved.exists():
@@ -1629,7 +1647,7 @@ class SessionManager:
                 raise PermissionError(f"not an absolute file reference: {raw_path!r}")
 
         resolved = Path(requested).resolve()
-        if not any(resolved == root or root in resolved.parents for root in self._file_roots()):
+        if not _is_within_roots(resolved, self._file_roots()):
             raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
 
         if not resolved.exists():

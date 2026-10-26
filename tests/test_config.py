@@ -3,6 +3,7 @@
 import json
 from datetime import UTC
 from pathlib import Path
+from urllib.parse import urlparse
 
 from agy_remote.config import RemoteConfig
 
@@ -411,7 +412,9 @@ def test_qr_reproduces_the_url_the_running_server_serves(tmp_path, monkeypatch):
         tailscale_ip="100.64.0.1",
         lan_ip="192.168.1.222",
     )
-    assert live.local_base_url.startswith("https://mac-studio.example.ts.net")
+    parsed = urlparse(live.local_base_url)
+    assert parsed.scheme == "https"
+    assert parsed.hostname == "mac-studio.example.ts.net"
     write_runtime_state(live)
 
     # A fresh process, as `qr` is, with no TLS of its own.
@@ -421,4 +424,7 @@ def test_qr_reproduces_the_url_the_running_server_serves(tmp_path, monkeypatch):
     adopted = adopt_runtime_state(fresh)
     assert adopted.local_base_url == live.local_base_url
     assert adopted.tls_enabled is True
-    assert adopted.get_primary_mobile_url().startswith("https://mac-studio.example.ts.net:8765/")
+    parsed = urlparse(adopted.get_primary_mobile_url())
+    assert parsed.scheme == "https"
+    assert parsed.hostname == "mac-studio.example.ts.net"
+    assert parsed.port == 8765
