@@ -1889,13 +1889,15 @@ class SessionManager:
             "80%",
             "-h",
             "12",
-        ]
-        for k, v in env.items():
-            cmd.extend(["-e", f"{k}={v}"])
-        cmd.extend([
             "-E",
-            f"{shlex.quote(sys.executable)} -m agy_remote.cli tui-approve",
-        ])
+        ]
+
+        # We build a shell command string that passes the environment variables
+        # safely to the Python interpreter. CodeQL flags string concatenation in
+        # subprocess arguments as py/command-line-injection unless properly quoted.
+        env_vars = " ".join(f"{shlex.quote(k)}={shlex.quote(str(v))}" for k, v in env.items())
+        cmd.append(f"env {env_vars} {shlex.quote(sys.executable)} -m agy_remote.cli tui-approve")
+
         try:
             subprocess.Popen(  # noqa: S603 - fixed argv, tmux is the point
                 cmd,
