@@ -1790,12 +1790,11 @@ class SessionManager:
         self._approval_futures[approval_id] = fut
 
         if origin_pane:
-            from .tmux_runner import is_safe_tmux_target
+            from .tmux_runner import sanitize_tmux_target
 
-            if is_safe_tmux_target(origin_pane):
+            origin_pane = sanitize_tmux_target(origin_pane)
+            if origin_pane:
                 self._conversation_panes[conversation_id] = origin_pane
-            else:
-                origin_pane = None
 
         # Name the session, not just its id. "rm -rf /" from
         # `fe67ae68-b3b6-4918` says nothing about which of four terminals is
@@ -1859,10 +1858,12 @@ class SessionManager:
             logger.warning("Unsafe approval ID %r; skipping TUI popup", approval_id)
             return
 
-        from .tmux_runner import is_safe_tmux_target
+        safe_approval_id = shlex.quote(approval_id)
 
-        if origin_pane and not is_safe_tmux_target(origin_pane):
-            origin_pane = None
+        from .tmux_runner import sanitize_tmux_target
+
+        if origin_pane:
+            origin_pane = sanitize_tmux_target(origin_pane)
 
         target = origin_pane or self._conversation_panes.get(conversation_id)
         session_name: str | None = None
@@ -1885,16 +1886,17 @@ class SessionManager:
         if not target and not session_name:
             logger.debug(
                 "No target tmux pane known for approval %s in conversation %s; deciding on phone",
-                approval_id,
+                safe_approval_id,
                 conversation_id,
             )
             return
 
         final_target = target or session_name or ""
-        if not is_safe_tmux_target(final_target):
+        safe_target = sanitize_tmux_target(final_target)
+        if not safe_target:
             logger.debug(
                 "No safe target tmux pane known for approval %s in conversation %s; deciding on phone",
-                approval_id,
+                safe_approval_id,
                 conversation_id,
             )
             return
@@ -1904,15 +1906,15 @@ class SessionManager:
         # If the target pane's window is not active, display-popup will pop up over
         # whatever window the user is currently working in (e.g. editor or zsh) and
         # steal keystrokes. We only open popups if the target pane's window is active.
-        if not self.is_pane_visible(final_target):
+        if not self.is_pane_visible(safe_target):
             logger.info(
                 "Skipping TUI popup for approval %s: pane %s is in an inactive window; deciding on phone",
-                approval_id,
-                final_target,
+                safe_approval_id,
+                safe_target,
             )
             with contextlib.suppress(Exception):
                 subprocess.run(
-                    ["tmux", "set-window-option", "-t", final_target, "monitor-activity", "on"],
+                    ["tmux", "set-window-option", "-t", safe_target, "monitor-activity", "on"],
                     capture_output=True,
                     check=False,
                 )
@@ -1921,7 +1923,7 @@ class SessionManager:
         env = {
             "AGY_REMOTE_URL": self.config.local_base_url,
             "AGY_REMOTE_TOKEN": self.config.auth_token,
-            "AGY_REMOTE_APPROVAL_ID": approval_id,
+            "AGY_REMOTE_APPROVAL_ID": safe_approval_id,
         }
         # The tmux server executes popup commands in its own daemon environment,
         # ignoring the subprocess.Popen env passed to the tmux client. We use
@@ -1931,7 +1933,7 @@ class SessionManager:
             "tmux",
             "display-popup",
             "-t",
-            final_target,
+            safe_target,
             "-w",
             "80%",
             "-h",
@@ -1955,7 +1957,7 @@ class SessionManager:
                 start_new_session=True,
             )
         except Exception as e:  # noqa: BLE001 - the phone still has the banner
-            logger.warning("Could not surface approval %s in the tmux pane: %s", approval_id, e)
+            logger.warning("Could not surface approval %s in the tmux pane: %s", safe_approval_id, e)
 
     async def await_approval(self, approval_id: str, timeout: float = 240.0) -> dict[str, Any]:
         """Wait for the phone's answer to a registered approval.

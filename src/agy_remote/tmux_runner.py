@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -282,6 +283,17 @@ def is_safe_tmux_target(target: str | None) -> bool:
     return bool(_SAFE_TMUX_TARGET_RE.match(target))
 
 
+def sanitize_tmux_target(target: str | None) -> str | None:
+    """Validate and sanitize a string as a safe tmux target pane or session name.
+
+    Returns the sanitized string (quoted via shlex.quote) or None if unsafe.
+    """
+    if not is_safe_tmux_target(target):
+        return None
+    assert target is not None
+    return shlex.quote(target)
+
+
 def is_pane_active_and_visible(target: str) -> bool:
     """Check if target pane is in the active window of an attached tmux client.
 
@@ -291,11 +303,12 @@ def is_pane_active_and_visible(target: str) -> bool:
     in (e.g. editor or shell) and steal keyboard focus. We only open popups if
     the target pane's window is currently active and attached.
     """
-    if not is_tmux_available() or not is_safe_tmux_target(target):
+    safe_target = sanitize_tmux_target(target)
+    if not is_tmux_available() or not safe_target:
         return False
     try:
         res = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", target, "#{session_attached}:#{window_active}:#{pane_active}"],
+            ["tmux", "display-message", "-p", "-t", safe_target, "#{session_attached}:#{window_active}:#{pane_active}"],
             capture_output=True,
             text=True,
             check=False,

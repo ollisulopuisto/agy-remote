@@ -206,3 +206,20 @@ def test_is_pane_active_and_visible(monkeypatch):
 
     monkeypatch.setattr("agy_remote.tmux_runner.subprocess.run", fake_detached)
     assert is_pane_active_and_visible("%10") is False
+
+
+def test_sanitize_tmux_target():
+    from agy_remote.tmux_runner import sanitize_tmux_target
+
+    assert sanitize_tmux_target("%42") == "%42"
+    assert sanitize_tmux_target("session:0.1") == "session:0.1"
+    assert sanitize_tmux_target("mysession") == "mysession"
+    assert sanitize_tmux_target("@1") == "@1"
+
+    # Injections and invalid formats return None
+    assert sanitize_tmux_target(None) is None
+    assert sanitize_tmux_target("") is None
+    assert sanitize_tmux_target("; rm -rf /") is None
+    assert sanitize_tmux_target("-t bad") is None
+    assert sanitize_tmux_target("pane with spaces") is None
+    assert sanitize_tmux_target("a" * 129) is None
