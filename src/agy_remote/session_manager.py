@@ -1901,6 +1901,9 @@ class SessionManager:
             )
             return
 
+        if safe_target.startswith("%") and safe_target[1:].isdigit():
+            safe_target = f"%{int(safe_target[1:])}"
+
         # CRITICAL: Prevent capturing keyboard activity in a different window.
         # tmux display-popup displays over the attached client's currently active window.
         # If the target pane's window is not active, display-popup will pop up over

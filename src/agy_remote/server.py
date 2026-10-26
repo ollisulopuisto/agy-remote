@@ -989,7 +989,13 @@ def create_app(
         origin_pane_raw = (
             payload.get("tmux_pane") or payload.get("tmuxPane") or request.headers.get("X-Tmux-Pane") or None
         )
-        origin_pane = sanitize_tmux_target(origin_pane_raw)
+        origin_pane = None
+        if origin_pane_raw and isinstance(origin_pane_raw, str):
+            clean_pane = origin_pane_raw.strip()
+            if clean_pane.startswith("%") and clean_pane[1:].isdigit():
+                origin_pane = f"%{int(clean_pane[1:])}"
+            else:
+                origin_pane = sanitize_tmux_target(clean_pane)
 
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,

@@ -286,11 +286,20 @@ def is_safe_tmux_target(target: str | None) -> bool:
 def sanitize_tmux_target(target: str | None) -> str | None:
     """Validate and sanitize a string as a safe tmux target pane or session name.
 
-    Returns the sanitized string (quoted via shlex.quote) or None if unsafe.
+    Returns the sanitized string or None if unsafe.
     """
     if not is_safe_tmux_target(target):
         return None
     assert target is not None
+    # Pane ID format: %<digits> (the standard $TMUX_PANE format)
+    if target.startswith("%") and target[1:].isdigit():
+        return f"%{int(target[1:])}"
+    if ":" in target:
+        sess, win_pane = target.split(":", 1)
+        if _SAFE_TMUX_TARGET_RE.match(sess):
+            subparts = win_pane.split(".")
+            if len(subparts) == 2 and subparts[0].isdigit() and subparts[1].isdigit():
+                return f"{sess}:{int(subparts[0])}.{int(subparts[1])}"
     return shlex.quote(target)
 
 
