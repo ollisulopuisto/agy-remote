@@ -1880,8 +1880,6 @@ class SessionManager:
         # ignoring the subprocess.Popen env passed to the tmux client. We must
         # explicitly export these environment variables in the shell command
         # string and use the active Python interpreter so venvs/uv tool paths work.
-        env_exports = " ".join(f"{k}={shlex.quote(str(v))}" for k, v in env.items())
-        popup_cmd = f"exec env {env_exports} {shlex.quote(sys.executable)} -m agy_remote.cli tui-approve"
         cmd = [
             "tmux",
             "display-popup",
@@ -1891,9 +1889,15 @@ class SessionManager:
             "80%",
             "-h",
             "12",
-            "-E",
-            popup_cmd,
         ]
+        for k, v in env.items():
+            cmd.extend(["-e", f"{k}={v}"])
+        cmd.extend(
+            [
+                "-E",
+                f"{shlex.quote(sys.executable)} -m agy_remote.cli tui-approve",
+            ]
+        )
         try:
             subprocess.Popen(  # noqa: S603 - fixed argv, tmux is the point
                 cmd,
