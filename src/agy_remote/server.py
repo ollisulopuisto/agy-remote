@@ -57,7 +57,7 @@ from .pty_runner import get_pty_supervisor
 from .push import get_push_manager
 from .session_manager import SessionManager
 from .spawner import SessionSpawner, SpawnerBusyError, SpawnerError
-from .tmux_runner import get_tmux_supervisor, sanitize_tmux_target
+from .tmux_runner import get_tmux_supervisor
 from .version import VERSION
 
 logger = logging.getLogger("agy_remote.server")
@@ -994,8 +994,6 @@ def create_app(
             clean_pane = origin_pane_raw.strip()
             if clean_pane.startswith("%") and clean_pane[1:].isdigit():
                 origin_pane = f"%{int(clean_pane[1:])}"
-            else:
-                origin_pane = sanitize_tmux_target(clean_pane)
 
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,

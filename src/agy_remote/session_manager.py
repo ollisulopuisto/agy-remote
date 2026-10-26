@@ -1790,11 +1790,12 @@ class SessionManager:
         self._approval_futures[approval_id] = fut
 
         if origin_pane:
-            from .tmux_runner import sanitize_tmux_target
-
-            origin_pane = sanitize_tmux_target(origin_pane)
-            if origin_pane:
+            clean_pane = origin_pane.strip()
+            if clean_pane.startswith("%") and clean_pane[1:].isdigit():
+                origin_pane = f"%{int(clean_pane[1:])}"
                 self._conversation_panes[conversation_id] = origin_pane
+            else:
+                origin_pane = None
 
         # Name the session, not just its id. "rm -rf /" from
         # `fe67ae68-b3b6-4918` says nothing about which of four terminals is
@@ -1927,6 +1928,9 @@ class SessionManager:
             "AGY_REMOTE_URL": self.config.local_base_url,
             "AGY_REMOTE_TOKEN": self.config.auth_token,
             "AGY_REMOTE_APPROVAL_ID": safe_approval_id,
+            # The popup command is a constant string that expands this, so no
+            # interpreter path is ever interpolated into a shell command line.
+            "AGY_REMOTE_PYTHON": sys.executable,
         }
         # The tmux server executes popup commands in its own daemon environment,
         # ignoring the subprocess.Popen env passed to the tmux client. We use
@@ -1947,7 +1951,7 @@ class SessionManager:
         cmd.extend(
             [
                 "-E",
-                f"{shlex.quote(sys.executable)} -m agy_remote.cli tui-approve",
+                '"$AGY_REMOTE_PYTHON" -m agy_remote.cli tui-approve',
             ]
         )
 
