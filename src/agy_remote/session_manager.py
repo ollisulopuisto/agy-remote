@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -68,6 +69,15 @@ BUSY_WINDOW_SECONDS = 30.0
 
 #: How long one `git diff` may take before the phone gets an error instead.
 GIT_DIFF_TIMEOUT_SECONDS = 10.0
+
+_SAFE_APPROVAL_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def is_safe_approval_id(approval_id: str | None) -> bool:
+    """Validate that an approval ID contains only safe alphanumeric characters."""
+    if not approval_id or not isinstance(approval_id, str):
+        return False
+    return bool(_SAFE_APPROVAL_ID_RE.match(approval_id))
 
 
 class SessionManager:
@@ -1762,7 +1772,12 @@ class SessionManager:
         self._approval_futures[approval_id] = fut
 
         if origin_pane:
-            self._conversation_panes[conversation_id] = origin_pane
+            from .tmux_runner import is_safe_tmux_target
+
+            if is_safe_tmux_target(origin_pane):
+                self._conversation_panes[conversation_id] = origin_pane
+            else:
+                origin_pane = None
 
         # Name the session, not just its id. "rm -rf /" from
         # `fe67ae68-b3b6-4918` says nothing about which of four terminals is
@@ -1789,7 +1804,7 @@ class SessionManager:
 
         # Broadcast approval request to phone
         await self.broadcast({"event": "approval_request", "data": approval_data})
-        self._surface_in_tui(conversation_id, approval_id, tool_name, args, origin_pane=origin_pane)
+        self._surface_in_tui(conversation_id, approval_id, origin_pane=origin_pane)
         return approval_data
 
     def pending_approval(self, approval_id: str) -> dict[str, Any] | None:
@@ -1805,9 +1820,9 @@ class SessionManager:
         self,
         conversation_id: str,
         approval_id: str,
-        tool_name: str,
-        args: dict[str, Any],
         origin_pane: str | None = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """Mirror a held approval into the terminal agy runs in.
 
@@ -1822,6 +1837,15 @@ class SessionManager:
         (drawn by tmux itself, so agy's screen is never touched). A server-
         owned pty has no window system to overlay; the console bell rings.
         """
+        if not is_safe_approval_id(approval_id):
+            logger.warning("Unsafe approval ID %r; skipping TUI popup", approval_id)
+            return
+
+        from .tmux_runner import is_safe_tmux_target
+
+        if origin_pane and not is_safe_tmux_target(origin_pane):
+            origin_pane = None
+
         target = origin_pane or self._conversation_panes.get(conversation_id)
         session_name: str | None = None
 
@@ -1849,6 +1873,13 @@ class SessionManager:
             return
 
         final_target = target or session_name or ""
+        if not is_safe_tmux_target(final_target):
+            logger.debug(
+                "No safe target tmux pane known for approval %s in conversation %s; deciding on phone",
+                approval_id,
+                conversation_id,
+            )
+            return
 
         # CRITICAL: Prevent capturing keyboard activity in a different window.
         # tmux display-popup displays over the attached client's currently active window.
@@ -1873,13 +1904,11 @@ class SessionManager:
             "AGY_REMOTE_URL": self.config.local_base_url,
             "AGY_REMOTE_TOKEN": self.config.auth_token,
             "AGY_REMOTE_APPROVAL_ID": approval_id,
-            "AGY_REMOTE_TOOL_NAME": tool_name,
-            "AGY_REMOTE_TOOL_ARGS": json.dumps(args, default=str)[:2048],
         }
         # The tmux server executes popup commands in its own daemon environment,
-        # ignoring the subprocess.Popen env passed to the tmux client. We must
-        # explicitly export these environment variables in the shell command
-        # string and use the active Python interpreter so venvs/uv tool paths work.
+        # ignoring the subprocess.Popen env passed to the tmux client. We use
+        # tmux's built-in -e flag to safely export environment variables to the popup,
+        # avoiding shell command string interpolation and command injection risks.
         cmd = [
             "tmux",
             "display-popup",
@@ -1889,14 +1918,15 @@ class SessionManager:
             "80%",
             "-h",
             "12",
-            "-E",
         ]
-
-        # We build a shell command string that passes the environment variables
-        # safely to the Python interpreter. CodeQL flags string concatenation in
-        # subprocess arguments as py/command-line-injection unless properly quoted.
-        env_vars = " ".join(f"{shlex.quote(k)}={shlex.quote(str(v))}" for k, v in env.items())
-        cmd.append(f"env {env_vars} {shlex.quote(sys.executable)} -m agy_remote.cli tui-approve")
+        for k, v in env.items():
+            cmd.extend(["-e", f"{k}={v}"])
+        cmd.extend(
+            [
+                "-E",
+                f"{shlex.quote(sys.executable)} -m agy_remote.cli tui-approve",
+            ]
+        )
 
         try:
             subprocess.Popen(  # noqa: S603 - fixed argv, tmux is the point

@@ -756,6 +756,15 @@ async def test_an_approval_while_a_phone_watches_also_surfaces_in_the_tui(
     idx = cmd.index("-t")
     assert cmd[idx + 1] == "%42", "popup must target exact originating pane"
 
+    # Malicious origin_pane or approval_id MUST NOT be passed to tmux
+    spawned.clear()
+    await mgr.register_approval("ap-bad-pane", "conv-bad-pane", "bash", {"command": "pwd"}, origin_pane="; rm -rf /")
+    assert not spawned, "malicious origin pane must be rejected"
+
+    spawned.clear()
+    await mgr.register_approval("ap; injection", "conv-origin", "bash", {"command": "pwd"}, origin_pane="%42")
+    assert not spawned, "malicious approval_id must be rejected"
+
     # A session without tmux (a server-owned pty) cannot host a popup; the
     # console still has to hear something, so the terminal bell rings.
     spawned.clear()

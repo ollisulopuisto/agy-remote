@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -266,6 +267,21 @@ def panes_running(command: str = "agy") -> list[dict[str, str]]:
     return found
 
 
+_SAFE_TMUX_TARGET_RE = re.compile(r"^[%@a-zA-Z0-9][a-zA-Z0-9_.:@%-]*$")
+
+
+def is_safe_tmux_target(target: str | None) -> bool:
+    """Validate that a string is a safe tmux target pane or session name.
+
+    Prevents command-line injection and flag injection into tmux commands.
+    """
+    if not target or not isinstance(target, str):
+        return False
+    if target.startswith("-") or len(target) > 128:
+        return False
+    return bool(_SAFE_TMUX_TARGET_RE.match(target))
+
+
 def is_pane_active_and_visible(target: str) -> bool:
     """Check if target pane is in the active window of an attached tmux client.
 
@@ -275,7 +291,7 @@ def is_pane_active_and_visible(target: str) -> bool:
     in (e.g. editor or shell) and steal keyboard focus. We only open popups if
     the target pane's window is currently active and attached.
     """
-    if not is_tmux_available() or not target:
+    if not is_tmux_available() or not is_safe_tmux_target(target):
         return False
     try:
         res = subprocess.run(

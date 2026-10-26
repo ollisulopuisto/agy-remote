@@ -57,7 +57,7 @@ from .pty_runner import get_pty_supervisor
 from .push import get_push_manager
 from .session_manager import SessionManager
 from .spawner import SessionSpawner, SpawnerBusyError, SpawnerError
-from .tmux_runner import get_tmux_supervisor
+from .tmux_runner import get_tmux_supervisor, is_safe_tmux_target
 from .version import VERSION
 
 logger = logging.getLogger("agy_remote.server")
@@ -986,7 +986,10 @@ def create_app(
                 },
             )
 
-        origin_pane = payload.get("tmux_pane") or payload.get("tmuxPane") or request.headers.get("X-Tmux-Pane") or None
+        origin_pane_raw = (
+            payload.get("tmux_pane") or payload.get("tmuxPane") or request.headers.get("X-Tmux-Pane") or None
+        )
+        origin_pane = origin_pane_raw if is_safe_tmux_target(origin_pane_raw) else None
 
         decision_payload = await mgr.request_approval(
             approval_id=approval_id,
