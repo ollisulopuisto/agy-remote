@@ -1114,6 +1114,19 @@ def test_host_file_refuses_symlink_escape(workdir_mgr: SessionManager, tmp_path:
         workdir_mgr.read_host_file(str(tmp_path / "repo" / "src" / "link.ts"))
 
 
+def test_host_file_allows_symlink_whose_target_is_inside_a_root(workdir_mgr: SessionManager, tmp_path: Path):
+    """A symlink that stays inside the sanctioned roots is still readable.
+
+    Resolving and following symlinks is fine as long as the final target lands
+    inside a sanctioned root; only escapes are refused.
+    """
+    real = tmp_path / "repo" / "src" / "real.ts"
+    real.write_text("export const x = 1;\n")
+    (tmp_path / "repo" / "src" / "link.ts").symlink_to(real)
+    result = workdir_mgr.read_host_file(str(tmp_path / "repo" / "src" / "link.ts"))
+    assert result["content"] == "export const x = 1;\n"
+
+
 def test_host_file_reports_missing_files(workdir_mgr: SessionManager, tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         workdir_mgr.read_host_file(f"{tmp_path}/repo/src/nope.ts")

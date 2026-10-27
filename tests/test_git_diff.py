@@ -112,6 +112,26 @@ def test_modified_and_new_files_are_reported_with_stats(tmp_path: Path):
     assert "+line two changed" in hello["diff"]
 
 
+def test_working_tree_diff_does_not_leak_symlink_target(tmp_path: Path):
+    """An untracked symlink pointing outside the workdir must not be read.
+
+    `git ls-files --others` lists untracked entries by name; a symlink among
+    them must not be followed when its target lands outside the sanctioned
+    root, or the diff pane would disclose arbitrary files.
+    """
+    workdir = _repo(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP SECRET\n")
+    (workdir / "leak").symlink_to(secret)
+    mgr = _mgr_with_session(tmp_path, workdir)
+
+    result = mgr.working_tree_diff("conv-1")
+
+    paths = {f["path"] for f in result["files"]}
+    assert "leak" not in paths
+    assert all("TOP SECRET" not in (f.get("diff") or "") for f in result["files"])
+
+
 def test_staged_changes_are_included(tmp_path: Path):
     """opencode's viewer shows staged work too; `git diff HEAD` covers both."""
     workdir = _repo(tmp_path)
