@@ -1473,6 +1473,29 @@ class SessionManager:
     # Host files for the phone
     # -------------------------------------------------------------------------
 
+    def _sanctioned_path(self, requested: str) -> Path:
+        """Resolve `requested` and confirm it lands inside a sanctioned root.
+
+        Accepts the `file:///abs/path` form the agent writes or a bare
+        absolute path. The path is fully resolved -- collapsing `..` and
+        following symlinks -- and must be the sanctioned root itself or live
+        beneath one of the registered sessions' workdirs or the projects
+        root. A symlink is followed, so a link whose name is inside but whose
+        target escapes is refused, even before the caller opens anything.
+        """
+        if requested.startswith("file://"):
+            requested = requested[len("file://") :]
+            # `file://host/path` names another machine's share; only the
+            # empty-host form, `file:///path`, refers to this one.
+            if not requested.startswith("/"):
+                raise PermissionError(f"not an absolute file reference: {requested!r}")
+
+        resolved = Path(requested).resolve()
+        roots = self._file_roots()
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
+        return resolved
+
     def _file_roots(self) -> list[Path]:
         """The directories a file reference may name, resolved.
 
@@ -1549,6 +1572,10 @@ class SessionManager:
                 if not name or ".." in Path(name).parts:
                     continue
                 path = resolved / name
+                if path.is_symlink():
+                    # An untracked symlink could point outside the workdir;
+                    # refuse to follow it so the diff pane cannot leak files.
+                    continue
                 try:
                     if not path.is_file():
                         continue
@@ -1604,12 +1631,12 @@ class SessionManager:
             raise LookupError("no supervised session workdir for this conversation")
 
         requested = (raw_path or "").strip() or str(session.workdir)
-        resolved = Path(requested).resolve()
-        roots = self._file_roots()
-        # Inline prefix check (never a helper call): the resolved path must
-        # start with one of the sanctioned roots before it is used. Using the
-        # root value directly here breaks path-injection taint tracking.
-        if not any(str(resolved).startswith(str(root)) for root in roots):
+        resolved = self._sanctioned_path(requested)
+
+        # Same TOCTOU guard as read_host_file: refuse if the path became a
+        # symlink after the resolve-and-check, so a swapped-in symlink can't
+        # make us list a directory outside the sanctioned roots.
+        if os.path.islink(resolved):
             raise PermissionError(f"outside the sanctioned project directories: {requested}")
 
         if not resolved.exists():
@@ -1642,24 +1669,35 @@ class SessionManager:
         missing file, ValueError for a binary file or a directory.
         """
         requested = raw_path.strip()
-        if requested.startswith("file://"):
-            requested = requested[len("file://") :]
-            # `file://host/path` names another machine's share; only the
-            # empty-host form, `file:///path`, refers to this one.
-            if not requested.startswith("/"):
-                raise PermissionError(f"not an absolute file reference: {raw_path!r}")
+        resolved = self._sanctioned_path(requested)
 
-        resolved = Path(requested).resolve()
-        if not any(str(resolved).startswith(str(root)) for root in self._file_roots()):
+        # Re-confirm right before opening: between the resolve-and-check above
+        # and open() below, a symlink could be swapped in to point outside the
+        # sanctioned roots (TOCTOU). Opening without following symlinks means a
+        # swapped-in symlink is refused rather than followed. A symlink that
+        # was there from the start was already followed by `_sanctioned_path`
+        # above and its target checked, so it still opens normally.
+        if os.path.islink(resolved):
             raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
-
         if not resolved.exists():
             raise FileNotFoundError(resolved.name)
         if not resolved.is_file():
             raise ValueError(f"not a regular file: {resolved.name}")
 
-        with open(resolved, "rb") as fh:
-            data = fh.read(MAX_FILE_BYTES + 1)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(resolved, flags)
+        except FileNotFoundError as e:
+            raise FileNotFoundError(resolved.name) from e
+        except OSError as e:  # noqa: BLE001 - refuse rather than follow a swapped symlink
+            raise PermissionError(f"cannot open {raw_path!r}: {e}") from e
+        try:
+            with os.fdopen(fd, "rb") as fh:
+                data = fh.read(MAX_FILE_BYTES + 1)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            raise
         # A NUL in the first kilobytes is the classic binary tell; decoding
         # one into the phone's <pre> produces garbage either way.
         if b"\x00" in data[:8192]:
