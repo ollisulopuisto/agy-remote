@@ -1155,6 +1155,46 @@ def test_projects_root_is_also_allowed(tmp_path: Path, monkeypatch: pytest.Monke
         mgr.read_host_file(str(tmp_path / "brain" / "transcript.jsonl"))
 
 
+def test_list_host_dir_lists_registered_workdir(workdir_mgr: SessionManager, tmp_path: Path):
+    result = workdir_mgr.list_host_dir(None)
+    assert result["name"] == "repo"
+    assert {e["name"] for e in result["entries"]} == {"src"}
+
+
+def test_list_host_dir_lists_subdir(workdir_mgr: SessionManager, tmp_path: Path):
+    result = workdir_mgr.list_host_dir(f"{tmp_path}/repo/src")
+    assert result["name"] == "src"
+    assert {e["name"] for e in result["entries"]} == {"classifier.ts"}
+
+
+def test_list_host_dir_refuses_paths_outside_every_root(workdir_mgr: SessionManager):
+    with pytest.raises(PermissionError):
+        workdir_mgr.list_host_dir("/etc")
+
+
+def test_list_host_dir_refuses_traversal(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(PermissionError):
+        workdir_mgr.list_host_dir(f"{tmp_path}/repo/src/../../../etc")
+
+
+def test_list_host_dir_refuses_symlink_escape(workdir_mgr: SessionManager, tmp_path: Path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("token")
+    (tmp_path / "repo" / "src" / "link.ts").symlink_to(secret)
+    with pytest.raises(PermissionError):
+        workdir_mgr.list_host_dir(str(tmp_path / "repo" / "src" / "link.ts"))
+
+
+def test_list_host_dir_reports_missing_paths(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        workdir_mgr.list_host_dir(f"{tmp_path}/repo/src/nope")
+
+
+def test_list_host_dir_refuses_files(workdir_mgr: SessionManager, tmp_path: Path):
+    with pytest.raises(ValueError):
+        workdir_mgr.list_host_dir(f"{tmp_path}/repo/src/classifier.ts")
+
+
 @pytest.mark.asyncio
 async def test_rename_in_transcript_updates_conversation_title(tmp_path: Path):
     """When a user renames a session in the terminal via /rename, the summary reflects it."""

@@ -1606,7 +1606,10 @@ class SessionManager:
         requested = (raw_path or "").strip() or str(session.workdir)
         resolved = Path(requested).resolve()
         roots = self._file_roots()
-        if not _is_within_roots(resolved, roots):
+        # Inline prefix check (never a helper call): the resolved path must
+        # start with one of the sanctioned roots before it is used. Using the
+        # root value directly here breaks path-injection taint tracking.
+        if not any(str(resolved).startswith(str(root)) for root in roots):
             raise PermissionError(f"outside the sanctioned project directories: {requested}")
 
         if not resolved.exists():
@@ -1647,7 +1650,7 @@ class SessionManager:
                 raise PermissionError(f"not an absolute file reference: {raw_path!r}")
 
         resolved = Path(requested).resolve()
-        if not _is_within_roots(resolved, self._file_roots()):
+        if not any(str(resolved).startswith(str(root)) for root in self._file_roots()):
             raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
 
         if not resolved.exists():
