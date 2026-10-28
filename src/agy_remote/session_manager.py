@@ -1501,16 +1501,24 @@ class SessionManager:
             if segment == "..":
                 raise PermissionError(f"invalid file reference: {requested!r}")
 
-        resolved = Path(requested).resolve()
         roots = self._file_roots()
-        # Inline prefix check against the sanctioned roots (never a helper
-        # call), right after Path.resolve() normalizes the path. CodeQL's
-        # py/path-injection only treats inline comparisons as taint-breaking
-        # barriers, so `resolved` must pass this guard before it is returned
-        # and consumed by the list_host_dir / read_host_file filesystem sinks.
-        # The separator suffix (and exact-root equality) prevents a root name
-        # that is a prefix of another directory -- e.g. `project` vs
-        # `project2` -- from being bypassed by a bare `startswith`.
+
+        # Confine an absolute request to the sanctioned roots *before* Path()
+        # sees it: a reference that clearly names another tree (e.g. /etc/
+        # passwd) is rejected here, so tainted request data never reaches a
+        # path expression unless it names a sanctioned root. The separator-
+        # aware prefix match prevents a root name that is a prefix of another
+        # directory (`project` vs `project2`) from being bypassed. Relative
+        # references have no root prefix to match and fall through to
+        # resolve() + the post-resolve containment check below.
+        if requested.startswith("/") and not any(
+            requested == str(root) or requested.startswith(str(root) + os.sep) for root in roots
+        ):
+            raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
+
+        resolved = Path(requested).resolve()
+        # Post-resolve containment catches symlinks whose name is inside a root
+        # but whose target escapes, and normalizes ./ and redundant separators.
         if not any(str(resolved) == str(root) or str(resolved).startswith(str(root) + os.sep) for root in roots):
             raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
         return resolved
