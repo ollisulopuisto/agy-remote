@@ -1652,6 +1652,14 @@ class SessionManager:
         requested = (raw_path or "").strip() or str(session.workdir)
         resolved = self._sanctioned_path(requested)
 
+        # CodeQL's py/path-injection only treats inline comparisons as
+        # taint-breaking barriers; the boolean returned by the shared helper
+        # does not break taint once it reaches this function's filesystem
+        # sinks, so re-assert containment inline right before them.
+        roots = self._file_roots()
+        if not any(str(resolved) == str(root) or str(resolved).startswith(str(root) + os.sep) for root in roots):
+            raise PermissionError(f"outside the sanctioned project directories: {requested}")
+
         # Same TOCTOU guard as read_host_file: refuse if the path became a
         # symlink after the resolve-and-check, so a swapped-in symlink can't
         # make us list a directory outside the sanctioned roots.
@@ -1689,6 +1697,14 @@ class SessionManager:
         """
         requested = raw_path.strip()
         resolved = self._sanctioned_path(requested)
+
+        # CodeQL's py/path-injection only treats inline comparisons as
+        # taint-breaking barriers; the boolean returned by the shared helper
+        # does not break taint once it reaches this function's filesystem
+        # sinks, so re-assert containment inline right before them.
+        roots = self._file_roots()
+        if not any(str(resolved) == str(root) or str(resolved).startswith(str(root) + os.sep) for root in roots):
+            raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
 
         # Re-confirm right before opening: between the resolve-and-check above
         # and open() below, a symlink could be swapped in to point outside the

@@ -1244,6 +1244,20 @@ def test_list_host_dir_refuses_symlink_escape(workdir_mgr: SessionManager, tmp_p
         workdir_mgr.list_host_dir(str(tmp_path / "repo" / "src" / "link.ts"))
 
 
+def test_list_host_dir_refuses_root_name_prefix_escape(workdir_mgr: SessionManager, tmp_path: Path):
+    """A directory whose name extends a sanctioned root's name is not inside it.
+
+    Root containment must be separator-aware for directory listings, too: a
+    bare `startswith(root)` check would wrongly treat `/.../repo2` as beneath
+    `/.../repo`; the guarded inline check rejects it.
+    """
+    outside = tmp_path / "repo2" / "secret"
+    outside.parent.mkdir(parents=True)
+    outside.mkdir()
+    with pytest.raises(PermissionError):
+        workdir_mgr.list_host_dir(str(outside))
+
+
 def test_list_host_dir_reports_missing_paths(workdir_mgr: SessionManager, tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         workdir_mgr.list_host_dir(f"{tmp_path}/repo/src/nope")
