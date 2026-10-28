@@ -1180,6 +1180,21 @@ def test_host_file_refuses_dotdot_segments(workdir_mgr: SessionManager):
         workdir_mgr.read_host_file(str(workdir_mgr._file_roots()[0]) + "/src/../src/classifier.ts")
 
 
+def test_host_file_refuses_root_name_prefix_escape(workdir_mgr: SessionManager, tmp_path: Path):
+    """A directory whose name extends a sanctioned root's name is not inside it.
+
+    Root containment must be separator-aware: `/.../repo2/secret.txt` is not
+    beneath `/.../repo` just because the former string starts with the latter.
+    A bare `startswith(root)` check would wrongly allow it; the guarded check
+    rejects it.
+    """
+    outside = tmp_path / "repo2" / "secret.txt"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("secret\n")
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(str(outside))
+
+
 def test_list_host_dir_refuses_dotdot_segments(workdir_mgr: SessionManager):
     """Directory listing rejects traversal before the path expression."""
     with pytest.raises(PermissionError):
