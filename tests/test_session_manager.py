@@ -1296,3 +1296,23 @@ async def test_rename_in_transcript_updates_conversation_title(tmp_path: Path):
     summaries = mgr.list_conversations()
     conv = next(s for s in summaries if s.id == "conv-rename")
     assert conv.title == "Refactored Backend"
+
+
+def test_sanctioned_path_refuses_outside_roots_at_every_entry(workdir_mgr: SessionManager, tmp_path: Path):
+    """No filesystem sink may be reached with an out-of-roots path.
+
+    Regression lock for CodeQL py/path-injection: the resolved path must pass
+    an inline root-containment check (plain == / startswith comparisons, not
+    any(...)) before islink/exists/is_file/open/stat/iterdir see it.
+    """
+    outside = tmp_path / "repo2" / "secret.txt"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("secret\n")
+
+    for call in (
+        lambda: workdir_mgr._sanctioned_path(str(outside)),
+        lambda: workdir_mgr.read_host_file(str(outside)),
+        lambda: workdir_mgr.list_host_dir(str(outside)),
+    ):
+        with pytest.raises(PermissionError):
+            call()
