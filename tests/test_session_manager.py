@@ -1214,6 +1214,17 @@ def test_sanctioned_path_rejects_dotdot_even_when_target_inside_roots(workdir_mg
         workdir_mgr._sanctioned_path(inside)
 
 
+def test_sanctioned_path_refuses_outside_root_before_resolve(workdir_mgr: SessionManager):
+    """An absolute request outside every sanctioned root is refused before Path() sees it.
+
+    The raw request string is confined to the sanctioned roots at string level
+    before it ever reaches Path(), so a reference such as /etc/hosts can never
+    be turned into a path expression.
+    """
+    with pytest.raises(PermissionError):
+        workdir_mgr._sanctioned_path("/etc/hosts")
+
+
 def test_list_host_dir_lists_registered_workdir(workdir_mgr: SessionManager, tmp_path: Path):
     result = workdir_mgr.list_host_dir(None)
     assert result["name"] == "repo"
