@@ -1490,9 +1490,28 @@ class SessionManager:
             if not requested.startswith("/"):
                 raise PermissionError(f"not an absolute file reference: {requested!r}")
 
+        # Reject control characters and path-traversal segments in the raw
+        # request *before* it reaches any path expression, so the tainted
+        # request string can never reach Path(). Every filesystem sink
+        # downstream (list_host_dir, read_host_file, working_tree_diff)
+        # consumes the already-validated `resolved`.
+        if "\x00" in requested:
+            raise PermissionError(f"invalid file reference: {requested!r}")
+        for segment in requested.split("/"):
+            if segment == "..":
+                raise PermissionError(f"invalid file reference: {requested!r}")
+
         resolved = Path(requested).resolve()
         roots = self._file_roots()
-        if not any(resolved == root or root in resolved.parents for root in roots):
+        # Inline prefix check against the sanctioned roots (never a helper
+        # call), right after Path.resolve() normalizes the path. CodeQL's
+        # py/path-injection only treats inline comparisons as taint-breaking
+        # barriers, so `resolved` must pass this guard before it is returned
+        # and consumed by the list_host_dir / read_host_file filesystem sinks.
+        # The separator suffix (and exact-root equality) prevents a root name
+        # that is a prefix of another directory -- e.g. `project` vs
+        # `project2` -- from being bypassed by a bare `startswith`.
+        if not any(str(resolved) == str(root) or str(resolved).startswith(str(root) + os.sep) for root in roots):
             raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
         return resolved
 

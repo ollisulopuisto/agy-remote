@@ -1168,6 +1168,52 @@ def test_projects_root_is_also_allowed(tmp_path: Path, monkeypatch: pytest.Monke
         mgr.read_host_file(str(tmp_path / "brain" / "transcript.jsonl"))
 
 
+def test_host_file_refuses_null_byte_in_path(workdir_mgr: SessionManager):
+    """A NUL byte in the request is rejected before Path() ever sees it."""
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(str(workdir_mgr._file_roots()[0]) + "/src/classifier.ts\x00junk")
+
+
+def test_host_file_refuses_dotdot_segments(workdir_mgr: SessionManager):
+    """`..` segments are refused outright, not merely collapsed by resolve()."""
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(str(workdir_mgr._file_roots()[0]) + "/src/../src/classifier.ts")
+
+
+def test_host_file_refuses_root_name_prefix_escape(workdir_mgr: SessionManager, tmp_path: Path):
+    """A directory whose name extends a sanctioned root's name is not inside it.
+
+    Root containment must be separator-aware: `/.../repo2/secret.txt` is not
+    beneath `/.../repo` just because the former string starts with the latter.
+    A bare `startswith(root)` check would wrongly allow it; the guarded check
+    rejects it.
+    """
+    outside = tmp_path / "repo2" / "secret.txt"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("secret\n")
+    with pytest.raises(PermissionError):
+        workdir_mgr.read_host_file(str(outside))
+
+
+def test_list_host_dir_refuses_dotdot_segments(workdir_mgr: SessionManager):
+    """Directory listing rejects traversal before the path expression."""
+    with pytest.raises(PermissionError):
+        workdir_mgr.list_host_dir(str(workdir_mgr._file_roots()[0]) + "/src/../src")
+
+
+def test_sanctioned_path_rejects_null_byte(workdir_mgr: SessionManager):
+    inside = str(workdir_mgr._file_roots()[0]) + "/src/classifier.ts\x00junk"
+    with pytest.raises(PermissionError):
+        workdir_mgr._sanctioned_path(inside)
+
+
+def test_sanctioned_path_rejects_dotdot_even_when_target_inside_roots(workdir_mgr: SessionManager):
+    """`..` is refused even if resolve() would land inside the sanctioned roots."""
+    inside = str(workdir_mgr._file_roots()[0]) + "/src/../src/classifier.ts"
+    with pytest.raises(PermissionError):
+        workdir_mgr._sanctioned_path(inside)
+
+
 def test_list_host_dir_lists_registered_workdir(workdir_mgr: SessionManager, tmp_path: Path):
     result = workdir_mgr.list_host_dir(None)
     assert result["name"] == "repo"
