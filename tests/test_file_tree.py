@@ -143,3 +143,54 @@ def test_the_files_endpoint_serves_and_refuses(tmp_path: Path):
     # Traversal and unknown sessions are refused, not served.
     assert client.get("/api/files?path=/etc&conversation_id=conv-1&token=secret123").status_code == 403
     assert client.get("/api/files?conversation_id=nope&token=secret123").status_code == 404
+
+
+def test_a_sibling_sharing_the_roots_name_prefix_is_refused(tmp_path: Path):
+    """``proj2`` starts with ``proj`` as a bare string but is outside the root.
+
+    A prefix check without the path separator boundary would serve it.
+    """
+    workdir = _project(tmp_path)
+    mgr = _mgr_with_session(tmp_path, workdir)
+    sibling = tmp_path / "proj2"
+    (sibling / "sub").mkdir(parents=True)
+    secret = sibling / "sub" / "secret.txt"
+    secret.write_text("x\n")
+    assert str(secret).startswith(str(workdir))  # the bare-prefix trap
+
+    import pytest
+
+    with pytest.raises(PermissionError):
+        mgr.list_host_dir(str(sibling / "sub"))
+    with pytest.raises(PermissionError):
+        mgr.read_host_file(str(secret))
+
+
+def test_a_symlink_escaping_the_root_is_refused(tmp_path: Path):
+    """A symlink named inside the root whose target escapes must not resolve."""
+    workdir = _project(tmp_path)
+    mgr = _mgr_with_session(tmp_path, workdir)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x\n")
+    (workdir / "link").symlink_to(outside)
+
+    import pytest
+
+    with pytest.raises(PermissionError):
+        mgr.read_host_file(str(workdir / "link" / "secret.txt"))
+    with pytest.raises(PermissionError):
+        mgr.list_host_dir(str(workdir / "link"))
+
+
+def test_the_root_itself_can_be_listed(tmp_path: Path):
+    """The exact sanctioned root (no trailing component) remains listable."""
+    workdir = _project(tmp_path)
+    mgr = _mgr_with_session(tmp_path, workdir)
+
+    listing = mgr.list_host_dir(str(workdir))
+
+    assert listing["path"] == str(workdir.resolve())
+    names = {entry["name"] for entry in listing["entries"]}
+    assert "README.md" in names
+    assert "src" in names
