@@ -1503,36 +1503,40 @@ class SessionManager:
 
         roots = self._file_roots()
 
-        # Confine an absolute request to the sanctioned roots *before* Path()
-        # sees it: a reference that clearly names another tree (e.g. /etc/
-        # passwd) is rejected here, so tainted request data never reaches a
-        # path expression unless it names a sanctioned root. The separator-
-        # aware prefix match prevents a root name that is a prefix of another
-        # directory (`project` vs `project2`) from being bypassed. Relative
-        # references have no root prefix to match and fall through to
-        # resolve() + the post-resolve containment check below.
-        # CodeQL's py/path-injection only treats inline comparisons as
-        # taint-breaking barriers; a plain for-loop with == / startswith
-        # comparisons (not any(...)) breaks taint before Path() sees it.
+        # Confine the request to the sanctioned roots *before* Path() sees it:
+        # a reference that names another tree (e.g. /etc/passwd) is rejected
+        # here, so tainted request data never reaches a path expression unless
+        # it names a sanctioned root. The separator-aware prefix match prevents
+        # a root name that is a prefix of another directory (`project` vs
+        # `project2`) from being bypassed. Relative references have no root
+        # prefix to match and cannot be confined before Path() sees them, so
+        # they are refused outright.
+        # CodeQL's py/path-injection treats an inline comparison guard as a
+        # taint-breaking barrier, so the request is validated with a direct
+        # == / startswith guard before Path() sees it.
+        contained = False
         if requested.startswith("/"):
             for root in roots:
                 root_str = str(root)
                 if requested == root_str or requested.startswith(root_str + os.sep):
+                    contained = True
                     break
-            else:
-                raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
+        if not contained:
+            raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
 
         resolved = Path(requested).resolve()
         # Post-resolve containment catches symlinks whose name is inside a root
         # but whose target escapes, and normalizes ./ and redundant separators.
-        # Inline == / startswith comparisons break CodeQL path-injection taint
+        # An inline == / startswith guard breaks CodeQL path-injection taint
         # before the resolved path reaches any filesystem sink.
         resolved_str = str(resolved)
+        contained = False
         for root in roots:
             root_str = str(root)
             if resolved_str == root_str or resolved_str.startswith(root_str + os.sep):
+                contained = True
                 break
-        else:
+        if not contained:
             raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
         return resolved
 
@@ -1673,20 +1677,18 @@ class SessionManager:
         requested = (raw_path or "").strip() or str(session.workdir)
         resolved = self._sanctioned_path(requested)
 
-        # CodeQL's py/path-injection only treats inline comparisons as
-        # taint-breaking barriers; the boolean returned by the shared helper
-        # does not break taint once it reaches this function's filesystem
-        # sinks, so re-assert containment inline right before them.
+        # CodeQL's py/path-injection treats an inline comparison guard as a
+        # taint-breaking barrier; the direct == / startswith guard below
+        # validates the resolved path before any filesystem sink sees it.
         roots = self._file_roots()
-        # CodeQL's py/path-injection only treats inline comparisons as
-        # taint-breaking barriers; a plain for-loop with == / startswith
-        # comparisons (not any(...)) breaks taint before the filesystem sinks.
         resolved_str = str(resolved)
+        contained = False
         for root in roots:
             root_str = str(root)
             if resolved_str == root_str or resolved_str.startswith(root_str + os.sep):
+                contained = True
                 break
-        else:
+        if not contained:
             raise PermissionError(f"outside the sanctioned project directories: {requested}")
 
         # Same TOCTOU guard as read_host_file: refuse if the path became a
@@ -1727,20 +1729,18 @@ class SessionManager:
         requested = raw_path.strip()
         resolved = self._sanctioned_path(requested)
 
-        # CodeQL's py/path-injection only treats inline comparisons as
-        # taint-breaking barriers; the boolean returned by the shared helper
-        # does not break taint once it reaches this function's filesystem
-        # sinks, so re-assert containment inline right before them.
+        # CodeQL's py/path-injection treats an inline comparison guard as a
+        # taint-breaking barrier; the direct == / startswith guard below
+        # validates the resolved path before any filesystem sink sees it.
         roots = self._file_roots()
-        # CodeQL's py/path-injection only treats inline comparisons as
-        # taint-breaking barriers; a plain for-loop with == / startswith
-        # comparisons (not any(...)) breaks taint before the filesystem sinks.
         resolved_str = str(resolved)
+        contained = False
         for root in roots:
             root_str = str(root)
             if resolved_str == root_str or resolved_str.startswith(root_str + os.sep):
+                contained = True
                 break
-        else:
+        if not contained:
             raise PermissionError(f"outside the sanctioned project directories: {raw_path!r}")
 
         # Re-confirm right before opening: between the resolve-and-check above

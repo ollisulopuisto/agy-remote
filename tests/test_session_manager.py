@@ -1225,6 +1225,16 @@ def test_sanctioned_path_refuses_outside_root_before_resolve(workdir_mgr: Sessio
         workdir_mgr._sanctioned_path("/etc/hosts")
 
 
+def test_sanctioned_path_refuses_relative_request(workdir_mgr: SessionManager):
+    """A relative reference cannot be confined before Path() sees it, so refused.
+
+    Regression lock for CodeQL py/path-injection: `Path(requested)` at
+    `_sanctioned_path` must never receive tainted, uncontained request data.
+    """
+    with pytest.raises(PermissionError):
+        workdir_mgr._sanctioned_path("src/classifier.ts")
+
+
 def test_list_host_dir_lists_registered_workdir(workdir_mgr: SessionManager, tmp_path: Path):
     result = workdir_mgr.list_host_dir(None)
     assert result["name"] == "repo"
