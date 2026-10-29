@@ -1524,21 +1524,33 @@ class SessionManager:
         if not contained:
             raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
 
-        resolved = Path(requested).resolve()
         # Post-resolve containment catches symlinks whose name is inside a root
         # but whose target escapes, and normalizes ./ and redundant separators.
-        # An inline == / startswith guard breaks CodeQL path-injection taint
-        # before the resolved path reaches any filesystem sink.
-        resolved_str = str(resolved)
-        contained = False
-        for root in roots:
-            root_str = str(root)
-            if resolved_str == root_str or resolved_str.startswith(root_str + os.sep):
-                contained = True
+        #
+        # This is written in the one shape CodeQL's py/path-injection query
+        # treats as sanitizing (see github/codeql, python PathInjection
+        # configuration): the raw string is normalized with os.path.realpath,
+        # and a single startswith() guard on that same normalized string
+        # decides, dominating every filesystem sink downstream. The earlier
+        # == / startswith loops over str(Path(...).resolve()) were equivalent
+        # in behaviour but invisible to that analysis: Path.resolve() is not
+        # a recognized normalization and the guard ran on a different node
+        # than the sinks consume, so the alerts stayed open.
+        resolved_str = os.path.realpath(requested)
+        root_strs = [os.path.realpath(str(root)) for root in roots]
+        # The root directory itself is a valid target (listing the project
+        # root); appending the separator lets one prefix check cover both the
+        # root and everything beneath it.
+        if resolved_str in root_strs:
+            resolved_str = resolved_str + os.sep
+        matched_root = None
+        for root_str in root_strs:
+            if resolved_str.startswith(root_str + os.sep):
+                matched_root = root_str
                 break
-        if not contained:
+        if matched_root is None or not resolved_str.startswith(matched_root + os.sep):
             raise PermissionError(f"outside the sanctioned project directories: {requested!r}")
-        return resolved
+        return Path(resolved_str)
 
     def _file_roots(self) -> list[Path]:
         """The directories a file reference may name, resolved.
