@@ -272,6 +272,9 @@ class AgyBackend:
         #: (mtime, size). Without this the watcher re-read every transcript
         #: several times a second.
         self._summary_cache: dict[Path, tuple[float, int, ConversationSummary]] = {}
+        #: Cached conversation creation timestamps (immutable per conversation).
+        #: Caching avoids repeated multi-stat filesystem lookups during watch loop ticks.
+        self._ctime_cache: dict[str, float] = {}
         #: Number of transcripts actually parsed; asserted on in tests.
         self.parse_count = 0
 
@@ -368,20 +371,33 @@ class AgyBackend:
     # -- discovery ----------------------------------------------------------
 
     def _iter_transcripts(self) -> list[tuple[str, Path]]:
-        """List (conversation_id, transcript path) pairs using stat only."""
+        """List (conversation_id, transcript path) pairs using stat only.
+
+        Optimized with os.scandir and os.path checks instead of Path.iterdir
+        and multiple Path allocations, cutting scan overhead significantly
+        on high-frequency watcher ticks.
+        """
         if not self.brain_dir.exists():
             return []
 
         found: list[tuple[str, Path]] = []
-        for path in self.brain_dir.iterdir():
-            if not path.is_dir():
-                continue
-            log_path = path / ".system_generated" / "logs" / "transcript.jsonl"
-            if not log_path.exists():
-                log_path = path / "transcript.jsonl"
-                if not log_path.exists():
-                    continue
-            found.append((path.name, log_path))
+        try:
+            with os.scandir(self.brain_dir) as it:
+                for entry in it:
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    epath = entry.path
+                    log_path_str = os.path.join(epath, ".system_generated", "logs", "transcript.jsonl")
+                    if not os.path.exists(log_path_str):
+                        log_path_str = os.path.join(epath, "transcript.jsonl")
+                        if not os.path.exists(log_path_str):
+                            continue
+                    found.append((entry.name, Path(log_path_str)))
+        except OSError:
+            return []
         return found
 
     def _summarize(self, mgr: SessionManager, conversation_id: str, log_path: Path) -> ConversationSummary | None:
@@ -469,25 +485,39 @@ class AgyBackend:
 
     def _get_conversation_ctime(self, conversation_id: str, log_path: Path) -> float:
         """The creation timestamp of this conversation, cheaply without content reads."""
+        # Conversation creation timestamp is immutable; check cache first.
+        cached_ctime = self._ctime_cache.get(conversation_id)
+        if cached_ctime is not None:
+            return cached_ctime
+
         cached = self._summary_cache.get(log_path)
         if cached and cached[2].created_at:
-            return cached[2].created_at.timestamp()
+            ct = cached[2].created_at.timestamp()
+            self._ctime_cache[conversation_id] = ct
+            return ct
 
         try:
             lstat = log_path.stat()
             birthtime = getattr(lstat, "st_birthtime", None)
             if birthtime and birthtime > 0 and birthtime <= lstat.st_mtime:
-                return birthtime
-            conv_dir = self.brain_dir / conversation_id
-            if conv_dir.is_dir():
-                dstat = conv_dir.stat()
-                dbirth = getattr(dstat, "st_birthtime", None)
-                if dbirth and dbirth > 0 and dbirth <= lstat.st_mtime:
-                    return dbirth
-                return min(dstat.st_ctime, dstat.st_mtime, lstat.st_mtime)
-            return min(lstat.st_ctime, lstat.st_mtime)
+                ct = birthtime
+            else:
+                conv_dir = self.brain_dir / conversation_id
+                if conv_dir.is_dir():
+                    dstat = conv_dir.stat()
+                    dbirth = getattr(dstat, "st_birthtime", None)
+                    if dbirth and dbirth > 0 and dbirth <= lstat.st_mtime:
+                        ct = dbirth
+                    else:
+                        ct = min(dstat.st_ctime, dstat.st_mtime, lstat.st_mtime)
+                else:
+                    ct = min(lstat.st_ctime, lstat.st_mtime)
         except OSError:
-            return 0.0
+            ct = 0.0
+
+        if ct > 0.0:
+            self._ctime_cache[conversation_id] = ct
+        return ct
 
     def get_newest_conversation_id(self) -> str | None:
         """Find the most recently created conversation ID cheaply."""
