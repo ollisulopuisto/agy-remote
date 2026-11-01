@@ -58,7 +58,7 @@ ALLOWED_SCHEMES = {"https", "git", "ssh"}
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _SCP_LIKE_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:\S+$")
 _NAME_INVALID_RE = re.compile(r"[^A-Za-z0-9_-]+")
-_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 
 
 class SpawnerError(Exception):
@@ -86,14 +86,24 @@ def validate_repo_url(url: str) -> str:
     if not cleaned or any(c.isspace() for c in cleaned):
         raise SpawnerError("repo URL is empty or unparseable")
 
+    if cleaned.startswith("-"):
+        raise SpawnerError("repo URL cannot start with a dash")
+
     if _SCHEME_RE.match(cleaned):
-        scheme = urllib.parse.urlsplit(cleaned).scheme.lower()
+        parsed = urllib.parse.urlsplit(cleaned)
+        scheme = parsed.scheme.lower()
         if scheme not in ALLOWED_SCHEMES:
             raise SpawnerError(f"URL scheme {scheme!r} is not allowed (use https, git or ssh)")
+        if not parsed.hostname or parsed.hostname.startswith("-"):
+            raise SpawnerError(f"invalid hostname in repo URL: {parsed.hostname!r}")
         return cleaned
 
     # The scp-like `git@host:org/repo` form: no scheme, host before the colon.
     if _SCP_LIKE_RE.match(cleaned):
+        host = cleaned.split("@", 1)[1].split(":", 1)[0]
+        path = cleaned.split(":", 1)[1]
+        if host.startswith("-") or path.startswith("-"):
+            raise SpawnerError("host or path in scp-like URL cannot start with a dash")
         return cleaned
 
     raise SpawnerError(f"unrecognised repo URL {cleaned!r}: use an https, git or ssh URL")
