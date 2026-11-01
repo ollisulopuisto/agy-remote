@@ -1,0 +1,4 @@
+## 2026-10-30 - Atomic Permissions on Uploaded Files
+**Vulnerability:** In `/api/upload`, uploaded files were written with `open(dest, "wb")` and then tightened with `dest.chmod(0o600)`. Under standard umasks (e.g. 0o022), the file was created world/group readable (0o644) for a brief window before `chmod` ran, exposing potentially sensitive screenshots or uploaded images to other users on multi-user systems.
+**Learning:** `open()-then-chmod` patterns suffer from a TOCTOU permissions race condition where files are created under the process umask before permissions are restricted.
+**Prevention:** Always create sensitive files atomically with restricted modes at creation time using `os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)` and `os.fdopen()`, matching the secure file creation pattern used across this codebase for runtime tokens, VAPID keys, and certificates.

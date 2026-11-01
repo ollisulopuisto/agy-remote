@@ -898,9 +898,12 @@ def create_app(
         if not dest.is_relative_to(upload_dir):
             raise HTTPException(status_code=400, detail="Invalid target filename.")
 
-        with open(dest, "wb") as f:
+        # 0600 from creation: open()-then-chmod leaves uploaded files readable
+        # under the default umask before chmod runs.
+        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
             f.write(content)
-        dest.chmod(0o600)
+        os.chmod(dest, 0o600)
 
         return {
             "status": "ok",
