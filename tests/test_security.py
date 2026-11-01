@@ -224,6 +224,23 @@ def test_upload_content_must_match_extension(tmp_path: Path):
     assert resp.status_code == 400
 
 
+def test_upload_file_permissions_are_owner_only(tmp_path: Path, monkeypatch):
+    """Uploaded files must be created owner-only (0o600)."""
+    monkeypatch.chdir(tmp_path)
+    app = create_app(_cfg(tmp_path))
+    client = TestClient(app)
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    resp = client.post(
+        "/api/upload?token=secret123",
+        files={"file": ("valid.png", png_bytes, "image/png")},
+    )
+    assert resp.status_code == 200
+    uploaded_path = Path(resp.json()["absolute_path"])
+    assert uploaded_path.exists()
+    mode = stat.S_IMODE(uploaded_path.stat().st_mode)
+    assert mode == 0o600, f"uploaded file mode is {oct(mode)}"
+
+
 # ---------------------------------------------------------------------------
 # Finding #8: pre-auth information disclosure
 # ---------------------------------------------------------------------------
