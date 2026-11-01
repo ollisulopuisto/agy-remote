@@ -50,11 +50,53 @@ def test_allowed_repo_urls_pass(url):
         "/Users/me/repo",
         "relative/path",
         "https://example.com/o/r extra",
+        "-u",
+        "--upload-pack=touch /tmp/pwn",
+        "ssh://-oProxyCommand=calc/repo",
+        "https://-oProxyCommand=calc/repo",
+        "git@host:-oProxyCommand=calc",
+        "git@-oProxyCommand=calc:repo",
     ],
 )
 def test_disallowed_repo_urls_are_rejected(url):
     with pytest.raises(SpawnerError):
         validate_repo_url(url)
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "-u",
+        "--upload-pack=touch",
+        "--branch",
+        "-b",
+    ],
+)
+def test_disallowed_branch_names_are_rejected(branch, tmp_path: Path, monkeypatch):
+    events: list = []
+    _install_fakes(monkeypatch)
+    cfg, mgr = _manager(tmp_path, events)
+    spawner = SessionSpawner(cfg, mgr)
+    with pytest.raises(SpawnerError, match="invalid branch name"):
+        spawner._plan(NewSessionRequest(repo_url="https://github.com/org/repo", branch=branch))
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "main",
+        "master",
+        "feature/my-branch-1.0",
+        "v1.2.3",
+    ],
+)
+def test_allowed_branch_names_pass(branch, tmp_path: Path, monkeypatch):
+    events: list = []
+    _install_fakes(monkeypatch)
+    cfg, mgr = _manager(tmp_path, events)
+    spawner = SessionSpawner(cfg, mgr)
+    plan = spawner._plan(NewSessionRequest(repo_url="https://github.com/org/repo", branch=branch))
+    assert plan.branch == branch
 
 
 def test_names_are_sanitized_to_the_safe_alphabet():
