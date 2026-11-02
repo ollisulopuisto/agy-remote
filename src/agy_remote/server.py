@@ -492,11 +492,17 @@ def create_app(
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Submit a new task to meta-AGY."""
+        """Submit a new task to meta-AGY.
+
+        The same sealing rule as /api/prompt and /api/sessions: with E2EE on,
+        an unsealed body is never legitimate and cannot bypass payload encryption.
+        """
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
         body = await request.json()
-        if cfg.e2ee_enabled and isinstance(body, dict) and body.get("encrypted"):
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
             try:
                 body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
             except Exception as e:

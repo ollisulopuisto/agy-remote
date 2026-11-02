@@ -477,3 +477,51 @@ def test_server_agents_websocket_flow(tmp_path: Path):
         output_frame = ws.receive_json()
         assert output_frame["event"] == "agent_output"
         assert output_frame["data"]["content"] == "Live log line 1\n"
+
+
+def test_meta_job_endpoint_enforces_e2ee(tmp_path: Path):
+    """The /api/agents/jobs endpoint must refuse plaintext payloads when E2EE is enabled."""
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    jobs_db = {}
+    outputs_db = {}
+    transport = fake_meta_agy_transport(jobs_db, outputs_db)
+    mock_client = MetaAgyClient(base_url="http://mock-meta", client=httpx.AsyncClient(transport=transport))
+
+    # 1. E2EE is enabled by default
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="tok123", enable_auth=True, e2ee_enabled=True)
+    mgr = SessionManager(config=cfg, meta_agy_client=mock_client)
+    app = create_app(cfg, session_mgr=mgr)
+    client = TestClient(app)
+    headers = {"X-Auth-Token": "tok123"}
+
+    post_payload = {
+        "project": "podcast",
+        "task": "Check loudness levels",
+        "provider": "claude",
+        "model": "claude-3-7-sonnet",
+        "context": "Prior analysis identified -14 LUFS discrepancy",
+    }
+
+    # Plaintext payload must be rejected with 400
+    plain_resp = client.post("/api/agents/jobs", json=post_payload, headers=headers)
+    assert plain_resp.status_code == 400
+    assert "encrypted body required" in plain_resp.json()["detail"].lower()
+
+    # Encrypted payload must succeed
+    sealed = encrypt_payload(post_payload, decode_key(cfg.e2ee_key))
+    sealed_resp = client.post("/api/agents/jobs", json=sealed, headers=headers)
+    assert sealed_resp.status_code == 201
+    created = sealed_resp.json()
+    assert created["project"] == "podcast"
+
+    # Replayed payload must be rejected
+    replay_resp = client.post("/api/agents/jobs", json=sealed, headers=headers)
+    assert replay_resp.status_code == 400
+
+    # 2. When E2EE is disabled, plaintext payload succeeds
+    cfg_no_e2ee = RemoteConfig(brain_dir=tmp_path, auth_token="tok123", enable_auth=True, e2ee_enabled=False)
+    mgr_no_e2ee = SessionManager(config=cfg_no_e2ee, meta_agy_client=mock_client)
+    client_no_e2ee = TestClient(create_app(cfg_no_e2ee, session_mgr=mgr_no_e2ee))
+    resp_no_e2ee = client_no_e2ee.post("/api/agents/jobs", json=post_payload, headers=headers)
+    assert resp_no_e2ee.status_code == 201
