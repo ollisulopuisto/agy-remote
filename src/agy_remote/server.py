@@ -814,7 +814,6 @@ def create_app(
 
     @app.post("/api/key")
     async def send_key(
-        req: KeyPressRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -823,8 +822,27 @@ def create_app(
 
         agy's execution mode, its panels and its selection lists are reachable
         only by keystroke; a prompt line cannot express any of them.
+
+        The same sealing rule as /api/prompt and /api/sessions: with E2EE on,
+        an unsealed body is never legitimate and cannot bypass payload encryption.
         """
         verify_auth(request, token, token_header)
+
+        mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        try:
+            req = KeyPressRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
         return {"status": _press_key(req.key, req.conversation_id)}
 
     @app.post("/api/prompt")

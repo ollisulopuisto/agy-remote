@@ -136,22 +136,67 @@ def no_session(monkeypatch):
     monkeypatch.setattr(tmux_runner, "tmux_instance", None)
 
 
-def _client(tmp_path: Path) -> TestClient:
-    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+def _client(tmp_path: Path, **kwargs) -> TestClient:
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, **kwargs)
     return TestClient(create_app(cfg))
 
 
 def test_key_press_reaches_the_supervised_session(tmp_path: Path, live_session):
-    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "shift_tab"})
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    client = TestClient(create_app(cfg))
+    sealed = encrypt_payload({"key": "shift_tab"}, decode_key(cfg.e2ee_key))
+    resp = client.post("/api/key?token=secret123", json=sealed)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
     assert live_session.pressed == ["shift_tab"]
 
 
 def test_key_press_rejects_names_outside_the_allowlist(tmp_path: Path, live_session):
-    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "\x1b]0;pwn\x07"})
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    client = TestClient(create_app(cfg))
+    sealed = encrypt_payload({"key": "\x1b]0;pwn\x07"}, decode_key(cfg.e2ee_key))
+    resp = client.post("/api/key?token=secret123", json=sealed)
     assert resp.status_code == 422
     assert live_session.pressed == []
+
+
+def test_key_press_refuses_plaintext_when_e2ee_is_on(tmp_path: Path, live_session):
+    """The keypress endpoint must refuse unencrypted payloads when E2EE is enabled."""
+    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "shift_tab"})
+    assert resp.status_code == 400
+    assert "encrypt" in resp.json()["detail"].lower()
+    assert live_session.pressed == []
+
+
+def test_key_press_rejects_replayed_envelope(tmp_path: Path, live_session):
+    """A replayed keypress envelope must be rejected by the replay guard."""
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True)
+    client = TestClient(create_app(cfg))
+    sealed = encrypt_payload({"key": "shift_tab"}, decode_key(cfg.e2ee_key))
+
+    ok = client.post("/api/key?token=secret123", json=sealed)
+    assert ok.status_code == 200
+    assert live_session.pressed == ["shift_tab"]
+
+    replay = client.post("/api/key?token=secret123", json=sealed)
+    assert replay.status_code == 400
+    assert "could not open envelope" in replay.json()["detail"].lower()
+    assert live_session.pressed == ["shift_tab"]
+
+
+def test_key_press_accepts_plaintext_when_e2ee_is_disabled(tmp_path: Path, live_session):
+    """When E2EE is disabled, plain JSON requests succeed."""
+    client = _client(tmp_path, e2ee_enabled=False)
+    resp = client.post("/api/key?token=secret123", json={"key": "shift_tab"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert live_session.pressed == ["shift_tab"]
 
 
 def test_key_press_requires_a_token(tmp_path: Path, live_session):
@@ -162,7 +207,8 @@ def test_key_press_requires_a_token(tmp_path: Path, live_session):
 
 def test_key_press_without_a_supervisor_says_so(tmp_path: Path, no_session):
     """Watcher mode has no session to type into; that must not look like success."""
-    resp = _client(tmp_path).post("/api/key?token=secret123", json={"key": "escape"})
+    client = _client(tmp_path, e2ee_enabled=False)
+    resp = client.post("/api/key?token=secret123", json={"key": "escape"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "no_session"
 
