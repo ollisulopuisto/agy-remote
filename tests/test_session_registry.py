@@ -129,7 +129,7 @@ async def test_multi_session_prompt_routing(tmp_path: Path):
 
 
 def test_multi_session_key_and_screen_api(tmp_path: Path):
-    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret", enable_auth=True)
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret", enable_auth=True, e2ee_enabled=False)
     app = create_app(cfg)
     client = TestClient(app)
     mgr = app.state.session_manager
