@@ -617,3 +617,81 @@ def test_ws_traffic_refreshes_client_liveness(tmp_path: Path):
                 break
 
         assert any(v > time.monotonic() - 120.0 for v in stamps.values()), "the ping proved liveness"
+
+
+def test_approval_respond_enforces_e2ee_and_replay_protection(tmp_path: Path):
+    """POST /api/approvals/{id}/respond must reject unsealed requests when E2EE is enabled."""
+    from agy_remote.crypto import decode_key, encrypt_payload
+
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, e2ee_enabled=True)
+    app = create_app(cfg)
+    mgr = app.state.session_manager
+    mgr._pending_approvals["app-1"] = {
+        "id": "app-1",
+        "conversation_id": "conv-1",
+        "status": "pending",
+        "tool_name": "bash",
+        "args": {"CommandLine": "ls"},
+    }
+    client = TestClient(app)
+    headers = {"X-Auth-Token": "secret123"}
+
+    # 1. Plaintext request rejected with 400 when E2EE is on
+    plain_resp = client.post(
+        "/api/approvals/app-1/respond",
+        json={"decision": "allow"},
+        headers=headers,
+    )
+    assert plain_resp.status_code == 400
+    assert "encrypt" in plain_resp.json()["detail"].lower()
+    assert mgr._pending_approvals["app-1"]["status"] == "pending"
+
+    # 2. Valid encrypted envelope succeeds
+    key = decode_key(cfg.e2ee_key)
+    sealed = encrypt_payload({"decision": "allow"}, key)
+    sealed_resp = client.post(
+        "/api/approvals/app-1/respond",
+        json=sealed,
+        headers=headers,
+    )
+    assert sealed_resp.status_code == 200
+    assert sealed_resp.json() == {"status": "ok", "decision": "allow"}
+    assert mgr._pending_approvals["app-1"]["status"] == "allowed"
+
+    # 3. Replayed envelope is rejected by ReplayGuard
+    mgr._pending_approvals["app-2"] = {
+        "id": "app-2",
+        "conversation_id": "conv-1",
+        "status": "pending",
+        "tool_name": "bash",
+        "args": {"CommandLine": "pwd"},
+    }
+    replay_resp = client.post(
+        "/api/approvals/app-2/respond",
+        json=sealed,
+        headers=headers,
+    )
+    assert replay_resp.status_code == 400
+    assert "could not open envelope" in replay_resp.json()["detail"].lower()
+    assert mgr._pending_approvals["app-2"]["status"] == "pending"
+
+    # 4. Plaintext request accepted when E2EE is disabled
+    cfg_no_e2ee = RemoteConfig(brain_dir=tmp_path, auth_token="secret123", enable_auth=True, e2ee_enabled=False)
+    app_no_e2ee = create_app(cfg_no_e2ee)
+    mgr_no_e2ee = app_no_e2ee.state.session_manager
+    mgr_no_e2ee._pending_approvals["app-3"] = {
+        "id": "app-3",
+        "conversation_id": "conv-1",
+        "status": "pending",
+        "tool_name": "bash",
+        "args": {"CommandLine": "whoami"},
+    }
+    client_no_e2ee = TestClient(app_no_e2ee)
+    ok_no_e2ee = client_no_e2ee.post(
+        "/api/approvals/app-3/respond",
+        json={"decision": "deny", "reason": "not allowed"},
+        headers=headers,
+    )
+    assert ok_no_e2ee.status_code == 200
+    assert ok_no_e2ee.json() == {"status": "ok", "decision": "deny"}
+    assert mgr_no_e2ee._pending_approvals["app-3"]["status"] == "denied"
