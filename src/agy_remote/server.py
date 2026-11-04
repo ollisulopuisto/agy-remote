@@ -939,14 +939,32 @@ def create_app(
     @app.post("/api/approvals/{approval_id}/respond")
     async def respond_approval(
         approval_id: str,
-        req: ApprovalResponseRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Approve or deny a pending tool call from mobile UI."""
+        """Approve or deny a pending tool call from mobile UI.
+
+        The same sealing rule as /api/prompt, /api/key and /api/sessions: with
+        E2EE on, an unsealed body is never legitimate and cannot bypass payload
+        encryption.
+        """
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        try:
+            req = ApprovalResponseRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
         resolved = await mgr.resolve_approval(approval_id, req)
         if not resolved:
             raise HTTPException(status_code=404, detail="Pending approval not found or expired")
