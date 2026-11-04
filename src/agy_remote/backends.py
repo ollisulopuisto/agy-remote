@@ -400,7 +400,13 @@ class AgyBackend:
             return []
         return found
 
-    def _summarize(self, mgr: SessionManager, conversation_id: str, log_path: Path) -> ConversationSummary | None:
+    def _summarize(
+        self,
+        mgr: SessionManager,
+        conversation_id: str,
+        log_path: Path,
+        pending_cids: set[str] | None = None,
+    ) -> ConversationSummary | None:
         """Parse one transcript into a summary, reusing the cache when possible."""
         try:
             stat = log_path.stat()
@@ -420,10 +426,15 @@ class AgyBackend:
 
         # These change without the file changing, so refresh them every time.
         summary.is_active = conversation_id == mgr.active_conversation_id
-        summary.has_pending_approval = any(
-            a.get("conversation_id") == conversation_id and a.get("status") == "pending"
-            for a in mgr._pending_approvals.values()
-        )
+        # Performance optimization: precomputing pending_cids turns repeated
+        # O(N*M) scans over all approvals into an O(1) set membership check.
+        if pending_cids is not None:
+            summary.has_pending_approval = conversation_id in pending_cids
+        else:
+            summary.has_pending_approval = any(
+                a.get("conversation_id") == conversation_id and a.get("status") == "pending"
+                for a in mgr._pending_approvals.values()
+            )
         return summary
 
     def _parse_transcript(self, conversation_id: str, log_path: Path, stat: os.stat_result) -> ConversationSummary:
@@ -475,10 +486,16 @@ class AgyBackend:
 
     def list_conversations(self, mgr: SessionManager) -> list[ConversationSummary]:
         """Scan brain_dir and return a sorted list of conversation summaries."""
+        # Precompute set of conversation IDs with active pending approvals once
+        pending_cids = {
+            a["conversation_id"]
+            for a in mgr._pending_approvals.values()
+            if a.get("status") == "pending" and a.get("conversation_id")
+        }
         summaries = [
             summary
             for conversation_id, log_path in self._iter_transcripts()
-            if (summary := self._summarize(mgr, conversation_id, log_path)) is not None
+            if (summary := self._summarize(mgr, conversation_id, log_path, pending_cids=pending_cids)) is not None
         ]
         summaries.sort(key=lambda s: s.updated_at or datetime.min, reverse=True)
         return summaries
@@ -714,7 +731,12 @@ class AgyBackend:
         if not log_path or not log_path.exists():
             return None
 
-        summary = self._summarize(mgr, conversation_id, log_path)
+        pending_cids = {
+            a["conversation_id"]
+            for a in mgr._pending_approvals.values()
+            if a.get("status") == "pending" and a.get("conversation_id")
+        }
+        summary = self._summarize(mgr, conversation_id, log_path, pending_cids=pending_cids)
         return summary.model_dump(mode="json") if summary else None
 
     # -- interaction ---------------------------------------------------------
