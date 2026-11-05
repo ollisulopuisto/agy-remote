@@ -110,3 +110,49 @@ def test_rest_api_approval_policy(tmp_path: Path):
         headers={"X-Auth-Token": "tok"},
     )
     assert resp.status_code == 400
+
+
+def test_rest_api_approval_policy_e2ee(tmp_path: Path):
+    """When E2EE is enabled, POST /api/approvals/policy rejects unsealed payloads and replays."""
+    from agy_remote.crypto import decode_key, encrypt_payload, generate_e2ee_key
+
+    e2ee_key = generate_e2ee_key()
+    cfg = RemoteConfig(
+        brain_dir=tmp_path,
+        auth_token="tok",
+        enable_auth=True,
+        e2ee_enabled=True,
+        e2ee_key=e2ee_key,
+    )
+    app = create_app(cfg)
+    client = TestClient(app)
+    key_bytes = decode_key(e2ee_key)
+
+    # 1. Plaintext payload must be rejected with 400
+    resp = client.post(
+        "/api/approvals/policy",
+        json={"policy": "auto_all"},
+        headers={"X-Auth-Token": "tok"},
+    )
+    assert resp.status_code == 400
+    assert "Encrypted body required" in resp.json()["detail"]
+
+    # 2. Encrypted payload succeeds
+    envelope = encrypt_payload({"policy": "auto_all"}, key_bytes)
+    resp = client.post(
+        "/api/approvals/policy",
+        json=envelope,
+        headers={"X-Auth-Token": "tok"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["policy"] == "auto_all"
+    assert app.state.session_manager.get_approval_policy() == "auto_all"
+
+    # 3. Replayed envelope must be rejected with 400
+    resp_replay = client.post(
+        "/api/approvals/policy",
+        json=envelope,
+        headers={"X-Auth-Token": "tok"},
+    )
+    assert resp_replay.status_code == 400
+    assert "Could not open envelope" in resp_replay.json()["detail"]
