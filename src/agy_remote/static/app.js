@@ -4005,11 +4005,14 @@ document.addEventListener('alpine:init', () => {
           console.warn('Failed to reorder queue:', e);
         }
       } else if (currentConversationId) {
-        fetch(`/api/sessions/${encodeURIComponent(currentConversationId)}/queue/reorder?token=${encodeURIComponent(authToken)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
-          body: JSON.stringify({ ordered_ids: newOrder.map(p => p.id) }),
-        }).catch(e => console.warn('Failed to reorder queue via REST:', e));
+        const reorderPayload = { ordered_ids: newOrder.map(p => p.id) };
+        (cryptoKey ? encryptData(reorderPayload) : Promise.resolve(reorderPayload)).then(body => {
+          fetch(`/api/sessions/${encodeURIComponent(currentConversationId)}/queue/reorder?token=${encodeURIComponent(authToken)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+            body: JSON.stringify(body),
+          }).catch(e => console.warn('Failed to reorder queue via REST:', e));
+        }).catch(e => console.warn('Failed to encrypt queue reorder:', e));
       }
     },
     

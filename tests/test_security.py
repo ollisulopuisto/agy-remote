@@ -639,3 +639,42 @@ def test_a_rejected_frame_is_reported_back_to_the_client(tmp_path: Path):
     assert unsealed["data"]["reason"]
     assert replayed["event"] == "frame_rejected", f"replayed frame dropped in silence: {replayed}"
     assert replayed["data"]["reason"]
+
+
+def test_queue_reorder_requires_e2ee_when_enabled(tmp_path: Path):
+    """Calling POST /api/sessions/{id}/queue/reorder without E2EE envelope must be rejected."""
+    cfg = _cfg(tmp_path, e2ee_enabled=True)
+    app = create_app(cfg)
+    client = TestClient(app)
+    mgr = app.state.session_manager
+    mgr._prompt_queues["conv-test"] = [
+        {"id": "p1", "prompt": "first"},
+        {"id": "p2", "prompt": "second"},
+    ]
+
+    # Plaintext request must be rejected with 400
+    resp = client.post(
+        f"/api/sessions/conv-test/queue/reorder?token={cfg.auth_token}",
+        json={"ordered_ids": ["p2", "p1"]},
+    )
+    assert resp.status_code == 400
+    assert "Encrypted body required" in resp.json()["detail"]
+
+    # Sealed envelope succeeds
+    key = decode_key(cfg.e2ee_key)
+    envelope = encrypt_payload({"ordered_ids": ["p2", "p1"]}, key)
+    resp = client.post(
+        f"/api/sessions/conv-test/queue/reorder?token={cfg.auth_token}",
+        json=envelope,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert [p["id"] for p in mgr.queued_prompts("conv-test")] == ["p2", "p1"]
+
+    # Replay of the same envelope must fail with 400
+    resp_replay = client.post(
+        f"/api/sessions/conv-test/queue/reorder?token={cfg.auth_token}",
+        json=envelope,
+    )
+    assert resp_replay.status_code == 400
+    assert "Could not open envelope" in resp_replay.json()["detail"]
