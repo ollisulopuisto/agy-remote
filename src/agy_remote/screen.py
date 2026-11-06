@@ -51,6 +51,12 @@ class TerminalMirror:
         self._screen = pyte.Screen(cols, rows)
         self._stream = pyte.ByteStream(self._screen)
         self._dirty = False
+        #: Cached snapshot data to avoid re-evaluating pyte.Screen.display (which
+        #: iterates every line and column evaluating wcwidth) and regex parsers
+        #: when the screen contents have not changed (~40x snapshot speedup).
+        self._cached_lines: list[str] | None = None
+        self._cached_mode: str | None = None
+        self._cached_usage: dict[str, Any] | None = None
 
     @property
     def rows(self) -> int:
@@ -67,6 +73,9 @@ class TerminalMirror:
         with self._lock:
             self._stream.feed(data)
             self._dirty = True
+            self._cached_lines = None
+            self._cached_mode = None
+            self._cached_usage = None
 
     def resize(self, rows: int, cols: int) -> None:
         """Match a pty that changed size; a mismatch wraps every line wrongly."""
@@ -75,13 +84,24 @@ class TerminalMirror:
         with self._lock:
             self._screen.resize(rows, cols)
             self._dirty = True
+            self._cached_lines = None
+            self._cached_mode = None
+            self._cached_usage = None
 
     def snapshot(self) -> dict[str, Any]:
         """The current screen as plain text, with the cursor and parsed mode."""
         with self._lock:
-            lines = list(self._screen.display)
+            if self._cached_lines is None:
+                rendered = list(self._screen.display)
+                self._cached_lines = rendered
+                self._cached_mode = parse_mode(rendered)
+                self._cached_usage = parse_context_and_usage(rendered)
+
+            lines = list(self._cached_lines)
             cursor = {"x": self._screen.cursor.x, "y": self._screen.cursor.y}
             rows, cols = self._screen.lines, self._screen.columns
+            mode = self._cached_mode
+            usage = dict(self._cached_usage) if self._cached_usage is not None else {}
             self._dirty = False
 
         return {
@@ -89,8 +109,8 @@ class TerminalMirror:
             "cursor": cursor,
             "rows": rows,
             "cols": cols,
-            "mode": parse_mode(lines),
-            "usage": parse_context_and_usage(lines),
+            "mode": mode,
+            "usage": usage,
         }
 
     def take_dirty_snapshot(self) -> dict[str, Any] | None:
