@@ -2544,10 +2544,12 @@ async function toggleMailboxMute(a, b, currentlyMuted) {
   const method = currentlyMuted ? 'DELETE' : 'POST';
   const url = `/api/mailbox/mute${authToken ? `?token=${encodeURIComponent(authToken)}` : ''}`;
   try {
+    const payload = { a, b };
+    const body = cryptoKey ? await encryptData(payload) : payload;
     const res = await fetch(url, {
       method: method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a, b })
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': authToken },
+      body: JSON.stringify(body)
     });
     if (res.ok) {
       const data = await res.json();

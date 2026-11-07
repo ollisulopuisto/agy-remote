@@ -697,9 +697,22 @@ def create_app(
             raise HTTPException(status_code=404, detail="Unknown or already-resolved approval")
         return info
 
+    async def _parse_mailbox_mute_request(request: Request, mgr: SessionManager) -> MuteMailboxRequest:
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+        try:
+            return MuteMailboxRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
     @app.post("/api/mailbox/mute")
     async def mute_mailbox(
-        req: MuteMailboxRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -707,6 +720,7 @@ def create_app(
         """Mute an agent mailbox pair, pausing delivery between them."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        req = await _parse_mailbox_mute_request(request, mgr)
         try:
             a = validate_target(req.a)
             b = validate_target(req.b)
@@ -719,7 +733,6 @@ def create_app(
 
     @app.delete("/api/mailbox/mute")
     async def unmute_mailbox(
-        req: MuteMailboxRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -727,6 +740,7 @@ def create_app(
         """Unmute an agent mailbox pair, resuming message delivery."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        req = await _parse_mailbox_mute_request(request, mgr)
         try:
             a = validate_target(req.a)
             b = validate_target(req.b)

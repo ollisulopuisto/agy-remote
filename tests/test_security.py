@@ -678,3 +678,67 @@ def test_queue_reorder_requires_e2ee_when_enabled(tmp_path: Path):
     )
     assert resp_replay.status_code == 400
     assert "Could not open envelope" in resp_replay.json()["detail"]
+
+
+def test_mailbox_mute_requires_e2ee_when_enabled(tmp_path: Path):
+    """Calling POST or DELETE /api/mailbox/mute without E2EE envelope must be rejected."""
+    cfg = _cfg(tmp_path, e2ee_enabled=True)
+    app = create_app(cfg)
+    client = TestClient(app)
+    mgr = app.state.session_manager
+    key = decode_key(cfg.e2ee_key)
+
+    # 1. POST plaintext request must be rejected with 400
+    resp = client.post(
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json={"a": "agy-a", "b": "agy-b"},
+    )
+    assert resp.status_code == 400
+    assert "Encrypted body required" in resp.json()["detail"]
+
+    # 2. POST sealed envelope succeeds
+    envelope = encrypt_payload({"a": "agy-a", "b": "agy-b"}, key)
+    resp = client.post(
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json=envelope,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["pair"]["muted"] is True
+    assert any(p["a"] == "agy-a" and p["b"] == "agy-b" and p["muted"] is True for p in mgr.agent_traffic())
+
+    # 3. POST replay of the same envelope must fail with 400
+    resp_replay = client.post(
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json=envelope,
+    )
+    assert resp_replay.status_code == 400
+    assert "Could not open envelope" in resp_replay.json()["detail"]
+
+    # 4. DELETE plaintext request must be rejected with 400
+    del_resp = client.request(
+        "DELETE",
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json={"a": "agy-a", "b": "agy-b"},
+    )
+    assert del_resp.status_code == 400
+    assert "Encrypted body required" in del_resp.json()["detail"]
+
+    # 5. DELETE sealed envelope succeeds
+    del_envelope = encrypt_payload({"a": "agy-a", "b": "agy-b"}, key)
+    del_resp = client.request(
+        "DELETE",
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json=del_envelope,
+    )
+    assert del_resp.status_code == 200
+    assert del_resp.json()["pair"]["muted"] is False
+    assert any(p["a"] == "agy-a" and p["b"] == "agy-b" and p["muted"] is False for p in mgr.agent_traffic())
+
+    # 6. DELETE replay of the same envelope must fail with 400
+    del_replay = client.request(
+        "DELETE",
+        f"/api/mailbox/mute?token={cfg.auth_token}",
+        json=del_envelope,
+    )
+    assert del_replay.status_code == 400
+    assert "Could not open envelope" in del_replay.json()["detail"]
