@@ -129,6 +129,9 @@ def test_start_or_attach_creates_session_with_vsusp_disabled(monkeypatch):
         return Res()
 
     monkeypatch.setattr("subprocess.run", fake_run)
+    # The suite must not depend on the host having tmux installed: every tmux
+    # call is faked, so fake the availability guard too.
+    monkeypatch.setattr("agy_remote.tmux_runner.is_tmux_available", lambda: True)
     monkeypatch.setattr(TmuxSupervisor, "_attach_session", lambda self: 0)
 
     sup = TmuxSupervisor(session_name="test-vsusp", cmd=["agy", "--fast"])
@@ -156,6 +159,7 @@ def test_start_detached_enables_focus_events(monkeypatch):
         return Res()
 
     monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("agy_remote.tmux_runner.is_tmux_available", lambda: True)
 
     sup = TmuxSupervisor(session_name="test-detached-focus", cmd=["agy"])
     assert sup.start_detached() is True

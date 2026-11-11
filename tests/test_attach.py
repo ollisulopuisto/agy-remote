@@ -172,6 +172,11 @@ def test_captures_are_throttled_below_the_watch_loop_interval():
 def _stub_attach(monkeypatch, tmp_path: Path, port: int) -> dict[str, list]:
     seen: dict[str, list] = {"banner": [], "screens": [], "served": []}
 
+    # These tests fake every tmux interaction (subprocess.run is stubbed
+    # below), so whether the host happens to have tmux installed must not
+    # decide the outcome: the availability guard reads the real PATH.
+    monkeypatch.setattr(cli_mod, "is_tmux_available", lambda: True)
+
     def fake_config(**kw) -> RemoteConfig:
         return RemoteConfig(
             brain_dir=tmp_path,
@@ -354,6 +359,9 @@ async def test_a_session_that_died_is_replaced_not_mourned(monkeypatch, tmp_path
     # `has-session` fails: the session named in the config is gone.
     fake = FakeRun({"list-panes": "", "display-message": "$9\n"}, fail={"has-session"})
     monkeypatch.setattr(tmux_runner.subprocess, "run", fake)
+    # Fake-run answers every tmux call; the guard must not consult the host's
+    # real PATH, or the suite only passes where tmux happens to be installed.
+    monkeypatch.setattr(tmux_runner, "is_tmux_available", lambda: True)
     monkeypatch.setattr(config_mod, "SERVER_REGISTRY_DIR", tmp_path / "servers")
 
     cfg = RemoteConfig(brain_dir=tmp_path, port=8765, auth_token="t", tmux_session="dead-one")
