@@ -357,8 +357,12 @@ async def _no_clone(plan):
 # ---------------------------------------------------------------------------
 
 
-def test_sessions_endpoint_rejects_disallowed_urls(tmp_path: Path):
+def test_sessions_endpoint_rejects_disallowed_urls(monkeypatch, tmp_path: Path):
     from fastapi.testclient import TestClient
+
+    # URL validation is under test, not host tooling: pretend tmux exists so
+    # the guard in spawner._plan does not fire first on tmux-less machines.
+    monkeypatch.setattr("agy_remote.spawner.is_tmux_available", lambda: True)
 
     from agy_remote.server import create_app
 
