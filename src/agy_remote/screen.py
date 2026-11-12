@@ -260,6 +260,13 @@ class TmuxScreen:
         self._geom: dict[str, int] = {}
         self._last_capture_at = 0.0
         self._last_seen: str | None = None
+        #: Cached parsed mode and usage, keyed on the exact lines content.
+        #: parse_mode() and parse_context_and_usage() walk every line with
+        #: several regexes each (~24μs per 24x80 snapshot); returning the
+        #: cached result when the pane is unchanged avoids that work entirely.
+        self._cached_mode: str | None = None
+        self._cached_usage: dict[str, Any] | None = None
+        self._cached_lines_key: tuple[str, ...] | None = None
 
     def _refresh(self) -> None:
         """Re-read the pane, at most every `min_interval` seconds."""
@@ -281,13 +288,24 @@ class TmuxScreen:
             lines = list(self._lines)
             geom = dict(self._geom)
 
+        lines_key = tuple(lines)
+        if lines_key == self._cached_lines_key:
+            mode = self._cached_mode
+            usage = self._cached_usage
+        else:
+            mode = parse_mode(lines)
+            usage = parse_context_and_usage(lines)
+            self._cached_lines_key = lines_key
+            self._cached_mode = mode
+            self._cached_usage = usage
+
         return {
             "lines": lines,
             "cursor": {"x": geom.get("cursor_x", 0), "y": geom.get("cursor_y", 0)},
             "rows": geom.get("rows", len(lines)),
             "cols": geom.get("cols", max((len(line) for line in lines), default=0)),
-            "mode": parse_mode(lines),
-            "usage": parse_context_and_usage(lines),
+            "mode": mode,
+            "usage": usage,
         }
 
     def take_dirty_snapshot(self) -> dict[str, Any] | None:
