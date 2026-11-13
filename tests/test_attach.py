@@ -500,9 +500,7 @@ def test_the_port_conflict_names_the_session_that_server_actually_drives(monkeyp
 def test_a_caller_editing_usage_does_not_change_later_snapshots():
     """Unchanged panes reuse the parsed usage; a snapshot must hand out a copy of it."""
     pane = ["> hi", "", "  Gemini 3.7 Flash · $0.05"]
-    screen = TmuxScreen(
-        "work", capture=lambda s: pane, geometry=lambda s: {"rows": 24, "cols": 80}, min_interval=0.0
-    )
+    screen = TmuxScreen("work", capture=lambda s: pane, geometry=lambda s: {"rows": 24, "cols": 80}, min_interval=0.0)
     first = screen.snapshot()
     assert first["usage"].get("cost") == "$0.05"
 
