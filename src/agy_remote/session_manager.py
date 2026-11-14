@@ -1151,6 +1151,14 @@ class SessionManager:
             self._last_output_time[conversation_id] = time.monotonic()
             self._stalled_sessions.discard(conversation_id)
 
+    def _pending_conversation_ids(self) -> set[str]:
+        """IDs of conversations that currently hold a pending tool approval."""
+        return {
+            app["conversation_id"]
+            for app in self._pending_approvals.values()
+            if app.get("status") == "pending" and app.get("conversation_id")
+        }
+
     def is_conversation_busy(
         self,
         conversation_id: str | None,
@@ -1304,16 +1312,15 @@ class SessionManager:
             if sess.conversation_id:
                 all_convs.add(sess.conversation_id)
 
+        # One pass over the approvals instead of one scan per conversation; the
+        # index is rebuilt after the broadcast below, which awaits sockets.
+        pending_cids = self._pending_conversation_ids()
         for cid in all_convs:
-            if not self.is_conversation_busy(cid):
+            if not self.is_conversation_busy(cid, pending_cids=pending_cids):
                 self._stalled_sessions.discard(cid)
                 continue
 
-            has_pending = any(
-                app.get("conversation_id") == cid and app.get("status") == "pending"
-                for app in self._pending_approvals.values()
-            )
-            if has_pending:
+            if cid in pending_cids:
                 continue
 
             last_out = self._last_output_time.get(cid, self._last_activity.get(cid, now))
@@ -1331,6 +1338,7 @@ class SessionManager:
                             },
                         }
                     )
+                    pending_cids = self._pending_conversation_ids()
             else:
                 self._stalled_sessions.discard(cid)
 
@@ -1387,14 +1395,10 @@ class SessionManager:
         from the same event.
         """
         delivered = 0
-        # Precompute the set of conversations with a pending approval once per
-        # tick so each busy check below is O(1) instead of scanning every
-        # pending approval per conversation (O(N*M) -> O(N+M) per watch tick).
-        pending_cids = {
-            app["conversation_id"]
-            for app in self._pending_approvals.values()
-            if app.get("status") == "pending" and app.get("conversation_id")
-        }
+        # Index the conversations with a pending approval so each busy check is
+        # O(1). A delivery awaits socket sends, and an approval can register
+        # meanwhile, so the index is rebuilt after every delivery.
+        pending_cids = self._pending_conversation_ids()
         for conversation_id in list(self._prompt_queues):
             queue = self._prompt_queues.get(conversation_id)
             if not queue:
@@ -1417,6 +1421,7 @@ class SessionManager:
                 }
             )
             delivered += 1
+            pending_cids = self._pending_conversation_ids()
         return delivered
 
     def attach_terminal(self, supervisor: Any) -> None:
