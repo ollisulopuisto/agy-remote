@@ -305,3 +305,41 @@ def test_the_prompt_endpoint_queues_when_busy(tmp_path: Path, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "queued"
     assert sup.injected == []
+
+
+@pytest.mark.asyncio
+async def test_an_approval_that_arrives_mid_tick_holds_the_later_queue(tmp_path: Path):
+    """An approval registered while an earlier delivery awaits must be seen.
+
+    The tick used to cache the set of approval-holding conversations before
+    its loop, so a later conversation that paused during an earlier
+    delivery's broadcast still had its queued prompt typed into the paused
+    turn.
+    """
+    mgr, backend = _mgr(tmp_path)
+    sup_a, sup_b = _FakeSupervisor(), _FakeSupervisor()
+    mgr.register_session(SessionRecord(id="sa", tmux_name="t-a", conversation_id="conv-a"), supervisor=sup_a)
+    mgr.register_session(SessionRecord(id="sb", tmux_name="t-b", conversation_id="conv-b"), supervisor=sup_b)
+    await mgr.queue_prompt("for a", "conv-a")
+    await mgr.queue_prompt("for b", "conv-b")
+    quiet = time.monotonic() - mgr.busy_window_seconds - 1
+    mgr._last_activity["conv-a"] = quiet
+    mgr._last_activity["conv-b"] = quiet
+
+    original_send = backend.send_prompt
+
+    async def send_then_pause_b(mgr_, prompt, conversation_id=None):
+        result = await original_send(mgr_, prompt, conversation_id)
+        if conversation_id == "conv-a":
+            # conv-b asks for tool approval while a's delivery is in flight.
+            mgr._pending_approvals["ap-1"] = {"conversation_id": "conv-b", "status": "pending"}
+        return result
+
+    backend.send_prompt = send_then_pause_b
+
+    delivered = await mgr.deliver_due_prompts()
+
+    assert delivered == 1
+    assert sup_a.injected == ["for a"]
+    assert sup_b.injected == [], "b is paused on an approval and must keep its queue"
+    assert len(mgr.queued_prompts("conv-b")) == 1

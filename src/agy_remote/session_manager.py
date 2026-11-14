@@ -671,6 +671,9 @@ class SessionManager:
 
         conversations = self.list_conversations()
         seen_convs = set()
+        # Precompute once so each per-conversation busy check is O(1) instead of
+        # re-scanning every pending approval (see is_conversation_busy).
+        pending_cids = set(pending_by_conv)
 
         for conv in conversations:
             seen_convs.add(conv.id)
@@ -680,7 +683,7 @@ class SessionManager:
 
             if pending_by_conv.get(conv.id, 0) > 0:
                 status = "needs_attention"
-            elif self.is_conversation_busy(conv.id):
+            elif self.is_conversation_busy(conv.id, pending_cids=pending_cids):
                 status = "running"
             else:
                 status = "completed"
@@ -1148,7 +1151,19 @@ class SessionManager:
             self._last_output_time[conversation_id] = time.monotonic()
             self._stalled_sessions.discard(conversation_id)
 
-    def is_conversation_busy(self, conversation_id: str | None) -> bool:
+    def _pending_conversation_ids(self) -> set[str]:
+        """IDs of conversations that currently hold a pending tool approval."""
+        return {
+            app["conversation_id"]
+            for app in self._pending_approvals.values()
+            if app.get("status") == "pending" and app.get("conversation_id")
+        }
+
+    def is_conversation_busy(
+        self,
+        conversation_id: str | None,
+        pending_cids: set[str] | None = None,
+    ) -> bool:
         """Whether the agent in this conversation is mid-turn.
 
         Two signals, either of which is enough: a pending tool approval (the
@@ -1156,15 +1171,32 @@ class SessionManager:
         window (the turn is streaming). A conversation with no activity on
         record is never busy -- an idle session must accept a prompt exactly
         as before the queue existed.
+
+        `pending_cids`, when a caller looping over many conversations supplies
+        the precomputed set of conversation IDs that currently hold a pending
+        approval, turns the per-conversation check into an O(1) set membership
+        instead of scanning every pending approval every time -- an O(N*M) to
+        O(N+M) cut in the hot path (the watch tick's `deliver_due_prompts` and
+        the agent lister). When omitted, a short-circuit scan is used exactly
+        as before, so single callers -- and tests that tweak
+        `_pending_approvals` directly -- keep the exact previous behaviour.
         """
         if not conversation_id:
             return False
-        if any(
-            app.get("conversation_id") == conversation_id
-            for app in self._pending_approvals.values()
-            if app.get("status") == "pending"
-        ):
-            return True
+        if pending_cids is not None:
+            # Caller precomputed the set once per batch: O(1) membership, no
+            # rescan of the approvals map. Used by deliver_due_prompts() and
+            # _antigravity_agent_records() which loop over many conversations.
+            if conversation_id in pending_cids:
+                return True
+        else:
+            # Single caller: short-circuit scan exactly as before, so tests
+            # that mutate _pending_approvals directly still see current state.
+            if any(
+                app.get("conversation_id") == conversation_id and app.get("status") == "pending"
+                for app in self._pending_approvals.values()
+            ):
+                return True
         last = self._last_activity.get(conversation_id)
         return last is not None and (time.monotonic() - last) < self.busy_window_seconds
 
@@ -1280,24 +1312,15 @@ class SessionManager:
             if sess.conversation_id:
                 all_convs.add(sess.conversation_id)
 
-        # Performance optimization: Precomputing the set of conversation IDs with
-        # pending approvals turns repeated O(N * M) linear scans in both
-        # `is_conversation_busy()` and the stall check into an O(1) set membership
-        # test (~10x speedup on periodic watchdog ticks).
-        pending_cids = {
-            app["conversation_id"]
-            for app in self._pending_approvals.values()
-            if app.get("status") == "pending" and app.get("conversation_id")
-        }
-
+        # One pass over the approvals instead of one scan per conversation; the
+        # index is rebuilt after the broadcast below, which awaits sockets.
+        pending_cids = self._pending_conversation_ids()
         for cid in all_convs:
-            if cid in pending_cids:
-                # Waiting on user approval is busy by definition but cannot stall
+            if not self.is_conversation_busy(cid, pending_cids=pending_cids):
+                self._stalled_sessions.discard(cid)
                 continue
 
-            last = self._last_activity.get(cid)
-            if last is None or (now - last) >= self.busy_window_seconds:
-                self._stalled_sessions.discard(cid)
+            if cid in pending_cids:
                 continue
 
             last_out = self._last_output_time.get(cid, self._last_activity.get(cid, now))
@@ -1315,6 +1338,7 @@ class SessionManager:
                             },
                         }
                     )
+                    pending_cids = self._pending_conversation_ids()
             else:
                 self._stalled_sessions.discard(cid)
 
@@ -1371,11 +1395,15 @@ class SessionManager:
         from the same event.
         """
         delivered = 0
+        # Index the conversations with a pending approval so each busy check is
+        # O(1). A delivery awaits socket sends, and an approval can register
+        # meanwhile, so the index is rebuilt after every delivery.
+        pending_cids = self._pending_conversation_ids()
         for conversation_id in list(self._prompt_queues):
             queue = self._prompt_queues.get(conversation_id)
             if not queue:
                 continue
-            if self.is_conversation_busy(conversation_id):
+            if self.is_conversation_busy(conversation_id, pending_cids=pending_cids):
                 continue
             if self.get_supervisor(conversation_id) is None:
                 continue
@@ -1393,6 +1421,7 @@ class SessionManager:
                 }
             )
             delivered += 1
+            pending_cids = self._pending_conversation_ids()
         return delivered
 
     def attach_terminal(self, supervisor: Any) -> None:
