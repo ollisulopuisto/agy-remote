@@ -305,7 +305,7 @@ class TmuxScreen:
             "rows": geom.get("rows", len(lines)),
             "cols": geom.get("cols", max((len(line) for line in lines), default=0)),
             "mode": mode,
-            "usage": usage,
+            "usage": dict(usage),
         }
 
     def take_dirty_snapshot(self) -> dict[str, Any] | None:
