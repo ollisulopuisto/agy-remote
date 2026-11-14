@@ -15,8 +15,8 @@ from agy_remote.server import create_app
 TOKEN = "secret123"
 
 
-def _client(tmp_path: Path) -> tuple[TestClient, object]:
-    cfg = RemoteConfig(brain_dir=tmp_path, auth_token=TOKEN, enable_auth=True)
+def _client(tmp_path: Path, **kwargs) -> tuple[TestClient, object]:
+    cfg = RemoteConfig(brain_dir=tmp_path, auth_token=TOKEN, enable_auth=True, e2ee_enabled=False, **kwargs)
     app = create_app(cfg)
     return TestClient(app), app.state.session_manager
 

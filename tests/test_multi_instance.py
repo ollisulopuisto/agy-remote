@@ -145,6 +145,9 @@ def test_tmux_session_carries_the_env_into_agy(monkeypatch):
 
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr("agy_remote.tmux_runner.is_tmux_available", lambda: True)
+    # No tmux binary on every host: the fake run already decides session state,
+    # so attaching must not spawn a real process.
+    monkeypatch.setattr(TmuxSupervisor, "_attach_session", lambda self: 0)
 
     sup = TmuxSupervisor(
         session_name="agy-remote-8766",

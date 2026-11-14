@@ -235,7 +235,14 @@ async def test_selecting_the_newest_conversation_resumes_following(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_multiple_concurrent_conversations_do_not_cause_flapping(tmp_path: Path):
     """Activity in an existing session must not yank the view away from another active session."""
-    now = time.time()
+    # Base the fabricated timestamps in the past, not on the wall clock.
+    # get_newest_conversation_id ranks conversations by min(ctime, dir_mtime,
+    # log_mtime); with future mtimes that min falls through to the real ctime,
+    # and filesystems with coarse ctime granularity then give conv-b and conv-c
+    # the same tick. The tie loses to the strict `>` comparison and the test
+    # flaked. Past timestamps make the fabricated mtimes win the min() and the
+    # outcome deterministic.
+    now = time.time() - 1000
     log_a = _write_conversation(tmp_path, "conv-a", "task A", now - 100)
     log_b = _write_conversation(tmp_path, "conv-b", "task B", now)
 

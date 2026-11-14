@@ -426,10 +426,25 @@ def create_app(
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Reorder queued prompts for a conversation."""
+        """Reorder queued prompts for a conversation.
+
+        The same sealing rule as other prompt and mutation endpoints: with E2EE
+        on, an unsealed body is never legitimate and cannot bypass payload
+        encryption.
+        """
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
         body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="JSON object required")
         ordered_ids = body.get("ordered_ids", [])
         if not isinstance(ordered_ids, list):
             raise HTTPException(status_code=400, detail="ordered_ids list required")
@@ -629,10 +644,25 @@ def create_app(
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Set approval policy globally or per session."""
+        """Set approval policy globally or per session.
+
+        The same sealing rule as /api/prompt, /api/key and /api/approvals/respond:
+        with E2EE on, an unsealed body is never legitimate and cannot bypass
+        payload encryption to alter security permission boundaries.
+        """
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
         body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="JSON object required")
         policy = body.get("policy", "ask_all")
         cid = body.get("conversation_id")
         try:
@@ -667,9 +697,22 @@ def create_app(
             raise HTTPException(status_code=404, detail="Unknown or already-resolved approval")
         return info
 
+    async def _parse_mailbox_mute_request(request: Request, mgr: SessionManager) -> MuteMailboxRequest:
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+        try:
+            return MuteMailboxRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
     @app.post("/api/mailbox/mute")
     async def mute_mailbox(
-        req: MuteMailboxRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -677,6 +720,7 @@ def create_app(
         """Mute an agent mailbox pair, pausing delivery between them."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        req = await _parse_mailbox_mute_request(request, mgr)
         try:
             a = validate_target(req.a)
             b = validate_target(req.b)
@@ -689,7 +733,6 @@ def create_app(
 
     @app.delete("/api/mailbox/mute")
     async def unmute_mailbox(
-        req: MuteMailboxRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -697,6 +740,7 @@ def create_app(
         """Unmute an agent mailbox pair, resuming message delivery."""
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        req = await _parse_mailbox_mute_request(request, mgr)
         try:
             a = validate_target(req.a)
             b = validate_target(req.b)
@@ -814,7 +858,6 @@ def create_app(
 
     @app.post("/api/key")
     async def send_key(
-        req: KeyPressRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
@@ -823,8 +866,27 @@ def create_app(
 
         agy's execution mode, its panels and its selection lists are reachable
         only by keystroke; a prompt line cannot express any of them.
+
+        The same sealing rule as /api/prompt and /api/sessions: with E2EE on,
+        an unsealed body is never legitimate and cannot bypass payload encryption.
         """
         verify_auth(request, token, token_header)
+
+        mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        try:
+            req = KeyPressRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
         return {"status": _press_key(req.key, req.conversation_id)}
 
     @app.post("/api/prompt")
@@ -921,14 +983,32 @@ def create_app(
     @app.post("/api/approvals/{approval_id}/respond")
     async def respond_approval(
         approval_id: str,
-        req: ApprovalResponseRequest,
         request: Request,
         token: str | None = Query(None),
         token_header: str | None = Security(api_key_header),
     ) -> dict[str, Any]:
-        """Approve or deny a pending tool call from mobile UI."""
+        """Approve or deny a pending tool call from mobile UI.
+
+        The same sealing rule as /api/prompt, /api/key and /api/sessions: with
+        E2EE on, an unsealed body is never legitimate and cannot bypass payload
+        encryption.
+        """
         verify_auth(request, token, token_header)
         mgr = get_mgr(request)
+        body = await request.json()
+        if cfg.e2ee_enabled:
+            if not isinstance(body, dict) or not body.get("encrypted"):
+                raise HTTPException(status_code=400, detail="Encrypted body required while E2EE is enabled")
+            try:
+                body = decrypt_payload(body, decode_key(cfg.e2ee_key), guard=mgr.replay_guard)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not open envelope: {e}") from e
+
+        try:
+            req = ApprovalResponseRequest.model_validate(body)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
         resolved = await mgr.resolve_approval(approval_id, req)
         if not resolved:
             raise HTTPException(status_code=404, detail="Pending approval not found or expired")

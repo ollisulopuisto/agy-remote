@@ -122,3 +122,33 @@ def test_the_mode_is_read_when_the_bar_packs_it_next_to_the_model():
     assert parse_mode(["? for shortcuts                   \t        plan · Gemini 3.7 Flash · medium"]) == "plan"
     # Default mode prints no field at all, and must not be guessed from the rest.
     assert parse_mode(["? for shortcuts                   \t               Gemini 3.7 Flash · medium"]) is None
+
+
+def test_snapshot_caching_and_invalidation():
+    """Verify rendered lines and parsed mode/usage are cached until mutated."""
+    mirror = TerminalMirror(rows=4, cols=20)
+    mirror.feed(b"first line\r\n")
+
+    snap1 = mirror.snapshot()
+    assert snap1["lines"][0].strip() == "first line"
+    assert mirror._cached_lines is not None
+
+    # Repeated snapshot returns identical content without re-rendering pyte display
+    snap2 = mirror.snapshot()
+    assert snap2["lines"] == snap1["lines"]
+    # Ensure caller mutating returned list doesn't corrupt mirror cache
+    snap2["lines"].append("corrupted")
+    snap3 = mirror.snapshot()
+    assert len(snap3["lines"]) == 4
+
+    # feed invalidates cache
+    mirror.feed(b"second line\r\n")
+    assert mirror._cached_lines is None
+    snap4 = mirror.snapshot()
+    assert snap4["lines"][1].strip() == "second line"
+
+    # resize invalidates cache
+    mirror.resize(6, 30)
+    assert mirror._cached_lines is None
+    snap5 = mirror.snapshot()
+    assert len(snap5["lines"]) == 6

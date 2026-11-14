@@ -164,6 +164,70 @@ def test_captures_are_throttled_below_the_watch_loop_interval():
     assert len(calls) == 1, "throttle let extra captures through"
 
 
+def test_snapshot_caches_parsed_mode_and_usage_for_unchanged_screen():
+    """Repeated snapshots of a still screen must not re-run the regex parsers.
+
+    parse_mode() and parse_context_and_usage() walk every line with several
+    regexes each. When the pane content has not changed since the last
+    snapshot, returning the cached parse avoids that work entirely.
+    """
+    frames = [
+        ["> build me a thing", "", "  ~/src            accept-edits        2 files"],
+        ["> build me a thing", "", "  ~/src            plan                2 files"],
+    ]
+    taken = [0]
+
+    def capture(session: str) -> list[str] | None:
+        taken[0] += 1
+        return frames[0]
+
+    screen = TmuxScreen(
+        "work",
+        capture=capture,
+        geometry=lambda s: {"rows": 24, "cols": 80},
+        min_interval=60.0,  # never re-capture during the test
+    )
+
+    # First snapshot parses and caches
+    snap1 = screen.snapshot()
+    assert snap1["mode"] == "accept-edits"
+    assert screen._cached_mode is not None
+    assert screen._cached_usage is not None
+    assert screen._cached_lines_key is not None
+
+    # Second snapshot of the same content reuses the cache: no re-parse
+    snap2 = screen.snapshot()
+    assert snap2["mode"] == "accept-edits"
+    assert taken[0] == 1, "capture must not fire again for unchanged screen"
+
+    # Mutating the content invalidates the cache and forces a re-parse
+    def capture_new(session: str) -> list[str] | None:
+        taken[0] += 1
+        return frames[1]
+
+    screen._capture = capture_new
+    screen._last_capture_at = 0.0  # force re-capture on next snapshot
+    snap3 = screen.snapshot()
+    assert snap3["mode"] == "plan"
+    assert taken[0] == 2, "capture must fire once for changed content"
+
+
+def test_snapshot_cache_returns_none_mode_and_usage_for_empty_screen():
+    """An empty pane parses to no mode and no usage, cached like any other."""
+    screen = TmuxScreen(
+        "work",
+        capture=lambda s: [],
+        geometry=lambda s: {"rows": 24, "cols": 80},
+        min_interval=60.0,
+    )
+
+    snap = screen.snapshot()
+    assert snap["mode"] is None
+    assert snap["usage"] == {}
+    assert screen._cached_mode is None
+    assert screen._cached_usage == {}
+
+
 # ---------------------------------------------------------------------------
 # The command
 # ---------------------------------------------------------------------------
@@ -171,6 +235,11 @@ def test_captures_are_throttled_below_the_watch_loop_interval():
 
 def _stub_attach(monkeypatch, tmp_path: Path, port: int) -> dict[str, list]:
     seen: dict[str, list] = {"banner": [], "screens": [], "served": []}
+
+    # These tests fake every tmux interaction (subprocess.run is stubbed
+    # below), so whether the host happens to have tmux installed must not
+    # decide the outcome: the availability guard reads the real PATH.
+    monkeypatch.setattr(cli_mod, "is_tmux_available", lambda: True)
 
     def fake_config(**kw) -> RemoteConfig:
         return RemoteConfig(
@@ -354,6 +423,9 @@ async def test_a_session_that_died_is_replaced_not_mourned(monkeypatch, tmp_path
     # `has-session` fails: the session named in the config is gone.
     fake = FakeRun({"list-panes": "", "display-message": "$9\n"}, fail={"has-session"})
     monkeypatch.setattr(tmux_runner.subprocess, "run", fake)
+    # Fake-run answers every tmux call; the guard must not consult the host's
+    # real PATH, or the suite only passes where tmux happens to be installed.
+    monkeypatch.setattr(tmux_runner, "is_tmux_available", lambda: True)
     monkeypatch.setattr(config_mod, "SERVER_REGISTRY_DIR", tmp_path / "servers")
 
     cfg = RemoteConfig(brain_dir=tmp_path, port=8765, auth_token="t", tmux_session="dead-one")
@@ -423,3 +495,18 @@ def test_the_port_conflict_names_the_session_that_server_actually_drives(monkeyp
         assert "already in use" in gone.output
     finally:
         held.close()
+
+
+def test_a_caller_editing_usage_does_not_change_later_snapshots():
+    """Unchanged panes reuse the parsed usage; a snapshot must hand out a copy of it."""
+    pane = ["> hi", "", "  Gemini 3.7 Flash · $0.05"]
+    screen = TmuxScreen("work", capture=lambda s: pane, geometry=lambda s: {"rows": 24, "cols": 80}, min_interval=0.0)
+    first = screen.snapshot()
+    assert first["usage"].get("cost") == "$0.05"
+
+    first["usage"]["cost"] = "$99"
+    first["usage"]["extra"] = "x"
+
+    again = screen.snapshot()
+    assert again["usage"].get("cost") == "$0.05"
+    assert "extra" not in again["usage"]
